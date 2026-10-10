@@ -125,7 +125,7 @@ def test_stable_for_large_dt():
     t = 0.0
     for i in range(50):
         t += 5.0
-        p = a.step(target(ACTIVITIES[i % 9], EMOTIONS[i % 9]), 5.0, i % 2 == 0, t)
+        p = a.step(target(ACTIVITIES[i % len(ACTIVITIES)], EMOTIONS[i % 9]), 5.0, i % 2 == 0, t)
         assert all(math.isfinite(getattr(p, n)) for n in FLOATS)
         assert abs(p.gaze_x) < 3 and 0 <= p.eye_h < 3
 

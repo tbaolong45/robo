@@ -7,13 +7,14 @@ Hermes runs one host gateway for every profile; a profile's API is the host's AP
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
-import shutil
 import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -34,6 +35,20 @@ def hermes_home() -> Path:
 
 def profile_dir() -> Path:
     return hermes_home() / "profiles" / PROFILE
+
+
+def persona_stamp() -> str:
+    """Short hash of the installed SOUL.md and skills.
+
+    Hermes builds a session's system prompt once, so robo starts a new session whenever this
+    changes; otherwise a running day's chat would never see an updated persona or skill.
+    """
+    h = hashlib.sha256()
+    root = profile_dir()
+    for f in sorted([root / "SOUL.md", *(root / "skills").rglob("*.md")]):
+        if f.is_file():
+            h.update(str(f.relative_to(root)).encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()[:8]
 
 
 def brave_dir() -> Path:
@@ -82,18 +97,30 @@ def connection() -> tuple[str, str]:
     return os.environ.get("ROBO_HERMES_URL", f"http://127.0.0.1:{port}/p/{PROFILE}"), key
 
 
-def _copy_tree(src: Path, dst: Path) -> bool:
-    """Copy template files over the profile's; True if any file was new or different."""
+def _copy_tree(src: Path, dst: Path, fill: dict[str, str]) -> bool:
+    """Copy template files over the profile's, filling {{KEY}}s; True if any file changed."""
     changed = False
     files = [p for p in src.rglob("*") if p.is_file() and "__pycache__" not in p.parts
              and p.relative_to(src).parts[0] in INSTALLED]
     for f in sorted(files):
+        data = f.read_bytes()
+        for key, value in fill.items():
+            data = data.replace(f"{{{{{key}}}}}".encode(), value.encode())
         target = dst / f.relative_to(src)
-        if not target.exists() or target.read_bytes() != f.read_bytes():
+        if not target.exists() or target.read_bytes() != data:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(f, target)
+            target.write_bytes(data)
             changed = True
     return changed
+
+
+def _moodle_url(url: str) -> str:
+    """The Moodle base URL, normalised; robo's browser may open only https sites."""
+    parts = urlsplit(url.strip())
+    if parts.scheme != "https" or not parts.hostname:
+        raise SetupError(f"The Moodle address must look like https://moodle.your-school.edu, "
+                         f"not {url!r}.")
+    return f"https://{parts.netloc}{parts.path}".rstrip("/")
 
 
 def _run(cmd: list[str]) -> None:
@@ -107,7 +134,8 @@ def _wait_healthy(timeout: float = 90) -> bool:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         try:
-            if httpx.get(url.split("/p/")[0] + "/health", timeout=3).status_code == 200:
+            health = url.split("/p/")[0] + "/health"
+            if httpx.get(health, timeout=3, trust_env=False).status_code == 200:
                 return True
         except httpx.HTTPError:
             pass
@@ -120,8 +148,10 @@ def setup(
     config: dict[str, str] | None = None,
     run: Callable[[list[str]], None] = _run,
     wait: Callable[[], bool] = _wait_healthy,
+    moodle: str | None = None,
 ) -> list[str]:
     """Idempotent; returns what it did. Restarts the host gateway only when something changed."""
+    moodle = _moodle_url(moodle) if moodle is not None else None
     done = []
     host_env = hermes_home() / ".env"
     host = read_env(host_env)
@@ -137,7 +167,10 @@ def setup(
     if not read_env(robo_env).get("API_SERVER_KEY"):
         set_env(robo_env, {"API_SERVER_KEY": secrets.token_urlsafe(32)})
         done.append("gave robo its own API key")
-    if _copy_tree(templates, profile_dir()):
+    if moodle and set_env(robo_env, {"MOODLE_BASE_URL": moodle}):
+        done.append(f"set your Moodle address to {moodle}")
+    fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set"}
+    if _copy_tree(templates, profile_dir(), fill):
         done.append("installed the persona, skills and guard")
     cfg = profile_dir() / "config.yaml"
     before = cfg.read_bytes() if cfg.exists() else b""

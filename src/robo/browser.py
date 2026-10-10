@@ -29,7 +29,7 @@ class BrowserError(RuntimeError):
 
 def up() -> bool:
     try:
-        return httpx.get(f"{CDP_URL}/json/version", timeout=2).status_code == 200
+        return httpx.get(f"{CDP_URL}/json/version", timeout=2, trust_env=False).status_code == 200
     except httpx.HTTPError:
         return False
 
@@ -75,7 +75,7 @@ def pids(data_dir: Path, proc: Path = Path("/proc")) -> list[int]:
 
 def stop(data_dir: Path) -> None:
     for pid in pids(data_dir):
-        with contextlib.suppress(ProcessLookupError):
+        with contextlib.suppress(OSError):  # gone already, or not ours to kill
             os.kill(pid, 15)
     for _ in range(40):
         if not up():

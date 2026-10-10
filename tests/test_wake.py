@@ -88,7 +88,7 @@ def test_stop_ends_thread():
     w = WakeWatcher(lambda: None, connect=lambda: src, poll=0.01)
     assert w.start()
     w.stop()
-    assert not w.alive
+    assert not w._thread.is_alive()
     assert src.closed.is_set()
 
 
@@ -144,3 +144,18 @@ def test_probe_exception_counts_as_down():
         return a
 
     assert wait_for_network(probe, timeout=10, interval=1, sleep=lambda s: None)
+
+
+def test_bus_error_reconnects():
+    class Broken(FakeSource):
+        def recv(self, timeout):
+            raise ConnectionError("bus went away")
+
+    broken, good, woke = Broken(), FakeSource(), threading.Event()
+    sources = iter([broken, good])
+    w = WakeWatcher(woke.set, connect=lambda: next(sources), poll=0.01, retry=0.01)
+    assert w.start()
+    good.q.put(False)
+    assert woke.wait(2)
+    w.stop()
+    assert broken.closed.is_set() and good.closed.is_set()

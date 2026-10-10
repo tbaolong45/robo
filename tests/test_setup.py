@@ -1,5 +1,7 @@
 import stat
 
+import pytest
+
 from robo import setup
 
 
@@ -100,3 +102,45 @@ def test_config_change_alone_restarts(tmp_path, monkeypatch):
     done = setup.setup(templates=tmp_path / "none", config={"a": "1"}, run=run, wait=lambda: True)
     assert "updated robo's Hermes config" in done
     assert ["hermes", "gateway", "restart"] in calls
+
+
+def test_moodle_url_is_stored_and_filled_into_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n")
+    robo = tmp_path / "profiles" / "robo"
+    robo.mkdir(parents=True)
+    (robo / ".env").write_text("API_SERVER_KEY=r\n")
+    templates = tmp_path / "templates"
+    (templates / "skills" / "m").mkdir(parents=True)
+    (templates / "skills" / "m" / "SKILL.md").write_text("Moodle is {{MOODLE_BASE_URL}}.")
+    run = lambda cmd: None  # noqa: E731
+
+    setup.setup(templates=templates, config={}, run=run, wait=lambda: True)
+    assert "not set" in (robo / "skills/m/SKILL.md").read_text()
+
+    setup.setup(templates=templates, config={}, run=run, wait=lambda: True,
+                moodle="https://moodle.uni.example/")
+    assert setup.read_env(robo / ".env")["MOODLE_BASE_URL"] == "https://moodle.uni.example"
+    assert (robo / "skills/m/SKILL.md").read_text() == "Moodle is https://moodle.uni.example."
+
+
+@pytest.mark.parametrize("bad", ["moodle.uni.example", "http://moodle.uni.example", "https://"])
+def test_moodle_url_must_be_https(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    with pytest.raises(setup.SetupError):
+        setup.setup(templates=tmp_path, config={}, run=lambda c: None, wait=lambda: True,
+                    moodle=bad)
+
+
+def test_persona_stamp_changes_with_soul_or_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    robo = tmp_path / "profiles" / "robo"
+    (robo / "skills" / "s").mkdir(parents=True)
+    (robo / "SOUL.md").write_text("v1")
+    (robo / "skills" / "s" / "SKILL.md").write_text("a")
+    first = setup.persona_stamp()
+    assert first == setup.persona_stamp() and len(first) == 8
+    (robo / "SOUL.md").write_text("v2")
+    second = setup.persona_stamp()
+    (robo / "skills" / "s" / "SKILL.md").write_text("b")
+    assert len({first, second, setup.persona_stamp()}) == 3

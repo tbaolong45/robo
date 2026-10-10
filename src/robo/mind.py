@@ -45,6 +45,7 @@ class Mind:
     last_input: float  # last user input or run end: the sleep clock starts here
     emotion_until: float  # emotion reverts to neutral at this time
     last_delta: float
+    after: tuple[str, float] | None = None  # (emotion, until) to restore when a flash ends
 
 
 def initial(now: float) -> Mind:
@@ -65,23 +66,28 @@ def react(m: Mind, ev: Event, now: float) -> Mind:
     match ev:
         case UserSent():
             return _go(m, "thinking", now, emotion="neutral", emotion_until=math.inf,
-                       label="", talking=False, last_input=now)
+                       label="", talking=False, last_input=now, after=None)
         case ToolStarted(tool=tool):
             return _go(m, "working", now, label=tool_label(tool))
         case ToolCompleted(error=error):  # the model reads the result and decides what next
             m = _go(m, "thinking", now, label="")
-            return replace(m, emotion="concerned", emotion_until=now + FLASH) if error else m
+            if not error:
+                return m
+            return replace(m, emotion="concerned", emotion_until=now + FLASH,
+                           after=m.after or (m.emotion, m.emotion_until))
         case Feeling(emotion=e) if e in EMOTIONS:
             held = m.activity in ("idle", "sleepy", "asleep", "error")
-            return replace(m, emotion=e, emotion_until=now + EMOTION_HOLD if held else math.inf)
+            return replace(m, emotion=e, emotion_until=now + EMOTION_HOLD if held else math.inf,
+                           after=None)
         case Delta():
             return _go(m, "talking", now, label="", talking=True, last_delta=now)
         case ApprovalNeeded():
             return _go(m, "waiting", now, label="")
         case RunEnded(status=status):
-            end = dict(label="", talking=False, last_input=now)
+            end = dict(label="", talking=False, last_input=now, after=None)
             if status == "completed":
-                return _go(m, "idle", now, emotion_until=now + EMOTION_HOLD, **end)
+                emotion = m.after[0] if m.after else m.emotion  # a flash gives the reply's back
+                return _go(m, "idle", now, emotion=emotion, emotion_until=now + EMOTION_HOLD, **end)
             if status == "cancelled":
                 return _go(m, "idle", now, emotion="neutral", emotion_until=math.inf, **end)
             sad = "confused" if status == "interrupted" else "sad"
@@ -93,6 +99,8 @@ def tick(m: Mind, now: float) -> Mind:
     """Apply the passage of time."""
     if m.talking and now >= m.last_delta + TALK_PAUSE:
         m = replace(m, talking=False)
+    if m.after and now >= m.emotion_until:
+        m = replace(m, emotion=m.after[0], emotion_until=m.after[1], after=None)
     if m.emotion != "neutral" and now >= m.emotion_until:
         m = replace(m, emotion="neutral", emotion_until=math.inf)
     if m.activity == "error" and now >= m.since + ERROR_HOLD:

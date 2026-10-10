@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 
 import httpx
@@ -34,14 +35,9 @@ class HermesClient:
     def __init__(self, base_url: str, key: str, client: httpx.Client | None = None) -> None:
         self._base = base_url.rstrip("/")
         self._auth = {"Authorization": f"Bearer {key}"}
-        self._http = client or httpx.Client(timeout=_TIMEOUT)
+        # trust_env=False: a proxy from the environment must never see the key
+        self._http = client or httpx.Client(timeout=_TIMEOUT, trust_env=False)
         self.run_id: str | None = None  # the latest run started by `ask`, for stop/approve
-
-    def health(self) -> bool:
-        try:
-            return self._request("GET", "/health").status_code == 200
-        except BrainError:
-            return False
 
     def start_run(self, text: str, session_id: str) -> str:
         body = {"input": text, "session_id": session_id}
@@ -55,28 +51,45 @@ class HermesClient:
                           {"choice": "once" if allow else "deny"})
 
     def events(self, run_id: str) -> Iterator[Event]:
-        """Yield the run's events; always ends with exactly one `RunEnded`."""
-        url = f"{self._base}/v1/runs/{run_id}/events"
-        try:
-            with self._http.stream("GET", url, headers=self._auth, timeout=_STREAM_TIMEOUT) as r:
-                _check(r)
-                for data in _sse_data(r.iter_lines()):
-                    event = _parse(json.loads(data))
-                    if event is not None:
-                        yield event
-                    if isinstance(event, RunEnded):
-                        return
-        except BrainError as e:
-            yield RunEnded("failed", error=str(e))
-            return
-        except (httpx.HTTPError, ValueError) as e:
-            yield RunEnded("failed", error=_describe(e))
-            return
-        yield RunEnded("failed", error="Hermes stream ended without a result")
+        """Yield the run's events; always ends with exactly one `RunEnded`.
 
-    def ask(self, text: str, session_id: str) -> Iterator[Event]:
-        """Start a run and yield its events with feel tags split into `Feeling`s."""
+        A dropped stream is resumed once from the last event id (Hermes replays the rest). If
+        that fails too the run is stopped, so it never keeps going with nobody watching.
+        """
+        url = f"{self._base}/v1/runs/{run_id}/events"
+        last: str | None = None
+        for _ in range(2):
+            headers = {**self._auth, **({"Last-Event-ID": last} if last else {})}
+            try:
+                with self._http.stream("GET", url, headers=headers, timeout=_STREAM_TIMEOUT) as r:
+                    _check(r)
+                    for seq, data in _sse(r.iter_lines()):
+                        event = _parse(json.loads(data))
+                        last = seq or last
+                        if event is not None:
+                            yield event
+                        if isinstance(event, RunEnded):
+                            return
+                error = "Hermes stream ended without a result"
+            except BrainError as e:  # an error response: retrying would get the same
+                yield RunEnded("failed", error=str(e))
+                return
+            except (httpx.HTTPError, ValueError) as e:
+                error = _describe(e)
+        with contextlib.suppress(BrainError):
+            self.stop(run_id)
+        yield RunEnded("failed", error=error)
+
+    def ask(self, text: str, session_id: str,
+            started: Callable[[str], None] | None = None) -> Iterator[Event]:
+        """Start a run and yield its events with feel tags split into `Feeling`s.
+
+        `started(run_id)` is called as soon as the run exists, before any event arrives.
+        """
+        self.run_id = None
         self.run_id = self.start_run(text, session_id)
+        if started:
+            started(self.run_id)
         feel = FeelingFilter()
         for event in self.events(self.run_id):
             if isinstance(event, Delta):
@@ -119,16 +132,19 @@ def _check(r: httpx.Response) -> None:
         raise BrainError(f"Hermes error {r.status_code}: {detail}")
 
 
-def _sse_data(lines: Iterable[str]) -> Iterator[str]:
-    """Yield each complete SSE event's data; comments and `id:` lines are skipped."""
+def _sse(lines: Iterable[str]) -> Iterator[tuple[str | None, str]]:
+    """Yield (id, data) for each complete SSE event; comments are skipped."""
+    seq: str | None = None
     data: list[str] = []
     for line in lines:
         if not line:
             if data:
-                yield "\n".join(data)
-                data = []
+                yield seq, "\n".join(data)
+            seq, data = None, []
         elif line.startswith("data:"):
             data.append(line[5:].removeprefix(" "))
+        elif line.startswith("id:"):
+            seq = line[3:].strip()
 
 
 def _parse(d: dict) -> Event | None:
@@ -137,10 +153,9 @@ def _parse(d: dict) -> Event | None:
         case "message.delta":
             return Delta(d.get("delta") or "")
         case "tool.started":
-            return ToolStarted(d.get("tool") or "", d.get("preview") or "")
+            return ToolStarted(d.get("tool") or "")
         case "tool.completed":
-            return ToolCompleted(d.get("tool") or "", float(d.get("duration") or 0),
-                                 bool(d.get("error")))
+            return ToolCompleted(d.get("tool") or "", bool(d.get("error")))
         case "approval.request":
             return ApprovalNeeded(d.get("description") or d.get("command") or "")
         case _ if name in _TERMINAL:

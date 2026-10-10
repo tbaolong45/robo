@@ -17,18 +17,19 @@ QAPP = QApplication.instance() or QApplication([])
 
 
 class FakeClient:
-    def __init__(self, script=None, fail=None, gate=None):
+    def __init__(self, script=None, fail=None, gate=None, before_start=None):
         self.script, self.fail, self.gate = script or [], fail, gate
+        self.before_start = before_start  # holds the run between "asked" and "started"
         self.asked, self.stopped, self.approved = [], [], []
-        self.run_id = "run_1"
 
-    def health(self):
-        return True
-
-    def ask(self, text, session_id):
+    def ask(self, text, session_id, started=None):
         self.asked.append((text, session_id))
         if self.fail:
             raise self.fail
+        if self.before_start:
+            self.before_start.wait(5)
+        if started:
+            started("run_1")
         for ev in self.script:
             if ev == "WAIT":
                 self.gate.wait(5)
@@ -52,10 +53,10 @@ def pump(win, until, timeout=5.0):
     return False
 
 
-def window(tmp_path, client, today=date(2026, 10, 11)):
+def window(tmp_path, client, today=lambda: date(2026, 10, 11)):
     clock = DigestClock(tmp_path / "state.json")
-    clock.mark(today)  # no digest at start unless a test wants one
-    return robo_app.RoboWindow(client, clock, today=lambda: today, network=lambda: True,
+    clock.mark(today())  # no digest at start unless a test wants one
+    return robo_app.RoboWindow(client, clock, today=today, network=lambda: True,
                                watch_wake=False)
 
 
@@ -82,7 +83,7 @@ def test_brain_error_shows_message_and_sad_face(tmp_path):
 
 def test_tool_label_shows_while_working(tmp_path):
     gate = threading.Event()
-    client = FakeClient([ToolStarted("web_search", "x"), "WAIT", RunEnded("completed", "ok")],
+    client = FakeClient([ToolStarted("web_search"), "WAIT", RunEnded("completed", "ok")],
                         gate=gate)
     win = window(tmp_path, client)
     win.ask("news?")
@@ -144,3 +145,76 @@ def test_failed_digest_stays_due(tmp_path):
                               watch_wake=False)
     assert pump(win, lambda: len(client.asked) == 1 and not win.busy)
     assert clock.due(today)
+
+
+def test_stop_before_the_run_exists_stops_it_once_started(tmp_path):
+    hold = threading.Event()
+    client = FakeClient([RunEnded("cancelled")], before_start=hold)
+    win = window(tmp_path, client)
+    win.ask("go")
+    assert pump(win, lambda: client.asked)
+    win.stop()  # no run id yet
+    hold.set()
+    assert pump(win, lambda: not win.busy)
+    assert pump(win, lambda: client.stopped == ["run_1"])
+
+
+def test_stop_while_waiting_for_the_network_never_starts_a_run(tmp_path):
+    online = threading.Event()
+    client = FakeClient([RunEnded("completed", "digest")])
+    win = robo_app.RoboWindow(client, DigestClock(tmp_path / "s.json"),
+                              today=lambda: date(2026, 10, 11),
+                              network=lambda: online.wait(0.05), watch_wake=False)
+    assert pump(win, lambda: win.busy)  # the start-up digest waits for the network
+    win.stop()
+    online.set()
+    assert pump(win, lambda: not win.busy)
+    assert client.asked == [] and win.mind.activity == "idle"
+
+
+def test_closing_mid_run_stops_it(tmp_path):
+    gate = threading.Event()
+    client = FakeClient([Delta("x"), "WAIT", RunEnded("cancelled")], gate=gate)
+    win = window(tmp_path, client)
+    win.ask("go")
+    assert pump(win, lambda: win.mind.activity == "talking")
+    win.close()
+    gate.set()
+    assert client.stopped == ["run_1"]
+
+
+def test_session_follows_the_date(tmp_path):
+    day = [date(2026, 10, 11)]
+    client = FakeClient([RunEnded("completed", "ok")])
+    win = window(tmp_path, client, today=lambda: day[0])
+    win.ask("a")
+    assert pump(win, lambda: not win.busy)
+    day[0] = date(2026, 10, 12)
+    win.ask("b")
+    assert pump(win, lambda: not win.busy)
+    assert [s for _, s in client.asked] == ["robo-2026-10-11", "robo-2026-10-12"]
+
+
+def test_digest_across_midnight_counts_for_the_day_it_started(tmp_path):
+    gate = threading.Event()
+    day = [date(2026, 10, 11)]
+    clock = DigestClock(tmp_path / "state.json")
+    client = FakeClient(["WAIT", RunEnded("completed", "digest")], gate=gate)
+    win = robo_app.RoboWindow(client, clock, today=lambda: day[0], network=lambda: True,
+                              watch_wake=False)
+    assert pump(win, lambda: client.asked)
+    day[0] = date(2026, 10, 12)
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+    assert not clock.due(date(2026, 10, 11)) and clock.due(date(2026, 10, 12))
+
+
+def test_session_carries_the_persona_stamp(tmp_path):
+    client = FakeClient([RunEnded("completed", "ok")])
+    clock = DigestClock(tmp_path / "state.json")
+    clock.mark(date(2026, 10, 11))
+    win = robo_app.RoboWindow(client, clock, today=lambda: date(2026, 10, 11),
+                              network=lambda: True, watch_wake=False, persona="ab12cd34")
+    win.ask("a")
+    assert pump(win, lambda: not win.busy)
+    assert client.asked[0][1] == "robo-2026-10-11-ab12cd34"

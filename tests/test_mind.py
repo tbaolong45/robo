@@ -46,7 +46,7 @@ def test_user_sent_wakes(state):
 
 
 def test_tool_done_goes_back_to_thinking():
-    m, _ = run(UserSent("x"), ToolStarted("web_search", ""), ToolCompleted("web_search", 1, False))
+    m, _ = run(UserSent("x"), ToolStarted("web_search"), ToolCompleted("web_search", False))
     assert (m.activity, m.label, m.emotion) == ("thinking", "", "neutral")
 
 
@@ -63,19 +63,19 @@ def test_tool_done_goes_back_to_thinking():
     ],
 )
 def test_tool_started_works_with_label(tool, label):
-    m, _ = run(UserSent("x"), ToolStarted(tool, ""))
+    m, _ = run(UserSent("x"), ToolStarted(tool))
     assert (m.activity, m.label) == ("working", label)
 
 
 def test_tool_error_flashes_concerned_then_continues():
-    m, t = run(UserSent("x"), ToolStarted("web_search", ""), ToolCompleted("web_search", 1, True))
+    m, t = run(UserSent("x"), ToolStarted("web_search"), ToolCompleted("web_search", True))
     assert (m.activity, m.emotion) == ("thinking", "concerned")
     m = tick(m, t + mind.FLASH)
     assert (m.activity, m.emotion) == ("thinking", "neutral")
 
 
 def test_tool_ok_keeps_emotion():
-    m, _ = run(UserSent("x"), ToolStarted("memory", ""), ToolCompleted("memory", 1, False))
+    m, _ = run(UserSent("x"), ToolStarted("memory"), ToolCompleted("memory", False))
     assert m.emotion == "neutral"
 
 
@@ -139,7 +139,7 @@ def test_sleep_clock_restarts_after_a_run():
 
 @pytest.mark.parametrize(
     "ev",
-    [ToolCompleted("t", 1, False), ToolStarted("w", ""), Delta("x"), ApprovalNeeded("ok?")],
+    [ToolCompleted("t", False), ToolStarted("w"), Delta("x"), ApprovalNeeded("ok?")],
 )
 def test_never_sleepy_mid_run(ev):
     m, t = run(UserSent("x"), ev)
@@ -152,8 +152,8 @@ def test_fuzz_stays_in_vocab():
     rng = random.Random(1234)
     pool = [
         lambda: UserSent("x"),
-        lambda: ToolStarted(rng.choice(["browser_click", "web_search", "zzz", ""]), ""),
-        lambda: ToolCompleted("t", 1.0, rng.random() < 0.5),
+        lambda: ToolStarted(rng.choice(["browser_click", "web_search", "zzz", ""])),
+        lambda: ToolCompleted("t", rng.random() < 0.5),
         lambda: Feeling(rng.choice([*EMOTIONS, "bogus", ""])),
         lambda: Delta("d"),
         lambda: ApprovalNeeded("a"),
@@ -165,3 +165,20 @@ def test_fuzz_stays_in_vocab():
             t += rng.choice([0.05, 0.5, 3, 10, 400, 1000])
             m = react(m, rng.choice(pool)(), t) if rng.random() < 0.7 else tick(m, t)
             assert m.activity in ACTIVITIES and m.emotion in EMOTIONS
+
+
+def test_tool_error_flash_gives_the_reply_emotion_back():
+    m, t = run(UserSent("x"), Feeling("happy"), ToolStarted("web_search"),
+               ToolCompleted("web_search", True))
+    assert m.emotion == "concerned"
+    m = tick(m, t + mind.FLASH)
+    assert m.emotion == "happy"
+    m = react(m, RunEnded("completed"), t + mind.FLASH + 1)
+    assert m.emotion == "happy"
+
+
+def test_run_ending_during_a_flash_keeps_the_reply_emotion():
+    m, t = run(UserSent("x"), Feeling("proud"), ToolCompleted("t", True), RunEnded("completed"))
+    assert (m.activity, m.emotion) == ("idle", "proud")
+    m = tick(m, t + mind.EMOTION_HOLD)
+    assert m.emotion == "neutral"

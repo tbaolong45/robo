@@ -129,3 +129,11 @@ def test_every_split_point_gives_same_result():
 def test_strip_tags():
     assert strip_tags("[[feel:happy]] Hi [[feel:sad]]there\n") == "Hi there"
     assert strip_tags("plain [x]") == "plain [x]"
+
+
+def test_padded_leading_tag_still_parses_when_streamed():
+    f = FeelingFilter()
+    text = "[[feel:" + " " * 35 + "happy]] Hi"
+    out = [e for i in range(len(text)) for e in f.feed(text[i])] + f.finish()
+    assert out[0] == Feeling("happy")
+    assert "".join(e.text for e in out if isinstance(e, Delta)) == "Hi"

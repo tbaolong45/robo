@@ -27,7 +27,7 @@ def _client() -> HermesClient:
 
 def chat() -> int:
     client = _client()
-    session = f"robo-chat-{date.today().isoformat()}"
+    session = f"robo-chat-{date.today().isoformat()}-{setup.persona_stamp()}"
     while True:
         try:
             text = input("you> ").strip()
@@ -61,7 +61,7 @@ def window() -> int:
     from robo.wake import DigestClock
 
     app = QApplication(sys.argv)
-    win = RoboWindow(_client(), DigestClock(STATE))
+    win = RoboWindow(_client(), DigestClock(STATE), persona=setup.persona_stamp())
     win.show()
     return app.exec()
 
@@ -69,10 +69,11 @@ def window() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="robo", description=__doc__)
     parser.add_argument("command", nargs="?", choices=["setup", "signin", "chat"])
+    parser.add_argument("--moodle", metavar="URL", help="with setup: your Moodle address")
     args = parser.parse_args(argv)
     try:
         if args.command == "setup":
-            for line in setup.setup() or ["already set up, nothing changed"]:
+            for line in setup.setup(moodle=args.moodle) or ["already set up, nothing changed"]:
                 print(f"- {line}")
             return 0
         if args.command == "signin":

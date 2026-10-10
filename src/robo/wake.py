@@ -77,14 +77,11 @@ class WakeWatcher:
     """Calls `on_resume()` from a daemon thread each time the machine wakes from sleep."""
 
     def __init__(self, on_resume: Callable[[], None],
-                 connect: Callable[[], SleepSource] = Login1, poll: float = 0.5):
-        self.on_resume, self.connect, self.poll = on_resume, connect, poll
+                 connect: Callable[[], SleepSource] = Login1, poll: float = 0.5,
+                 retry: float = 10.0):
+        self.on_resume, self.connect, self.poll, self.retry = on_resume, connect, poll, retry
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-
-    @property
-    def alive(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> bool:
         """Subscribe; False (logged at info) when the system bus is unavailable."""
@@ -99,17 +96,22 @@ class WakeWatcher:
         self._thread.start()
         return True
 
-    def _run(self, src: SleepSource) -> None:
-        try:
-            while not self._stop.is_set():
+    def _run(self, src: SleepSource | None) -> None:
+        while not self._stop.is_set():
+            try:
+                src = src or self.connect()
                 if src.recv(self.poll) is False:  # False = resumed
                     try:
                         self.on_resume()
                     except Exception:
                         log.exception("on_resume failed")
-        except Exception as e:
-            log.info("resume watcher stopped: %s", e)
-        finally:
+            except Exception as e:  # the bus went away: reconnect after a pause
+                log.info("resume watcher lost the bus, retrying: %s", e)
+                if src:
+                    src.close()
+                src = None
+                self._stop.wait(self.retry)
+        if src:
             src.close()
 
     def stop(self) -> None:

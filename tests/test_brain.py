@@ -53,8 +53,8 @@ def test_events_parses_split_frames():
     chunks = [FULL[i:i + 7] for i in range(0, len(FULL), 7)]
     events = list(client(sse(*chunks)).events("r1"))
     assert events == [
-        Delta("[[feel:happy]] Hel"), ToolStarted("web_search", "robots"),
-        ToolCompleted("web_search", 1.5, False), ApprovalNeeded("recursive delete"),
+        Delta("[[feel:happy]] Hel"), ToolStarted("web_search"),
+        ToolCompleted("web_search", False), ApprovalNeeded("recursive delete"),
         Delta("lo"), RunEnded("completed", output="[[feel:happy]] Hello"),
     ]
 
@@ -73,11 +73,35 @@ def test_stops_reading_after_terminal_event():
     assert list(client(sse(body)).events("r1")) == [RunEnded("completed", output="a")]
 
 
-def test_lost_stream_ends_failed():
-    events = list(client(sse(frame(0, "message.delta", delta="hi"), b"data: {\"ev")).events("r1"))
-    assert events[0] == Delta("hi")
-    assert events[1].status == "failed" and events[1].error
-    assert len(events) == 2
+def test_lost_stream_resumes_once_from_last_event_id():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers.get("Last-Event-ID"))
+        if len(seen) == 1:  # the connection drops mid-frame
+            return httpx.Response(200, content=iter([frame(0, "message.delta", delta="hi"),
+                                                     b'data: {"ev']))
+        return httpx.Response(200, content=iter([frame(1, "run.completed", output="hi")]))
+
+    assert list(client(handler).events("r1")) == [Delta("hi"), RunEnded("completed", output="hi")]
+    assert seen == [None, "0"]
+
+
+def test_lost_twice_stops_the_run_and_fails():
+    calls = []
+
+    def handler(req):
+        calls.append((req.method, req.url.path, req.headers.get("Last-Event-ID")))
+        if req.method == "POST":
+            return httpx.Response(200, json={})
+        return httpx.Response(200, content=iter([frame(len(calls) - 1, "message.delta",
+                                                       delta="x"), b"data: {"]))
+
+    events = list(client(handler).events("r1"))
+    assert [e for e in events if isinstance(e, Delta)] == [Delta("x"), Delta("x")]
+    assert events[-1].status == "failed" and events[-1].error
+    assert calls == [("GET", "/v1/runs/r1/events", None), ("GET", "/v1/runs/r1/events", "0"),
+                     ("POST", "/v1/runs/r1/stop", None)]
 
 
 def test_connection_error_ends_failed():
@@ -126,16 +150,6 @@ def test_connection_refused_says_not_running():
         client(boom).stop("r1")
 
 
-def test_health():
-    assert client(lambda req: httpx.Response(200, json={"status": "ok"})).health()
-    assert not client(lambda req: httpx.Response(503)).health()
-
-    def boom(req):
-        raise httpx.ConnectError("refused")
-
-    assert not client(boom).health()
-
-
 @pytest.mark.parametrize("allow,choice", [(True, "once"), (False, "deny")])
 def test_approve_and_stop_bodies(allow, choice):
     seen = []
@@ -160,7 +174,10 @@ def test_ask_splits_feelings_and_strips_output():
         return httpx.Response(200, content=iter(chunks))
 
     c = client(handler)
-    events = list(c.ask("hi", "s1"))
+    c.run_id = "old"
+    started = []
+    events = list(c.ask("hi", "s1", started=started.append))
+    assert started == ["r1"]
     assert events[0] == Feeling("happy")
     assert "".join(e.text for e in events if isinstance(e, Delta)) == "Hello"
     assert events[-1] == RunEnded("completed", output="Hello")
@@ -168,7 +185,7 @@ def test_ask_splits_feelings_and_strips_output():
     assert c.run_id == "r1"
 
 
-def test_real_server_streams_incrementally():
+def test_real_server_streams_incrementally(monkeypatch):
     gate = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
@@ -189,6 +206,10 @@ def test_real_server_streams_incrementally():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
+        for var in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.setenv(var, "http://127.0.0.1:9")  # a proxy would see the key
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
         c = HermesClient(f"http://127.0.0.1:{server.server_port}", KEY)
         events = c.events("r1")
         assert next(events) == Delta("first")
@@ -198,3 +219,11 @@ def test_real_server_streams_incrementally():
         gate.set()
         server.shutdown()
         server.server_close()
+
+
+def test_ask_forgets_the_previous_run_before_starting():
+    c = client(lambda req: httpx.Response(500, json={"error": {"message": "down"}}))
+    c.run_id = "old"
+    with pytest.raises(BrainError):
+        list(c.ask("hi", "s1"))
+    assert c.run_id is None

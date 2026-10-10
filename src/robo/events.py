@@ -8,7 +8,7 @@ EMOTIONS = (
     "neutral", "happy", "curious", "proud", "concerned", "confused", "playful", "sad", "calm",
 )
 ACTIVITIES = (
-    "idle", "listening", "thinking", "working", "talking", "waiting", "error", "sleepy", "asleep",
+    "idle", "thinking", "working", "talking", "waiting", "error", "sleepy", "asleep",
 )
 
 
@@ -25,13 +25,11 @@ class Delta:
 @dataclass(frozen=True)
 class ToolStarted:
     tool: str
-    preview: str
 
 
 @dataclass(frozen=True)
 class ToolCompleted:
     tool: str
-    duration: float
     error: bool
 
 

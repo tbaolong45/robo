@@ -8,7 +8,7 @@ from robo.events import EMOTIONS, Delta, Event, Feeling
 
 _TAG = re.compile(r"\[\[feel:([^\[\]]*)\]\]")
 _OPEN = "[[feel:"
-_CAP = 40  # longest text held while it might still become a tag
+_CAP = 80  # longest text held while it might still become a tag
 
 
 def _emotion(raw: str) -> str:
