@@ -1,0 +1,26 @@
+# Secrets - never commit
+.env
+*.token_cache.json
+msal_cache.json
+
+# Local state: downloaded materials, SQLite ledger, embeddings
+/data/
+
+# The browser profile holds LIVE session cookies for your university account -
+# committing it hands the account over. It sits under /data/ by default and is
+# named again here so the rule survives any change to the /data/ one. If you
+# point BROWSER_PROFILE somewhere else, ignore that path too: this file can only
+# guess at the default.
+/data/browser/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/

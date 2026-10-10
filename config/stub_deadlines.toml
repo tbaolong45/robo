@@ -1,0 +1,45 @@
+# Phase 1 placeholder deadlines.
+#
+# Replace these with your real upcoming work. `due` must be an ISO-8601 datetime
+# WITH a UTC offset, otherwise the planner cannot place it correctly.
+#
+# NB: `estimated_hours` below is NOT consumed yet. Phase 1 has no ingestion, so
+# every task falls back to `session_max_minutes` and the plan looks uniform.
+# Phase 4 attaches estimates to *materials*, which is what the planner reads -
+# see `_material_hours` in planner/tasks.py. Kept here as a record of intent.
+
+[[deadline]]
+course = "CS301 Algorithms"
+title = "Problem Set 4 - dynamic programming"
+due = "2026-10-02T23:59:00+07:00"
+kind = "assignment"
+estimated_hours = 5.0
+url = "https://moodle.example.ac.th/mod/assign/view.php?id=1001"
+
+[[deadline]]
+course = "CS301 Algorithms"
+title = "Midterm exam revision"
+due = "2026-10-08T09:00:00+07:00"
+kind = "exam"
+estimated_hours = 8.0
+
+[[deadline]]
+course = "CS310 Databases"
+title = "Lab report - normalisation"
+due = "2026-10-04T17:00:00+07:00"
+kind = "assignment"
+estimated_hours = 3.0
+
+[[deadline]]
+course = "GEN101 Academic Writing"
+title = "Essay draft - 1500 words"
+due = "2026-10-06T23:59:00+07:00"
+kind = "assignment"
+estimated_hours = 6.0
+
+[[deadline]]
+course = "CS310 Databases"
+title = "Quiz 3 - indexing"
+due = "2026-10-01T13:00:00+07:00"
+kind = "quiz"
+estimated_hours = 1.5
