@@ -1,0 +1,171 @@
+"""`robo setup`: give Hermes a `robo` profile served by the host gateway at /p/robo/.
+
+Hermes runs one host gateway for every profile; a profile's API is the host's API server under
+`/p/<profile>/`, authenticated with that profile's OWN key. So setup turns on the host API server
+(loopback only), gives robo its own key, installs the persona/skills/guard and sets robo's config.
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import shutil
+import subprocess
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+import httpx
+
+from robo.browser import CDP_URL
+
+PROFILE = "robo"
+TEMPLATES = Path(__file__).resolve().parents[2] / "hermes"
+INSTALLED = ("SOUL.md", "skills", "plugins")  # what of TEMPLATES lands in the profile
+
+
+class SetupError(RuntimeError):
+    pass
+
+
+def hermes_home() -> Path:
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def profile_dir() -> Path:
+    return hermes_home() / "profiles" / PROFILE
+
+
+def brave_dir() -> Path:
+    """Robo's Brave profile (school logins), inside the 0700 Hermes home."""
+    return profile_dir() / "brave"
+
+
+def read_env(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines of a dotenv file (comments and bare words skipped, one level of quotes)."""
+    if not path.exists():
+        return {}
+    out = {}
+    for line in path.read_text().splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key and not key.startswith("#"):
+            out[key.strip()] = value.strip().strip("'\"")
+    return out
+
+
+def set_env(path: Path, values: dict[str, str]) -> bool:
+    """Set keys in a dotenv file in place (other lines untouched), mode 0600. True if it changed."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    todo = dict(values)
+    new = []
+    for line in lines:
+        key = line.partition("=")[0].strip()
+        new.append(f"{key}={todo.pop(key)}" if key in todo else line)
+    new += [f"{k}={v}" for k, v in todo.items()]
+    text = "\n".join(new) + "\n"
+    if path.exists() and path.read_text() == text:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.chmod(0o600)
+    os.replace(tmp, path)
+    return True
+
+
+def connection() -> tuple[str, str]:
+    """(base URL, robo key) for HermesClient; ROBO_HERMES_URL overrides the URL."""
+    key = read_env(profile_dir() / ".env").get("API_SERVER_KEY")
+    if not key:
+        raise SetupError("Hermes has no robo profile key yet: run `robo setup` first.")
+    port = read_env(hermes_home() / ".env").get("API_SERVER_PORT", "8642")
+    return os.environ.get("ROBO_HERMES_URL", f"http://127.0.0.1:{port}/p/{PROFILE}"), key
+
+
+def _copy_tree(src: Path, dst: Path) -> bool:
+    """Copy template files over the profile's; True if any file was new or different."""
+    changed = False
+    files = [p for p in src.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+             and p.relative_to(src).parts[0] in INSTALLED]
+    for f in sorted(files):
+        target = dst / f.relative_to(src)
+        if not target.exists() or target.read_bytes() != f.read_bytes():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(f, target)
+            changed = True
+    return changed
+
+
+def _run(cmd: list[str]) -> None:
+    done = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if done.returncode:
+        raise SetupError(f"`{' '.join(cmd[:5])}` failed: {(done.stderr or done.stdout).strip()}")
+
+
+def _wait_healthy(timeout: float = 90) -> bool:
+    url, _ = connection()
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            if httpx.get(url.split("/p/")[0] + "/health", timeout=3).status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(2)
+    return False
+
+
+def setup(
+    templates: Path = TEMPLATES,
+    config: dict[str, str] | None = None,
+    run: Callable[[list[str]], None] = _run,
+    wait: Callable[[], bool] = _wait_healthy,
+) -> list[str]:
+    """Idempotent; returns what it did. Restarts the host gateway only when something changed."""
+    done = []
+    host_env = hermes_home() / ".env"
+    host = read_env(host_env)
+    host_key = host.get("API_SERVER_KEY") or secrets.token_urlsafe(32)
+    if set_env(host_env, {"API_SERVER_ENABLED": "true", "API_SERVER_KEY": host_key}):
+        done.append("enabled the host API server on 127.0.0.1 (default profile .env)")
+    created = not profile_dir().exists()
+    if created:
+        run(["hermes", "profile", "create", PROFILE, "--no-alias",
+             "--description", "Robo desktop study buddy (robot face app)"])
+        done.append("created the robo Hermes profile")
+    robo_env = profile_dir() / ".env"
+    if not read_env(robo_env).get("API_SERVER_KEY"):
+        set_env(robo_env, {"API_SERVER_KEY": secrets.token_urlsafe(32)})
+        done.append("gave robo its own API key")
+    if _copy_tree(templates, profile_dir()):
+        done.append("installed the persona, skills and guard")
+    cfg = profile_dir() / "config.yaml"
+    before = cfg.read_bytes() if cfg.exists() else b""
+    for key, value in (config if config is not None else CONFIG).items():
+        run(["hermes", "-p", PROFILE, "config", "set", key, value])
+    if (cfg.read_bytes() if cfg.exists() else b"") != before:
+        done.append("updated robo's Hermes config")
+    if done:
+        run(["hermes", "gateway", "restart"])
+        if not wait():
+            raise SetupError("The Hermes gateway did not come back: check `hermes gateway status`.")
+        done.append("restarted the Hermes gateway")
+    return done
+
+
+# robo's profile config, applied with `hermes -p robo config set` (which refuses unknown keys).
+CONFIG: dict[str, str] = {
+    "model.provider": "anthropic",
+    "model.default": "claude-sonnet-5.5",
+    # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server": no terminal,
+    # no file writes, no code execution.
+    "platform_toolsets.api_server": '["browser", "web", "memory", "skills"]',
+    # "off" keeps the built-in browser_* tools that robo-guard can judge; unset would pick the
+    # Browser Use `browser_exec` tool, which is hidden without the terminal toolset.
+    "browser.backend": "off",
+    # Robo's own Brave (robo.browser), signed in to school sites only. The user's everyday Brave
+    # locks its login databases while open, so Hermes cannot borrow that profile.
+    "browser.use_real_profile": "false",
+    "browser.cdp_url": CDP_URL,
+    "plugins.enabled": '["robo-guard"]',
+}

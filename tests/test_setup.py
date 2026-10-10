@@ -1,0 +1,102 @@
+import stat
+
+from robo import setup
+
+
+def test_set_env_appends_updates_and_keeps_private(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("# keep me\nA=1\nB=2\n")
+    assert setup.set_env(env, {"B": "3", "C": "4"}) is True
+    assert env.read_text() == "# keep me\nA=1\nB=3\nC=4\n"
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert setup.set_env(env, {"B": "3"}) is False
+
+
+def test_set_env_creates_missing_file(tmp_path):
+    env = tmp_path / "sub" / ".env"
+    assert setup.set_env(env, {"K": "v"}) is True
+    assert env.read_text() == "K=v\n"
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+
+
+def test_read_env_ignores_comments_and_quotes(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("# X=no\nX='yes'\nY=\"two words\"\nZ\n")
+    assert setup.read_env(env) == {"X": "yes", "Y": "two words"}
+
+
+def test_connection_uses_profile_key_and_host_port(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("ROBO_HERMES_URL", raising=False)
+    (tmp_path / ".env").write_text("API_SERVER_PORT=9000\nAPI_SERVER_KEY=host-secret\n")
+    (tmp_path / "profiles" / "robo").mkdir(parents=True)
+    (tmp_path / "profiles" / "robo" / ".env").write_text("API_SERVER_KEY=robo-secret\n")
+    assert setup.connection() == ("http://127.0.0.1:9000/p/robo", "robo-secret")
+
+
+def test_connection_without_setup_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    try:
+        setup.connection()
+    except setup.SetupError as e:
+        assert "robo setup" in str(e)
+    else:
+        raise AssertionError("expected SetupError")
+
+
+def test_setup_is_idempotent_and_restarts_only_on_change(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("SLACK_BOT_TOKEN=x\n")
+    templates = tmp_path / "templates"
+    (templates / "skills" / "school" / "mail").mkdir(parents=True)
+    (templates / "SOUL.md").write_text("soul")
+    (templates / "skills" / "school" / "mail" / "SKILL.md").write_text("skill")
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        if cmd[1:3] == ["profile", "create"]:
+            (tmp_path / "profiles" / "robo").mkdir(parents=True)
+        if cmd[3:5] == ["config", "set"]:  # like hermes: rewrite the file only on a new value
+            cfg = tmp_path / "profiles" / "robo" / "config.yaml"
+            line = f"{cmd[5]}: {cmd[6]}\n"
+            if line not in (cfg.read_text() if cfg.exists() else ""):
+                cfg.write_text((cfg.read_text() if cfg.exists() else "") + line)
+
+    setup.setup(templates=templates, config={"a.b": "1"}, run=run, wait=lambda: True)
+    host = setup.read_env(tmp_path / ".env")
+    robo = setup.read_env(tmp_path / "profiles" / "robo" / ".env")
+    assert host["SLACK_BOT_TOKEN"] == "x" and host["API_SERVER_ENABLED"] == "true"
+    assert len(host["API_SERVER_KEY"]) >= 32 and len(robo["API_SERVER_KEY"]) >= 32
+    assert host["API_SERVER_KEY"] != robo["API_SERVER_KEY"]
+    assert "API_SERVER_ENABLED" not in robo  # served by the host gateway, never its own listener
+    assert (tmp_path / "profiles" / "robo" / "SOUL.md").read_text() == "soul"
+    assert (tmp_path / "profiles/robo/skills/school/mail/SKILL.md").read_text() == "skill"
+    assert calls[0][:5] == ["hermes", "profile", "create", "robo", "--no-alias"]
+    assert ["hermes", "-p", "robo", "config", "set", "a.b", "1"] in calls
+    assert ["hermes", "gateway", "restart"] in calls
+
+    calls.clear()
+    setup.setup(templates=templates, config={"a.b": "1"}, run=run, wait=lambda: True)
+    assert not any(c[1:3] == ["profile", "create"] for c in calls)
+    assert ["hermes", "gateway", "restart"] not in calls
+    assert setup.read_env(tmp_path / ".env")["API_SERVER_KEY"] == host["API_SERVER_KEY"]
+
+
+def test_config_change_alone_restarts(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n")
+    robo = tmp_path / "profiles" / "robo"
+    robo.mkdir(parents=True)
+    (robo / ".env").write_text("API_SERVER_KEY=r\n")
+    (robo / "config.yaml").write_text("old\n")
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        if cmd[3:5] == ["config", "set"]:
+            (robo / "config.yaml").write_text("new\n")
+
+    done = setup.setup(templates=tmp_path / "none", config={"a": "1"}, run=run, wait=lambda: True)
+    assert "updated robo's Hermes config" in done
+    assert ["hermes", "gateway", "restart"] in calls
