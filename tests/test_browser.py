@@ -1,4 +1,7 @@
 import stat
+import subprocess
+import sys
+from pathlib import Path
 
 from robo import browser
 
@@ -64,3 +67,46 @@ def test_pids_matches_chromium_rewritten_cmdline(tmp_path):
     (tmp_path / "proc" / "8").mkdir(parents=True)
     (tmp_path / "proc" / "8" / "cmdline").write_text(f"brave --user-data-dir={d}-other --x\0")
     assert browser.pids(d, proc=tmp_path / "proc") == [7]
+
+
+def test_find_brave_on_path_else_where_the_installer_puts_it():
+    on_path = {"brave-browser": "/usr/bin/brave-browser"}
+    assert browser.find_brave("linux", on_path.get) == "/usr/bin/brave-browser"
+    assert browser.find_brave("darwin", {}.get) == browser.MAC_BRAVE
+    assert browser.MAC_BRAVE == "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+    assert browser.find_brave("linux", {}.get) == "brave-browser"
+
+
+APP = "/Applications/Brave Browser.app/Contents"
+PS = """\
+  101 {app}/MacOS/Brave Browser --user-data-dir={d} --headless=new
+  102 {app}/Frameworks/Brave Helper --type=renderer --user-data-dir={d}
+  103 {app}/MacOS/Brave Browser --user-data-dir={d}2
+  104 /bin/zsh -l
+"""
+
+
+def test_pids_without_proc_reads_ps_even_with_a_space_in_home(tmp_path):
+    d = tmp_path / "Jane Doe" / "brave"
+    ps = PS.format(app=APP, d=d)
+    assert browser.pids(d, proc=tmp_path / "no-proc", ps=lambda: ps) == [101, 102]
+
+
+def test_pids_without_proc_survive_a_failing_ps(tmp_path):
+    def boom():
+        raise OSError("no ps")
+
+    assert browser.pids(tmp_path, proc=tmp_path / "no-proc", ps=boom) == []
+
+
+def test_pids_find_a_real_process_through_ps_and_proc(tmp_path):
+    d = tmp_path / "brave"
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)",
+                          f"--user-data-dir={d}"])
+    try:
+        assert p.pid in browser.pids(d, proc=tmp_path / "no-proc")  # real ps
+        if Path("/proc").is_dir():
+            assert p.pid in browser.pids(d)  # real /proc
+    finally:
+        p.kill()
+        p.wait()

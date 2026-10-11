@@ -11,6 +11,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +20,17 @@ import httpx
 
 PORT = 9333  # not 9222, which Hermes' own `/browser connect` uses
 CDP_URL = f"http://127.0.0.1:{PORT}"
-BINARY = shutil.which("brave-browser") or shutil.which("brave") or "brave-browser"
+MAC_BRAVE = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+
+
+def find_brave(platform: str = sys.platform, which: Callable[[str], str | None] = shutil.which,
+               ) -> str:
+    """Brave on PATH, else where its installer puts it."""
+    return (which("brave-browser") or which("brave")
+            or (MAC_BRAVE if platform == "darwin" else "brave-browser"))
+
+
+BINARY = find_brave()
 SIGNIN_URLS = ("https://outlook.office.com/mail/", "https://teams.microsoft.com/")
 
 
@@ -59,8 +70,26 @@ def ensure(data_dir: Path, *, headless: bool = True, url: str | None = None,
     raise BrowserError(f"robo's Brave did not open its debug port {PORT} ({BINARY}).")
 
 
-def pids(data_dir: Path, proc: Path = Path("/proc")) -> list[int]:
+def _ps() -> str:
+    """Every process with its full command line (macOS has no /proc)."""
+    return subprocess.run(["ps", "-A", "-ww", "-o", "pid=,args="], capture_output=True,
+                          text=True, timeout=10).stdout
+
+
+def pids(data_dir: Path, proc: Path = Path("/proc"), ps: Callable[[], str] = _ps) -> list[int]:
     """Main and child processes of robo's Brave (matched by its exact --user-data-dir)."""
+    if not proc.is_dir():  # macOS: a space-bounded match, since a home folder may hold spaces
+        flag = f" --user-data-dir={data_dir} "
+        try:
+            lines = ps().splitlines()
+        except (OSError, subprocess.SubprocessError):
+            return []
+        found = []
+        for line in lines:
+            pid, _, args = line.strip().partition(" ")
+            if pid.isdigit() and flag in f" {args} ":
+                found.append(int(pid))
+        return sorted(found)
     flag = f"--user-data-dir={data_dir}".encode()
     out = []
     for d in proc.iterdir():
