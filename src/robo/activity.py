@@ -1,6 +1,7 @@
 """Local activity watcher. Once a minute: focused app + window title, idle seconds, screen lock,
 Brave site hostnames, files opened. No screenshots, no keystrokes, no URL paths or queries.
-Kept only in ~/.local/share/robo/activity.db (dir 0700, file 0600) for 30 days."""
+Kept only in ~/.local/share/robo/activity.db (dir 0700, file 0600) for 30 days. GNOME: focus
+from robo's extension; macOS: Quartz and Spotlight."""
 
 from __future__ import annotations
 
@@ -10,6 +11,8 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -17,7 +20,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -26,7 +29,9 @@ log = logging.getLogger(__name__)
 
 DATA_DIR = Path.home() / ".local/share/robo"
 DEFAULT_DB = DATA_DIR / "activity.db"
-BRAVE_HISTORY = Path.home() / ".config/BraveSoftware/Brave-Browser/Default/History"
+MAC = sys.platform == "darwin"
+BRAVE_HISTORY = (Path.home() / ("Library/Application Support" if MAC else ".config")
+                 / "BraveSoftware/Brave-Browser/Default/History")
 RECENT_XBEL = Path.home() / ".local/share/recently-used.xbel"
 LEDGER = DATA_DIR / "study.md"  # goals, exams, results the user tells robo (study-ledger skill)
 IDLE_S = 120  # a minute this idle (or locked) is not active
@@ -240,13 +245,76 @@ def read_files(since: float, now: float, *, xbel: Path = RECENT_XBEL) -> list[st
     return out
 
 
+# --- macOS readers (Quartz, Spotlight): no extension needed ------------------------------------
+
+
+def front_window(windows: list) -> tuple[str, str]:
+    """(app, title) of the frontmost normal window in Quartz's front-to-back list. Robo's own
+    always-on-top window and the menu bar sit above layer 0; the title needs Screen Recording."""
+    for w in windows:
+        if w.get("kCGWindowLayer") == 0 and w.get("kCGWindowAlpha", 1) > 0:
+            return str(w.get("kCGWindowOwnerName") or ""), str(w.get("kCGWindowName") or "")
+    return "", ""
+
+
+def _quartz():
+    import Quartz  # pyobjc-framework-Quartz, installed on macOS only
+
+    return Quartz
+
+
+def mac_focus() -> tuple[str, str]:
+    try:
+        q = _quartz()
+        opts = q.kCGWindowListOptionOnScreenOnly | q.kCGWindowListExcludeDesktopElements
+        return front_window(list(q.CGWindowListCopyWindowInfo(opts, q.kCGNullWindowID) or []))
+    except Exception:
+        return "", ""
+
+
+def mac_idle() -> int:
+    q = _quartz()
+    return int(q.CGEventSourceSecondsSinceLastEventType(
+        q.kCGEventSourceStateCombinedSessionState, q.kCGAnyInputEventType))
+
+
+def mac_locked() -> bool:
+    return bool((_quartz().CGSessionCopyCurrentDictionary() or {})
+                .get("CGSSessionScreenIsLocked"))
+
+
+def _utc(t: float) -> str:
+    return datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _mdfind(query: str) -> str:
+    return subprocess.run(["mdfind", "-onlyin", str(Path.home()), query], capture_output=True,
+                          text=True, timeout=20).stdout
+
+
+def mac_files(since: float, now: float, *, find: Callable[[str], str] = _mdfind) -> list[str]:
+    """Files Spotlight saw opened in (since, now]; [] when Spotlight is off or slow."""
+    query = (f"kMDItemLastUsedDate > $time.iso({_utc(since)}) && "
+             f"kMDItemLastUsedDate <= $time.iso({_utc(now)})")
+    try:
+        found = find(query).splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return list(dict.fromkeys(p for p in found if p.startswith("/")))
+
+
+# What sample() reads on this OS: GNOME D-Bus + recently-used.xbel, or Quartz + Spotlight.
+FOCUS, IDLE, LOCKED, FILES = ((mac_focus, mac_idle, mac_locked, mac_files) if MAC
+                              else (read_focus, read_idle, read_locked, read_files))
+
+
 # --- sampling ---------------------------------------------------------------------------------
 
 
-def sample(now: float, since: float, *, focus: Callable[[], tuple[str, str]] = read_focus,
-           idle: Callable[[], int] = read_idle, locked: Callable[[], bool] = read_locked,
+def sample(now: float, since: float, *, focus: Callable[[], tuple[str, str]] = FOCUS,
+           idle: Callable[[], int] = IDLE, locked: Callable[[], bool] = LOCKED,
            sites: Callable[[float, float], list[str]] = read_sites,
-           files: Callable[[float, float], list[str]] = read_files) -> Sample:
+           files: Callable[[float, float], list[str]] = FILES) -> Sample:
     app, title = focus()
     return Sample(int(now), app, title, int(idle()), bool(locked()), sites(since, now),
                   files(since, now))

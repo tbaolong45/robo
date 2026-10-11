@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
 import threading
 import time
 from datetime import UTC, date, datetime
@@ -267,3 +269,60 @@ def test_the_study_ledger_is_created_private_and_tightened(tmp_path):
     ensure_ledger(path)
     assert "- mine" in path.read_text()  # never overwritten
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+# --- macOS readers ------------------------------------------------------------------------------
+
+
+def win(layer, owner, name=None, alpha=1.0):
+    w = {"kCGWindowLayer": layer, "kCGWindowOwnerName": owner, "kCGWindowAlpha": alpha}
+    return w | ({"kCGWindowName": name} if name is not None else {})
+
+
+def test_front_window_is_the_first_visible_normal_window():
+    wins = [win(3, "Python", "Robo"),  # robo itself, always on top
+            win(25, "Control Centre"),
+            win(0, "Ghost", "helper", alpha=0.0),  # an invisible helper window
+            win(0, "Code", "activity.py"),
+            win(0, "Safari", "Moodle")]
+    assert act.front_window(wins) == ("Code", "activity.py")
+
+
+def test_front_window_without_screen_recording_has_no_title():
+    assert act.front_window([win(0, "Code")]) == ("Code", "")
+    assert act.front_window([]) == ("", "")
+
+
+def test_mac_files_asks_spotlight_for_the_window():
+    asked = []
+    out = "/Users/u/Notes.pdf\n/Users/u/Notes.pdf\n\n/Users/u/a.py\n"
+    got = act.mac_files(NOW - 60, NOW, find=lambda q: asked.append(q) or out)
+    assert got == ["/Users/u/Notes.pdf", "/Users/u/a.py"]
+    assert asked == [f"kMDItemLastUsedDate > $time.iso({act._utc(NOW - 60)}) && "
+                     f"kMDItemLastUsedDate <= $time.iso({act._utc(NOW)})"]
+    assert act._utc(0) == "1970-01-01T00:00:00Z"
+
+
+def test_mac_files_is_empty_when_spotlight_is_off_or_slow():
+    def slow(query):
+        raise subprocess.TimeoutExpired("mdfind", 20)
+
+    assert act.mac_files(NOW - 60, NOW, find=slow) == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="real Quartz and Spotlight")
+def test_real_mac_readers():
+    assert (act.mac_focus, act.mac_idle, act.mac_locked, act.mac_files) == (
+        act.FOCUS, act.IDLE, act.LOCKED, act.FILES)
+    app, title = act.mac_focus()
+    assert isinstance(app, str) and isinstance(title, str)
+    assert act.mac_idle() >= 0 and isinstance(act.mac_locked(), bool)
+    assert isinstance(act.mac_files(time.time() - 3600, time.time()), list)
+    assert "Library/Application Support/BraveSoftware" in str(act.BRAVE_HISTORY)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="GNOME readers")
+def test_linux_keeps_the_gnome_readers():
+    assert (act.read_focus, act.read_idle, act.read_locked, act.read_files) == (
+        act.FOCUS, act.IDLE, act.LOCKED, act.FILES)
+    assert ".config/BraveSoftware" in str(act.BRAVE_HISTORY)
