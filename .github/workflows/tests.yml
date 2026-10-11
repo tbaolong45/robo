@@ -1,6 +1,7 @@
 name: tests
 on:
   push:
+    branches: [master]  # macOS minutes count 10x on a private repo
   workflow_dispatch:
 jobs:
   test:
