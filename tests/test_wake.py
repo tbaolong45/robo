@@ -5,7 +5,8 @@ import stat
 import threading
 from datetime import date
 
-from robo.wake import DigestClock, WakeWatcher, wait_for_network
+from robo import wake
+from robo.wake import ClockGap, DigestClock, Login1, WakeWatcher, wait_for_network
 
 D1, D2 = date(2026, 10, 11), date(2026, 10, 12)
 
@@ -159,3 +160,51 @@ def test_bus_error_reconnects():
     assert woke.wait(2)
     w.stop()
     assert broken.closed.is_set() and good.closed.is_set()
+
+
+def clocks():
+    t = {"wall": 1000.0, "awake": 50.0}
+    gap = ClockGap(wall=lambda: t["wall"], awake=lambda: t["awake"], wait=lambda s: None)
+    return t, gap
+
+
+def step(t, wall, awake=0.5):
+    t["wall"] += wall
+    t["awake"] += awake
+
+
+def test_clock_gap_sees_a_sleep_but_not_a_stall_or_a_clock_change():
+    t, gap = clocks()
+    step(t, 5.5)  # a busy CPU: 5 s late, never asleep
+    assert gap.recv(0.5) is None
+    step(t, 1800.5)  # lid closed for 30 min
+    assert gap.recv(0.5) is False
+    step(t, 0.5)
+    assert gap.recv(0.5) is None  # once per sleep
+    step(t, -3600)  # clock set back an hour
+    assert gap.recv(0.5) is None
+
+
+def test_clock_gap_threshold_is_gap_s():
+    t, gap = clocks()
+    step(t, wake.GAP_S + 0.5)  # exactly GAP_S ahead of awake time: not yet a sleep
+    assert gap.recv(0) is None
+    step(t, wake.GAP_S + 1.5)
+    assert gap.recv(0) is False
+
+
+def test_wake_source_per_os(monkeypatch):
+    monkeypatch.setattr(wake.sys, "platform", "darwin")
+    assert WakeWatcher(lambda: None).connect is ClockGap
+    monkeypatch.setattr(wake.sys, "platform", "linux")
+    assert WakeWatcher(lambda: None).connect is Login1
+
+
+def test_watcher_on_clock_gap_calls_on_resume():
+    t, gap = clocks()
+    woke = threading.Event()
+    w = WakeWatcher(woke.set, connect=lambda: gap, poll=0.01)
+    assert w.start()
+    step(t, 900)
+    assert woke.wait(2)
+    w.stop()

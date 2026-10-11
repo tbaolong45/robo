@@ -1,10 +1,12 @@
-"""First-wake-of-the-day trigger: a persisted digest date, a login1 resume watcher, a net wait."""
+"""First-wake-of-the-day trigger: a persisted digest date, a resume watcher (login1 on Linux, a
+clock gap elsewhere), a net wait."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -73,13 +75,38 @@ class Login1:
         self.conn.close()
 
 
+GAP_S = 60  # wall time this far ahead of awake time: the machine slept
+
+
+class ClockGap:
+    """A SleepSource for any OS: monotonic time stops while the machine sleeps, wall time
+    does not, so a jump between them after a short wait is a resume."""
+
+    def __init__(self, wall: Callable[[], float] = time.time,
+                 awake: Callable[[], float] = time.monotonic,
+                 wait: Callable[[float], None] = time.sleep):
+        self.wall, self.awake, self.wait = wall, awake, wait
+        self._last = (wall(), awake())
+
+    def recv(self, timeout: float) -> bool | None:
+        self.wait(timeout)
+        now = (self.wall(), self.awake())
+        slept = (now[0] - self._last[0]) - (now[1] - self._last[1])
+        self._last = now
+        return False if slept > GAP_S else None
+
+    def close(self) -> None:
+        pass
+
+
 class WakeWatcher:
     """Calls `on_resume()` from a daemon thread each time the machine wakes from sleep."""
 
     def __init__(self, on_resume: Callable[[], None],
-                 connect: Callable[[], SleepSource] = Login1, poll: float = 0.5,
+                 connect: Callable[[], SleepSource] | None = None, poll: float = 0.5,
                  retry: float = 10.0):
-        self.on_resume, self.connect, self.poll, self.retry = on_resume, connect, poll, retry
+        self.on_resume, self.poll, self.retry = on_resume, poll, retry
+        self.connect = connect or (Login1 if sys.platform == "linux" else ClockGap)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
