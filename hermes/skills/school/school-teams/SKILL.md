@@ -34,8 +34,8 @@ Course announcements live in CHATS, not in teams or channels.
    about it, and say so.
 
 ## Acting
-Post, reply, react, call or change the user's status only when the user asked. Writes
-(typing a message, Send, Like...) bring up an approval prompt for the user; if they deny, stop.
+Post, reply, react, call or change the user's status only when the user asked for exactly
+that.
 
 ## Output
 Unread chats first, then the rest with news from today, at most 6 bullets:

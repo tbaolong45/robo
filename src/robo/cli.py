@@ -1,5 +1,6 @@
-"""`robo` opens the window. `robo setup` prepares Hermes, `robo signin` opens robo's Brave for
-school sign-ins, `robo chat` is a text-only debug REPL."""
+"""`robo` opens the floating robo. `robo setup` prepares Hermes, `robo signin` opens robo's Brave
+for school sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on
+this laptop, `robo plan` packs study blocks into free time (JSON in, JSON out)."""
 
 from __future__ import annotations
 
@@ -62,6 +63,7 @@ def window() -> int:
         os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"  # Qt aborts on plain "xcb" if it cannot load
     from PySide6.QtWidgets import QApplication
 
+    from robo.activity import ActivityStore, Watcher
     from robo.app import RoboWindow
     from robo.listen import Listener
     from robo.wake import DigestClock
@@ -73,19 +75,32 @@ def window() -> int:
         print("robo: XWayland unavailable, so robo opens as a normal window "
               "(sudo apt install libxcb-cursor0 for the floating face).", file=sys.stderr)
     win = RoboWindow(_client(), DigestClock(STATE), persona=setup.persona_stamp(),
-                     floating=floating, listener=Listener)
+                     floating=floating, listener=Listener, watcher=Watcher(ActivityStore()))
     win.show()
     return app.exec()
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["plan"]:  # robo plan --tasks ... --busy ... (used by the study-plan skill)
+        from robo import plan
+
+        return plan.main(argv[1:])
     parser = argparse.ArgumentParser(prog="robo", description=__doc__)
-    parser.add_argument("command", nargs="?", choices=["setup", "signin", "chat"])
+    parser.add_argument("command", nargs="?", choices=["setup", "signin", "chat", "activity"])
     parser.add_argument("--moodle", metavar="URL", help="with setup: your Moodle address")
+    parser.add_argument("--days", type=int, default=1, help="with activity: how many days")
+    parser.add_argument("--day", type=date.fromisoformat, help="with activity: last day")
     args = parser.parse_args(argv)
+    if args.command == "activity":  # what the user did on this laptop (read by the study skills)
+        from robo import activity
+
+        print(activity.summary(activity.ActivityStore(), day=args.day, days=args.days))
+        return 0
     try:
         if args.command == "setup":
-            for line in setup.setup(moodle=args.moodle) or ["already set up, nothing changed"]:
+            done = setup.setup(moodle=args.moodle) + setup.desktop()
+            for line in done or ["already set up, nothing changed"]:
                 print(f"- {line}")
             return 0
         if args.command == "signin":

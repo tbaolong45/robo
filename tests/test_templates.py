@@ -34,9 +34,18 @@ def frontmatter(path: Path) -> tuple[dict[str, str], str]:
     return fields, body
 
 
-def test_all_five_school_skills_exist():
+def test_all_school_skills_exist():
     names = {p.parent.name for p in SKILLS}
-    assert names == {f"school-{n}" for n in ("timetable", "mail", "teams", "moodle", "digest")}
+    school = {f"school-{n}" for n in ("timetable", "mail", "teams", "moodle", "digest")}
+    assert names == school | {"study-ledger", "study-plan"}
+
+
+@pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
+def test_related_skills_exist(path):
+    related = re.search(r"related_skills: \[(.*)\]", path.read_text(encoding="utf-8"))
+    assert related, "metadata.hermes.related_skills is missing"
+    names = {p.parent.name for p in SKILLS}
+    assert {n.strip() for n in related[1].split(",")} <= names - {path.parent.name}
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
@@ -46,6 +55,7 @@ def test_skill_frontmatter_passes_hermes_validator(path):
     assert NAME_RE.match(fields["name"]) and len(fields["name"]) <= 64
     desc = fields["description"]
     assert 0 < len(desc) <= 60 and desc.endswith("."), f"{len(desc)} chars: {desc!r}"
+    assert f'description: "{desc}"' in path.read_text(encoding="utf-8"), "quote the description"
     assert body.strip()
 
 

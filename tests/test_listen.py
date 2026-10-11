@@ -35,9 +35,16 @@ def frames(a: int, b: int, level: float = 0.0) -> list[np.ndarray]:
     ("What's due this week, robo?", "What's due this week"),
     ("Can robo open Moodle for me", "Can robo open Moodle for me"),
     ("Robot, open Moodle.", "open Moodle."),
-    ("Hi, robots.", ""),
     ("ok Robo.", ""),
     ("Yo robbo. What time is it?", "What time is it?"),
+    # what Parakeet TDT v2 wrote for the user's own "robo" (recorded 2026-10-11)
+    ("Rubo opened mail.", "opened mail."),
+    ("High robot check models.", "check models."),
+    ("Ok Rubo Blameday.", "Blameday."),
+    ("Rubo, tell me a joke.", "tell me a joke."),
+    ("Rubo.", ""),
+    ("Robot draft an email my professor.", "draft an email my professor."),
+    ("Rubo, what's weather? Thanks, Rubo.", "what's weather? Thanks"),
 ])
 def test_sentences_that_call_robo(text, said):
     assert addressed(text) == said
@@ -46,6 +53,9 @@ def test_sentences_that_call_robo(text, said):
 @pytest.mark.parametrize("text", [
     "I'm studying linear algebra tonight.", "Robert called", "the robot vacuum is broken",
     "I'm going to show you how to do this.", "", "you",
+    # the user's own sentences without the name (Parakeet transcripts)
+    "Robots are interesting.", "Let's go over notes.", "I need study calculus tonight.",
+    "The letter was long today.", "Can you pass me water?", "Ruby on rails is fun",
 ])
 def test_sentences_not_for_robo(text):
     assert addressed(text) is None
@@ -352,3 +362,25 @@ def test_one_model_serves_the_quick_checks_by_default():
     assert lis.start()
     lis.stop()
     assert len(loads) == 1 and lis._quick is lis._stt  # Parakeet is fast enough for both
+
+
+def test_once_robo_is_listening_a_thinking_pause_does_not_end_the_request():
+    # woke by name, then 1.2 s of silence mid-request, then more words
+    clip = (frames(0, 8) + frames(8, 20, SPEECH) + frames(20, 35) + frames(35, 45, SPEECH)
+            + frames(45, 80))
+    stt = FakeStt("Robo, plan my day and also check my mail")
+    lis, events = start(FakeMic(clip), stt, quick=FakeStt("Robo, plan my"))
+    assert events.get(timeout=5) == "wake"
+    assert events.get(timeout=5) == ("text", "plan my day and also check my mail")
+    lis.stop()
+    assert len(stt.heard) == 1 and 44 in tags(stt.heard[0])  # one request, both halves
+
+
+def test_a_long_request_is_not_cut_at_fifteen_seconds():
+    clip = frames(0, 8) + frames(8, 8 + 375, SPEECH) + frames(383, 420)  # 30 s of speech
+    stt = FakeStt("Robo, a long question")
+    lis, events = start(FakeMic(clip), stt, quick=FakeStt("Robo, a"))
+    assert events.get(timeout=5) == "wake"
+    assert events.get(timeout=10) == ("text", "a long question")
+    lis.stop()
+    assert len(stt.heard[0]) // FRAME > 375

@@ -1,6 +1,6 @@
 ---
 name: school-mail
-description: "Read the Outlook web inbox; reply or act when asked."
+description: "Read the Outlook inbox; draft or act when asked."
 version: 1.0.0
 author: robo
 metadata:
@@ -13,7 +13,8 @@ metadata:
 # School mail (Outlook inbox)
 
 ## When to Use
-The user asks about new or important mail, or the digest needs it.
+The user asks about new or important mail, the digest needs it, or the user asks to draft,
+write or send an email.
 
 ## Procedure
 1. `browser_navigate(url="https://outlook.office.com/mail/inbox")`. Read the page snapshot it
@@ -32,9 +33,25 @@ The user asks about new or important mail, or the digest needs it.
 5. Opening a message marks it read: open one only when the user needs its content, and tell
    them it now shows as read.
 
+## Drafting
+For "draft/write an email to X about Y":
+1. You need X's address. If you only have a name, find it in a mail from them (or ask); never
+   guess. Write a short subject and body in the user's voice.
+2. `browser_navigate(url="https://outlook.office.com/mail/deeplink/compose?to=<addr>&subject=<subject>&body=<body>")`,
+   every value URL-encoded (spaces `%20`, new lines `%0A`). Sign-in pages: steps 2-3 above,
+   then open the compose link again.
+3. `browser_snapshot()` until the compose form shows (at most 3 times). Check To, Subject and
+   body; fix any wrong or empty field with `browser_type`.
+4. Leave it as a DRAFT: Outlook autosaves (wait for "Draft saved"; click "Save draft" if
+   shown), then close the compose with `browser_press(key="Escape")`. Never click "Discard".
+5. Tell the user it is in Drafts, with the subject, and offer to send it.
+
+NEVER click Send unless the user's request explicitly says "send" (then check the fields once
+more first). For a reply, open the message and use its Reply the same way: draft unless told
+to send.
+
 ## Acting
-Reply, forward, delete, move or flag mail only when the user asked. Writes (typing a
-message, Send, Delete...) bring up an approval prompt for the user; if they deny, stop.
+Reply, forward, delete, move or flag mail only when the user asked.
 
 ## Output
 Unread and school-related first (teachers, courses, exams, deadlines, schedule changes); skip

@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
@@ -38,9 +39,10 @@ DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill
 FACE = (128, 96)  # px, the floating face
 BUBBLE_W = 340  # px
 TEXT_MAX = 300  # px of reply text before the bubble scrolls
-HEARD_MAX = 140  # characters of your own question shown above the reply
+HEARD_PX = 90  # px of your own (possibly long) question above the reply; then it scrolls
 APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
 CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
+WATCH_PAUSED = Path.home() / ".local/share/robo/watch.paused"  # exists = watching paused
 FOLLOW_UP_S = 10.0  # s after an answer when you can reply without saying "robo"
 DRAG = 6  # px of movement that turns a click on the face into a drag
 STYLE = """
@@ -50,7 +52,7 @@ QTextBrowser, QLineEdit { background: transparent; border: none; }
 QLineEdit { background: #121a2b; border: 1px solid #1f2b44; border-radius: 8px; padding: 5px; }
 QPushButton { background: #1b2640; border: none; border-radius: 8px; padding: 5px 10px; }
 QPushButton:hover { background: #26355a; }
-QLabel#status, QLabel#heard { color: #7f93b8; font-size: 12px; }
+QLabel#status, QTextBrowser#heard { color: #7f93b8; font-size: 12px; }
 QScrollBar:vertical { background: transparent; width: 6px; }
 QScrollBar::handle:vertical { background: #2a3a5c; border-radius: 3px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
@@ -66,6 +68,15 @@ def _online() -> bool:
         return False
 
 
+def _text_height(box: QTextBrowser, cap: int) -> int:
+    """Height that shows all of `box`'s text, at most `cap` (0 when empty)."""
+    doc = box.document()
+    if doc.isEmpty():
+        return 0
+    doc.setTextWidth(box.viewport().width() or BUBBLE_W - 30)
+    return min(int(doc.size().height()) + 12, cap)
+
+
 class _Bridge(QObject):
     event = Signal(object)  # Hermes events, from the worker thread
     heard = Signal(str)  # a transcribed voice command, from the listener thread
@@ -77,7 +88,7 @@ class RoboWindow(QWidget):
 
     def __init__(self, client, clock: DigestClock, *, today: Callable[[], date] = date.today,
                  network: Callable[[], bool] | None = None, watch_wake: bool = True,
-                 persona: str = "", floating: bool = False, listener=None):
+                 persona: str = "", floating: bool = False, listener=None, watcher=None):
         super().__init__()
         self.client, self.clock, self.today, self.persona = client, clock, today, persona
         self.network = network or _online
@@ -116,6 +127,10 @@ class RoboWindow(QWidget):
         self.watcher = WakeWatcher(self.resumed.emit) if watch_wake else None
         if self.watcher:
             self.watcher.start()
+        self.watcher_ = watcher  # activity watching (robo.activity.Watcher)
+        if watcher:
+            watcher.pause(WATCH_PAUSED.exists())
+            watcher.start()
         self.listener = listener(self._wake, self.bridge.heard.emit, self.bridge.note.emit) \
             if listener else None
         if self.listener and not self.listener.start():
@@ -131,7 +146,8 @@ class RoboWindow(QWidget):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.panel = QFrame(objectName="panel")
         self.panel.setFixedWidth(BUBBLE_W)
-        self.heard = QLabel("", objectName="heard", wordWrap=True)
+        self.heard = QTextBrowser(objectName="heard")  # what you said, in full
+        self.heard.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.status = QLabel("", objectName="status")
         self.bubble = QTextBrowser(openExternalLinks=True)
         self.bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -139,6 +155,7 @@ class RoboWindow(QWidget):
         # the text layout and aborts); one timer also coalesces a burst of streamed deltas.
         self.sizer = QTimer(self, singleShot=True, interval=0, timeout=self._size_text)
         self.bubble.document().contentsChanged.connect(self.sizer.start)
+        self.heard.document().contentsChanged.connect(self.sizer.start)
         self.approval_text = QLabel(wordWrap=True)
         self.allow, self.deny = QPushButton("Allow"), QPushButton("Deny")
         self.allow.clicked.connect(lambda: self._approve("once"))
@@ -156,7 +173,8 @@ class RoboWindow(QWidget):
         menu_row = QHBoxLayout(self.menu)  # a pointer grab XWayland refuses a Tool window)
         menu_row.setContentsMargins(0, 0, 0, 0)
         for label, fn in (("📚 Digest", lambda: self.ask(DIGEST_PROMPT)), ("⌨ Type", self._type),
-                          ("📌 Stay", self._toggle_stay), ("✕ Quit", self.close)):
+                          ("📌 Stay", self._toggle_stay), ("⏸ Watch", self._toggle_watch),
+                          ("✕ Quit", self.close)):
             button = QPushButton(label)
             button.clicked.connect(lambda _=False, fn=fn: (self._hide_menu(), fn()))
             menu_row.addWidget(button)
@@ -199,8 +217,7 @@ class RoboWindow(QWidget):
         # One Hermes session per day and persona version (see setup.persona_stamp).
         self.session_id = "-".join(filter(None, ("robo", day.isoformat(), self.persona)))
         self.digest_day = day if text == DIGEST_PROMPT else None
-        shown = text if len(text) <= HEARD_MAX else text[:HEARD_MAX - 1] + "…"
-        self.heard.setText("" if self.digest_day else f"You: {shown}")
+        self.heard.setPlainText("" if self.digest_day else f"You: {text}")
         self.bubble.clear()
         self._on_event(UserSent(text))
         threading.Thread(target=self._work, args=(text, wait_network), daemon=True).start()
@@ -238,7 +255,7 @@ class RoboWindow(QWidget):
             self._background(self.client.stop, run_id)
 
     def _approve(self, choice: str) -> None:
-        self.approval.hide()
+        self._fit(self.approval.hide)
         if self.run_id:
             self._background(self.client.approve, self.run_id, choice)
 
@@ -267,7 +284,7 @@ class RoboWindow(QWidget):
 
     def _say(self, text: str) -> None:
         """Show a short local message (no model involved)."""
-        self.heard.setText("")
+        self.heard.clear()
         self.bubble.setMarkdown(text)
         self._open(close_after=8.0)
 
@@ -278,7 +295,7 @@ class RoboWindow(QWidget):
         match ev:
             case Listening(on=True):
                 self.stop()  # speaking over robo interrupts its answer
-                self.heard.setText("")
+                self.heard.clear()
                 self.bubble.clear()
                 self._open()
             case UserSent():
@@ -296,12 +313,12 @@ class RoboWindow(QWidget):
             case ApprovalNeeded(description=d):
                 d = d if len(d) <= APPROVAL_MAX else d[:APPROVAL_MAX - 1] + "…"
                 self.approval_text.setText(f"Allow? {d}")
-                self.approval.show()
+                self._fit(self.approval.show)  # room for the buttons: the window grows
                 self._open()
             case RunEnded(status=status, output=out, error=err):
                 with self.lock:
                     self.busy, self.run_id = False, None
-                self.approval.hide()
+                self._fit(self.approval.hide)
                 text = out or self.reply if status == "completed" else err or f"Run {status}."
                 if self.listening:  # interrupted by the user speaking: keep listening
                     self.mind = minds.react(self.mind, Listening(True), time.monotonic())
@@ -337,19 +354,19 @@ class RoboWindow(QWidget):
         label = m.label.rstrip("…") or ("thinking" if waiting else "")
         self.status.setText(f"{label}{dots}" if label else "")
         self.status.setVisible(bool(self.status.text()))
-        self.heard.setVisible(bool(self.heard.text()))
+
 
     def _size_text(self) -> None:
-        """The reply area is as tall as its text (up to TEXT_MAX, then it scrolls)."""
+        """Your question and the reply are as tall as their text, up to a cap, then scroll."""
         if not self.floating:
             return
-        doc = self.bubble.document()
-        doc.setTextWidth(self.bubble.viewport().width() or BUBBLE_W - 30)
-        height = min(int(doc.size().height()) + 12, TEXT_MAX) if not doc.isEmpty() else 0
-        if height != self.bubble.height() or self.bubble.isHidden() != (height == 0):
+        wanted = {box: _text_height(box, cap) for box, cap in ((self.heard, HEARD_PX),
+                                                                (self.bubble, TEXT_MAX))}
+        if any(h != box.height() or box.isHidden() != (h == 0) for box, h in wanted.items()):
             def resize() -> None:
-                self.bubble.setFixedHeight(height)
-                self.bubble.setVisible(height > 0)
+                for box, h in wanted.items():
+                    box.setFixedHeight(h)
+                    box.setVisible(h > 0)
             self._fit(resize)
 
     def _open(self, close_after: float = 0.0) -> None:
@@ -432,9 +449,12 @@ class RoboWindow(QWidget):
         self.moving = False
 
     def _show_menu(self) -> None:
-        self.menu.findChildren(QPushButton)[2].setText(
+        buttons = self.menu.findChildren(QPushButton)
+        buttons[2].setText(
             "🚶 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
             else "📌 Stay")
+        buttons[3].setText("▶ Watch" if self.watcher_ and self.watcher_.paused else "⏸ Watch")
+        buttons[3].setVisible(bool(self.watcher_))
         self._fit(self.menu.show)
         self._open(close_after=8.0)
 
@@ -463,6 +483,16 @@ class RoboWindow(QWidget):
         self.typer.show()
         self.typer.raise_()
         self.typer.activateWindow()
+
+    def _toggle_watch(self) -> None:
+        """Pause or resume activity watching; the choice survives a restart."""
+        if not self.watcher_:
+            return
+        paused = not self.watcher_.paused
+        self.watcher_.pause(paused)
+        with contextlib.suppress(OSError):
+            WATCH_PAUSED.parent.mkdir(parents=True, exist_ok=True)
+            WATCH_PAUSED.touch() if paused else WATCH_PAUSED.unlink(missing_ok=True)
 
     def _toggle_stay(self) -> None:
         if not self.roamer:
@@ -496,5 +526,7 @@ class RoboWindow(QWidget):
             self.watcher.stop()
         if self.listener:
             self.listener.stop(wait=0.5)
+        if self.watcher_:
+            self.watcher_.stop()
         super().closeEvent(event)
         QGuiApplication.quit()

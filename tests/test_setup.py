@@ -155,3 +155,23 @@ def test_persona_stamp_changes_with_soul_or_skills(tmp_path, monkeypatch):
 ])
 def test_moodle_url_takes_the_base_of_a_pasted_page(pasted, base):
     assert setup._moodle_url(pasted) == base
+
+
+def test_desktop_installs_the_focus_extension_and_autostart(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr(setup.Path, "home", lambda: home)
+    enabled = ["ding@rastersoft.com"]
+    src = tmp_path / "ext"
+    src.mkdir()
+    (src / "metadata.json").write_text("{}")
+    (src / "extension.js").write_text("x")
+    kw = dict(extension=src, robo_cmd="/usr/bin/uv run robo",
+              get_enabled=lambda: list(enabled), set_enabled=lambda ids: enabled.__init__(ids))
+    done = setup.desktop(**kw)
+    ext = home / ".local/share/gnome-shell/extensions/robo-focus@robo"
+    assert (ext / "extension.js").read_text() == "x"
+    assert enabled == ["ding@rastersoft.com", "robo-focus@robo"]  # others kept
+    desktop_file = (home / ".config/autostart/robo.desktop").read_text()
+    assert "Exec=/usr/bin/uv run robo" in desktop_file and "Type=Application" in desktop_file
+    assert any("log out" in d for d in done)
+    assert setup.desktop(**kw) == []  # idempotent

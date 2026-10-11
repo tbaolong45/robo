@@ -25,9 +25,11 @@ NOISE_FRAMES = 62  # ~5 s of quiet RMS for the noise floor
 NOISE_PERCENTILE = 20
 GATE_FACTOR = 2.5  # speech = RMS above 2.5x the room's noise floor...
 MIN_GATE = 0.02  # ...and above this (float RMS, -1..1)
-END_SILENCE_S = 0.7
+END_SILENCE_S = 0.7  # other speech (TV, people): short, so little is transcribed
 NO_SPEECH_S = 6.0
 MAX_UTTERANCE_S = 15.0
+PATIENT_SILENCE_S = 1.6  # talking to robo: a pause to think does not end the request ("over" does)
+PATIENT_MAX_S = 120.0
 MIN_SPEECH_FRAMES = 4  # ~0.3 s above the gate, or it was a knock, not a sentence
 READ_TIMEOUT = 0.5
 STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"  # int8 ONNX: ~0.4 s for 3 s of speech on this CPU
@@ -35,10 +37,12 @@ EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's
 OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
 OVER_WINDOW = 25  # ~2 s of the latest audio for that check
 
-_NAME = r"rob(?:ots?|o|oh|ow|bo)"
-_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|yo)\W+)?{_NAME}\b\W*", re.I)
+# How Parakeet writes the user's "robo" (measured on their voice): Robo, Rubo, Robot; never
+# "robots" (that is just the word, e.g. "Robots are interesting").
+_NAME = r"r[ou]bb?(?:o|oh|ow|ot)"
+_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W+)?{_NAME}\b\W*", re.I)
 _TAIL = re.compile(rf"\W*\b{_NAME}\W*$", re.I)
-_ANYWHERE = re.compile(r"\brob(?:o|oh|ow|bo)\b", re.I)  # "robo" is rare; "robot" only at an edge
+_ANYWHERE = re.compile(r"\br[ou]bb?(?:o|oh|ow)\b", re.I)  # "robo" is rare; "robot" only at an edge
 
 
 def addressed(text: str) -> str | None:
@@ -78,6 +82,7 @@ class Endpointer:
 
     def __init__(self, gate: float, frame_s: float = FRAME_S):
         self.gate, self.frame_s = gate, frame_s
+        self.end_silence, self.max_s = END_SILENCE_S, MAX_UTTERANCE_S
         self.frames = self.silent = 0
         self.heard = False
 
@@ -88,10 +93,10 @@ class Endpointer:
             self.heard, self.silent = True, 0
         else:
             self.silent += 1
-        if self.frames * self.frame_s >= MAX_UTTERANCE_S:
+        if self.frames * self.frame_s >= self.max_s:
             return True
         if self.heard:
-            return self.silent * self.frame_s >= END_SILENCE_S
+            return self.silent * self.frame_s >= self.end_silence
         return self.frames * self.frame_s >= NO_SPEECH_S
 
 
@@ -251,6 +256,8 @@ class Listener:
         ended it."""
         ep, loud, start = Endpointer(gate), 1, len(frames)
         ep.feed(rms(frames[-1]))  # the frame that crossed the gate
+        if woke:
+            ep.end_silence, ep.max_s = PATIENT_SILENCE_S, PATIENT_MAX_S
         while not self._stop.is_set():
             frame = mic.read(READ_TIMEOUT)
             if frame is None:  # the mic went quiet: that time counts as silence
@@ -269,6 +276,7 @@ class Listener:
                 woke = addressed(self._quick(np.concatenate(frames))) is not None
                 if woke:
                     self.on_wake()
+                    ep.end_silence, ep.max_s = PATIENT_SILENCE_S, PATIENT_MAX_S
             elif woke and n % OVER_EVERY == 0:
                 if _OVER.search(self._quick(np.concatenate(frames[-OVER_WINDOW:]))):
                     return frames, loud, woke, True

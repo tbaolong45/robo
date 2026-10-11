@@ -241,6 +241,7 @@ class FakeListener:
 
 
 def floating(tmp_path, client, **kw):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     clock = DigestClock(tmp_path / "state.json")
     clock.mark(date(2026, 10, 11))
     made = []
@@ -264,7 +265,7 @@ def test_floating_starts_as_just_a_face_and_the_bubble_opens_for_a_reply(tmp_pat
     win.ask("hello")
     assert pump(win, lambda: not win.busy)
     assert not win.panel.isHidden() and win.height() > face_only.height()
-    assert win.heard.text() == "You: hello" and "Hi!" in win.bubble.toPlainText()
+    assert win.heard.toPlainText() == "You: hello" and "Hi!" in win.bubble.toPlainText()
     assert win.close_at > time.monotonic() + robo_app.CLOSE_AFTER - 5  # closes by itself later
     win.close_at = 1  # the reply's time is up
     assert pump(win, lambda: win.panel.isHidden())
@@ -442,11 +443,18 @@ def test_a_listener_error_ends_listening(tmp_path):
     assert "unplugged" in win.bubble.toPlainText()
 
 
-def test_long_question_is_shortened_in_the_bubble(tmp_path):
+def test_a_long_question_is_shown_in_full_and_scrolls(tmp_path):
+    from PySide6.QtGui import QGuiApplication
+
     win, _ = floating(tmp_path, FakeClient([RunEnded("completed", "ok")]))
-    win.ask("word " * 400)
-    assert len(win.heard.text()) < 200
+    question = " ".join(f"word{i}" for i in range(400))
+    win.ask(question)
+    assert win.heard.toPlainText() == f"You: {question}"  # nothing cut
     assert pump(win, lambda: not win.busy)
+    pump(win, lambda: False, timeout=0.2)
+    assert win.heard.height() <= robo_app.HEARD_PX  # it scrolls instead of growing forever
+    screen = QGuiApplication.primaryScreen().availableGeometry()
+    assert win.height() <= screen.height()
 
 
 def test_click_while_answering_interrupts_and_listens(tmp_path):
@@ -525,3 +533,49 @@ def test_a_failed_answer_opens_no_follow_up(tmp_path):
     win.ask("x")
     assert pump(win, lambda: not win.busy)
     assert ear.follow == 0
+
+
+def test_an_approval_gets_its_own_room_in_the_bubble(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.busy = True
+    win._open()
+    win._on_event(Delta("**Today**\n- a\n- b\n- c"))
+    pump(win, lambda: False, timeout=0.3)
+    before = win.height()
+    win._on_event(ApprovalNeeded("Robo wants to run: rm x"))
+    pump(win, lambda: False, timeout=0.3)
+    assert win.height() >= before + win.approval.height()  # the window grew, nothing squeezed
+    assert win.bubble.geometry().bottom() < win.approval.geometry().top()
+    win._approve("deny")
+    pump(win, lambda: False, timeout=0.3)
+    assert win.height() == before
+
+
+class FakeWatcher:
+    def __init__(self):
+        self.started = self.stopped = False
+        self.paused = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def pause(self, paused=True):
+        self.paused = paused
+
+
+def test_the_menu_pauses_and_resumes_watching_and_remembers_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(robo_app, "WATCH_PAUSED", tmp_path / "watch.paused")
+    watcher = FakeWatcher()
+    win, _ = floating(tmp_path, FakeClient([]), watcher=watcher)
+    assert watcher.started and not watcher.paused
+    button = next(b for b in win.menu.findChildren(robo_app.QPushButton) if "Watch" in b.text())
+    button.click()
+    assert watcher.paused and (tmp_path / "watch.paused").exists()
+    win.close()
+    assert watcher.stopped
+    again = FakeWatcher()
+    floating(tmp_path / "2", FakeClient([]), watcher=again)
+    assert again.paused  # still paused after a restart

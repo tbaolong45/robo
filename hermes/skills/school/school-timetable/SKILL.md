@@ -7,13 +7,14 @@ metadata:
   hermes:
     tags: [School, Outlook, Calendar]
     requires_toolsets: [browser]
-    related_skills: [school-digest]
+    related_skills: [school-digest, study-plan]
 ---
 
 # School timetable (Outlook calendar)
 
 ## When to Use
-The user asks about classes today or this week, or the digest needs today's classes.
+The user asks about classes today or this week, or the digest or `study-plan` needs today's
+classes.
 
 ## Procedure
 1. `browser_navigate(url="https://outlook.office.com/calendar/view/week")`. Read the page
@@ -32,9 +33,14 @@ The user asks about classes today or this week, or the digest needs today's clas
 5. To see another week, click the calendar's previous or next week button.
 
 ## Acting
-Accept, decline, create or delete events only when the user asked. Writes bring up an
-approval prompt for the user; if they deny, stop.
+Accept, decline, create or delete events only when the user asked (`study-plan` adds the
+`[Robo]` study blocks).
 
 ## Output
 Today first, then the remaining days, one bullet per class in time order:
 `- Mon 13 Oct · 09:00-10:30 Calculus (B2.14)`. Mark cancelled events as cancelled.
+
+For `study-plan`, also return the day's busy times with exact start and end, ISO local, no
+`Z`, every event that is not cancelled (classes, meetings, `[Robo]` blocks):
+`[{"title": "Calculus", "start": "2026-10-13T09:00:00", "end": "2026-10-13T10:30:00"}]`.
+If an event's end time is not visible, read it with `browser_vision`; never guess it.

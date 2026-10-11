@@ -257,7 +257,7 @@ def test_dialogs_and_the_password_vault_ask(guard, tool):
 @pytest.mark.parametrize("tool, args", [
     ("browser_cdp", {"method": "Page.reload"}), ("browser_exec", {"code": "x"}),
     ("browser_console", {"expression": "document.title"}),
-    ("skill_manage", {"operations": [{"name": "study-planner", "action": "create",
+    ("skill_manage", {"operations": [{"name": "exam-cram-tips", "action": "create",
                                       "content": "x"}]}),
 ])
 def test_raw_browser_control_and_new_skills_are_allowed(guard, tool, args):
@@ -269,6 +269,8 @@ def test_raw_browser_control_and_new_skills_are_allowed(guard, tool, args):
     [{"name": "notes", "action": "create", "content": "x"},
      {"name": "school-digest", "action": "delete"}],
     {"name": "school-teams", "action": "delete"},  # the legacy flat shape
+    [{"name": "study-plan", "action": "patch", "old_string": "a", "new_string": "b"}],
+    [{"name": "study-ledger", "action": "delete"}],
 ])
 def test_robos_own_school_skills_cannot_be_changed(guard, ops):
     args = {"operations": ops} if isinstance(ops, list) else ops

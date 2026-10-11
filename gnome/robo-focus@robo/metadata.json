@@ -1,0 +1,12 @@
+{
+  "uuid": "robo-focus@robo",
+  "name": "Robo Focus",
+  "description": "Tells robo (on the session bus, org.robo.Focus.Current) which app and window title has focus. Nothing else.",
+  "shell-version": [
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ]
+}

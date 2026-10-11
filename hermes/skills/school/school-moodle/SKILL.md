@@ -33,8 +33,7 @@ stop. Never guess it.
 
 ## Acting
 Submit, upload, post or mark done only when the user asked. Start or continue a quiz attempt
-only when the user explicitly asks (it starts the timer). Writes bring up an approval prompt
-for the user; if they deny, stop.
+only when the user explicitly asks (it starts the timer).
 
 ## Output
 Overdue first, then by due date, one bullet each, with dates:

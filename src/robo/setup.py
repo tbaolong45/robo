@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -24,6 +25,8 @@ from robo.browser import CDP_URL
 
 PROFILE = "robo"
 TEMPLATES = Path(__file__).resolve().parents[2] / "hermes"
+EXTENSION = Path(__file__).resolve().parents[2] / "gnome" / "robo-focus@robo"
+EXTENSION_ID = "robo-focus@robo"
 INSTALLED = ("SOUL.md", "skills", "plugins")  # what of TEMPLATES lands in the profile
 
 
@@ -99,11 +102,12 @@ def connection() -> tuple[str, str]:
     return os.environ.get("ROBO_HERMES_URL", f"http://127.0.0.1:{port}/p/{PROFILE}"), key
 
 
-def _copy_tree(src: Path, dst: Path, fill: dict[str, str]) -> bool:
-    """Copy template files over the profile's, filling {{KEY}}s; True if any file changed."""
+def _copy_tree(src: Path, dst: Path, fill: dict[str, str],
+               only: tuple[str, ...] | None = INSTALLED) -> bool:
+    """Copy template files over `dst`'s, filling {{KEY}}s; True if any file changed."""
     changed = False
     files = [p for p in src.rglob("*") if p.is_file() and "__pycache__" not in p.parts
-             and p.relative_to(src).parts[0] in INSTALLED]
+             and (only is None or p.relative_to(src).parts[0] in only)]
     for f in sorted(files):
         data = f.read_bytes()
         for key, value in fill.items():
@@ -124,6 +128,41 @@ def _moodle_url(url: str) -> str:
                          f"not {url!r}.")
     path = re.sub(r"/(?:my|login|course|calendar|mod)(?:/.*)?$", "", parts.path)  # a pasted page
     return f"https://{parts.netloc}{path}".rstrip("/")
+
+
+def _enabled_extensions() -> list[str]:
+    out = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
+                         capture_output=True, text=True, timeout=10).stdout
+    return re.findall(r"'([^']+)'", out)
+
+
+def _set_enabled_extensions(ids: list[str]) -> None:
+    _run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", repr(ids)])
+
+
+def desktop(extension: Path = EXTENSION, robo_cmd: str | None = None,
+            get_enabled: Callable[[], list[str]] = _enabled_extensions,
+            set_enabled: Callable[[list[str]], None] = _set_enabled_extensions) -> list[str]:
+    """Install robo's GNOME focus extension (activity watching) and start robo at login."""
+    done = []
+    home = Path.home()
+    copied = _copy_tree(extension, home / ".local/share/gnome-shell/extensions" / EXTENSION_ID,
+                        {}, only=None)
+    enabled = get_enabled()
+    if EXTENSION_ID not in enabled:  # GNOME loads a new extension only at the next login
+        set_enabled([*enabled, EXTENSION_ID])
+    if copied or EXTENSION_ID not in enabled:
+        done.append("installed robo's GNOME focus extension: log out and in once to load it")
+    project = Path(__file__).resolve().parents[2]
+    cmd = robo_cmd or f"{shutil.which('uv') or 'uv'} run --project {project} robo"
+    entry = home / ".config/autostart/robo.desktop"
+    text = (f"[Desktop Entry]\nType=Application\nName=Robo\nExec={cmd}\n"
+            "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
+    if not entry.exists() or entry.read_text() != text:
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text(text)
+        done.append("robo now starts when you log in")
+    return done
 
 
 def _run(cmd: list[str]) -> None:
@@ -190,8 +229,8 @@ def setup(
 
 
 # robo's profile config, applied with `hermes -p robo config set` (which refuses unknown keys).
-TOOLSETS = ["browser", "web", "vision", "skills", "memory", "todo", "terminal", "file",
-            "computer_use", "code_execution"]
+TOOLSETS = ["browser", "web", "vision", "skills", "memory", "session_search", "todo",
+            "terminal", "file", "computer_use", "code_execution"]
 CONFIG: dict[str, str] = {
     "model.provider": "anthropic",
     "model.default": "claude-sonnet-5.5",
