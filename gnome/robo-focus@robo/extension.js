@@ -15,8 +15,10 @@ function current() {
     if (!win)
         return ['', ''];
     const app = Shell.WindowTracker.get_default().get_window_app(win);
-    const id = app?.get_id()?.replace(/\.desktop$/, '') ||
-        win.get_gtk_application_id() || win.get_wm_class() || '';
+    const tracked = app?.get_id()?.replace(/\.desktop$/, '');
+    // WindowTracker invents "window:<n>" for windows it can't match to an installed app.
+    const id = (tracked && !tracked.startsWith('window:') ? tracked : '') ||
+        win.get_gtk_application_id() || win.get_wm_class() || tracked || '';
     return [id, win.get_title() ?? ''];
 }
 
