@@ -579,3 +579,64 @@ def test_the_menu_pauses_and_resumes_watching_and_remembers_it(tmp_path, monkeyp
     again = FakeWatcher()
     floating(tmp_path / "2", FakeClient([]), watcher=again)
     assert again.paused  # still paused after a restart
+
+
+def test_thinking_shows_typing_dots_until_the_reply_starts(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(["WAIT", Delta("Hello"), "WAIT", RunEnded("completed", "Hello")], gate=gate)
+    win, _ = floating(tmp_path, client)
+    win.ask("hi")
+    assert pump(win, lambda: win.typing.isVisibleTo(win))  # Messenger-style "..." while thinking
+    assert win.status.text() == ""
+    gate.set()
+    assert pump(win, lambda: "Hello" in win.bubble.toPlainText())
+    assert pump(win, lambda: not win.typing.isVisibleTo(win))  # the reply replaces the dots
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+
+
+def test_typing_dots_bounce():
+    from robo.app import TypingDots
+
+    a, b = TypingDots.offsets(0.0), TypingDots.offsets(0.2)
+    assert len(a) == 3 and a != b and max(map(abs, a)) <= TypingDots.HOP
+
+
+def test_what_robo_made_opens_by_itself(tmp_path, monkeypatch):
+    out = tmp_path / "Robo"
+    out.mkdir()
+    (out / "old-notes.html").write_text("old")  # made before this request: not reopened
+    opened = []
+    monkeypatch.setattr(robo_app, "OUTPUT_DIR", out)
+    monkeypatch.setattr(robo_app, "open_file", opened.append)
+
+    class Maker(FakeClient):
+        def ask(self, text, session_id, started=None):
+            (out / "diagram.html").write_text("<svg/>")
+            yield from super().ask(text, session_id, started)
+
+    client = Maker([RunEnded("completed", "Here is your diagram.")])
+    time.sleep(0.02)
+    win, _ = floating(tmp_path, client)
+    win.ask("draw a diagram of the water cycle")
+    assert pump(win, lambda: not win.busy)
+    assert opened == [out / "diagram.html"]
+    assert "diagram.html" in win.bubble.toPlainText()
+
+
+def test_a_failed_request_opens_nothing(tmp_path, monkeypatch):
+    out = tmp_path / "Robo"
+    out.mkdir()
+    opened = []
+    monkeypatch.setattr(robo_app, "OUTPUT_DIR", out)
+    monkeypatch.setattr(robo_app, "open_file", opened.append)
+
+    class Maker(FakeClient):
+        def ask(self, text, session_id, started=None):
+            (out / "half.html").write_text("x")
+            yield from super().ask(text, session_id, started)
+
+    win, _ = floating(tmp_path, Maker([RunEnded("failed", error="boom")]))
+    win.ask("x")
+    assert pump(win, lambda: not win.busy)
+    assert opened == []

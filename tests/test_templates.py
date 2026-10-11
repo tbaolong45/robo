@@ -37,7 +37,7 @@ def frontmatter(path: Path) -> tuple[dict[str, str], str]:
 def test_all_school_skills_exist():
     names = {p.parent.name for p in SKILLS}
     school = {f"school-{n}" for n in ("timetable", "mail", "teams", "moodle", "digest")}
-    assert names == school | {"study-ledger", "study-plan"}
+    assert names == school | {"study-ledger", "study-plan", "robo-make"}
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)

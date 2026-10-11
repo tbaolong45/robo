@@ -7,15 +7,17 @@ the screen edges (robo.roam). Otherwise the same widgets live in an ordinary win
 from __future__ import annotations
 
 import contextlib
+import math
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -43,6 +45,8 @@ HEARD_PX = 90  # px of your own (possibly long) question above the reply; then i
 APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
 CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
 WATCH_PAUSED = Path.home() / ".local/share/robo/watch.paused"  # exists = watching paused
+OUTPUT_DIR = Path.home() / "Robo"  # what robo makes (diagrams, pages, documents); see SOUL.md
+OPEN_MAX = 3  # files opened after one request
 FOLLOW_UP_S = 10.0  # s after an answer when you can reply without saying "robo"
 DRAG = 6  # px of movement that turns a click on the face into a drag
 STYLE = """
@@ -57,6 +61,21 @@ QScrollBar:vertical { background: transparent; width: 6px; }
 QScrollBar::handle:vertical { background: #2a3a5c; border-radius: 3px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 """
+
+
+def open_file(path: Path) -> None:
+    """Open a file robo made in the user's default app for it."""
+    subprocess.Popen(["xdg-open", str(path)], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def _made_since(started: float) -> list[Path]:
+    """Files in OUTPUT_DIR written during this request, newest first."""
+    try:
+        files = [f for f in OUTPUT_DIR.rglob("*") if f.is_file() and f.stat().st_mtime >= started]
+    except OSError:
+        return []
+    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:OPEN_MAX]
 
 
 def _online() -> bool:
@@ -75,6 +94,40 @@ def _text_height(box: QTextBrowser, cap: int) -> int:
         return 0
     doc.setTextWidth(box.viewport().width() or BUBBLE_W - 30)
     return min(int(doc.size().height()) + 12, cap)
+
+
+class TypingDots(QWidget):
+    """Messenger-style "typing" bubble: three dots that hop in turn while robo thinks."""
+
+    HOP = 4.0  # px
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(54, 26)
+        self.timer = QTimer(self, interval=33, timeout=self.update)
+
+    @staticmethod
+    def offsets(t: float) -> list[float]:
+        """Vertical offset of each dot at time `t` (a wave running left to right, 1.2 s)."""
+        return [-TypingDots.HOP * max(0.0, math.sin((t / 1.2 - i * 0.15) * 2 * math.pi))
+                for i in range(3)]
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.timer.stop()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(38, 52, 82))
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 13, 13)
+        for i, dy in enumerate(self.offsets(time.monotonic())):
+            p.setBrush(QColor(170, 190, 225, 150 + int(105 * -dy / self.HOP)))
+            p.drawEllipse(QPointF(15 + 12 * i, 13 + dy), 3.5, 3.5)
+        p.end()
 
 
 class _Bridge(QObject):
@@ -102,6 +155,7 @@ class RoboWindow(QWidget):
         self.run_id: str | None = None
         self.cancel = False
         self.pending = ""  # a question asked during a run, asked when it ends
+        self.started_at = 0.0  # when the current request began (files made since then open)
         self.listening = False
         self.close_at = 0.0  # when the finished reply's bubble closes (0 = not scheduled)
         self.press: QPoint | None = None  # global position of a mouse press on the face
@@ -149,6 +203,13 @@ class RoboWindow(QWidget):
         self.heard = QTextBrowser(objectName="heard")  # what you said, in full
         self.heard.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.status = QLabel("", objectName="status")
+        self.typing = TypingDots()
+        status_row = QWidget()
+        row_layout = QHBoxLayout(status_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self.typing)
+        row_layout.addWidget(self.status)
+        row_layout.addStretch(1)  # the dots sit at the left, like a chat bubble
         self.bubble = QTextBrowser(openExternalLinks=True)
         self.bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Resize after the document finished laying out (resizing inside its signal re-enters
@@ -183,7 +244,7 @@ class RoboWindow(QWidget):
         self.input.returnPressed.connect(self.send)
         self.input.setVisible(not self.floating)  # floating: voice, or "Type a message…"
         inner = QVBoxLayout(self.panel)
-        for w in (self.menu, self.heard, self.status, self.bubble, self.approval, self.input):
+        for w in (self.menu, self.heard, status_row, self.bubble, self.approval, self.input):
             inner.addWidget(w)
         self.face = FaceWidget(self, radius=22 if self.floating else 0)
         self.face.setFixedSize(*FACE) if self.floating else self.face.setMinimumHeight(220)
@@ -217,6 +278,7 @@ class RoboWindow(QWidget):
         # One Hermes session per day and persona version (see setup.persona_stamp).
         self.session_id = "-".join(filter(None, ("robo", day.isoformat(), self.persona)))
         self.digest_day = day if text == DIGEST_PROMPT else None
+        self.started_at = time.time()  # files robo makes from now on are opened when it's done
         self.heard.setPlainText("" if self.digest_day else f"You: {text}")
         self.bubble.clear()
         self._on_event(UserSent(text))
@@ -326,6 +388,14 @@ class RoboWindow(QWidget):
                     self.bubble.setMarkdown(text)
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
+                if status == "completed" and not self.listening:
+                    made = _made_since(self.started_at)
+                    for f in made:
+                        with contextlib.suppress(OSError):
+                            open_file(f)
+                    if made:
+                        names = ", ".join(f.name for f in made)
+                        self.bubble.setMarkdown(f"{text}\n\n📂 Opened {names}")
                 if self.listener and status == "completed" and not self.pending:
                     self.listener.follow_up(FOLLOW_UP_S)  # a reply needs no "robo"
                 self.digest_day = None
@@ -349,12 +419,14 @@ class RoboWindow(QWidget):
     def _show(self) -> None:
         m = self.mind
         self.face.set_state(m.activity, m.emotion, m.talking)
-        waiting = self.busy and not self.reply or m.activity == "listening"
-        dots = "." * (1 + int(time.monotonic() * 3) % 3) if waiting else ""
-        label = m.label.rstrip("…") or ("thinking" if waiting else "")
-        self.status.setText(f"{label}{dots}" if label else "")
-        self.status.setVisible(bool(self.status.text()))
-
+        listening = m.activity == "listening"
+        thinking = self.busy and not self.reply and not listening
+        if self.typing.isVisibleTo(self) != thinking:
+            self._fit(lambda: self.typing.setVisible(thinking))
+        dots = "." * (1 + int(time.monotonic() * 3) % 3)
+        label = "listening" if listening else m.label.rstrip("…") if thinking else ""
+        self.status.setText(f"{label}{dots}" if label else "")  # e.g. "browsing..." by the dots
+        self.status.setVisible(bool(label))
 
     def _size_text(self) -> None:
         """Your question and the reply are as tall as their text, up to a cap, then scroll."""

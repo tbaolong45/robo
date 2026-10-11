@@ -15,9 +15,9 @@ ask for the commands it flags as dangerous.
   Join, Pay...); Enter, Space and send/call shortcuts, except Enter right after typing into a
   search box; page dialogs; the password vault; non-web URLs and URLs with side effects (sign-out,
   compose, action=, OAuth redirect_uri...); a patch that deletes a file.
-- block: changing robo's installed school-* and study-* skills (new skills of its own are fine:
-  it learns), and anything touching robo's own Hermes setup (the hermes CLI, ~/.hermes, also
-  through symlinks, relative paths, a workdir or patch headers), so nothing switches it off.
+- block: changing robo's installed school-*, study-* and robo-* skills (new skills of its own
+  are fine: it learns), and anything touching robo's own Hermes setup (the hermes CLI,
+  ~/.hermes, also through symlinks, relative paths, a workdir or patch headers).
 - allow: everything else: any website, typing, toggles, reversible clicks (Like, Pin, Archive),
   file and memory writes, fetches, ordinary commands, raw browser control (CDP, JavaScript).
 Refs are read only outside quoted text, a ref listed twice is not trusted, and refs are forgotten
@@ -69,7 +69,7 @@ SEARCH = re.compile(r"\bsearch", re.IGNORECASE)
 MESSAGE = re.compile(r"\b(message|comment|compose|subject|body)", re.IGNORECASE)
 ACTIVATE = {"enter", "return", "numpadenter", "space"}  # with any modifiers
 SHORTCUTS = {"alt+s", "shift+delete", "control+shift+c", "control+shift+u"}  # send, purge, call
-OWN_SKILLS = ("school-", "study-")  # skills `robo setup` installs; skill_manage may not change
+OWN_SKILLS = ("school-", "study-", "robo-")  # installed by `robo setup`; skill_manage may not touch
 QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 REF = re.compile(r"\[[^\]]*\bref=(e\d+)[^\]]*\]")  # [ref=e5] or [level=2, ref=e5]
 FORGET_AFTER = {"browser_click", "browser_press", "browser_back", "browser_vision"}

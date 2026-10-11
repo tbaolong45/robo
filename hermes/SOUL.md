@@ -37,6 +37,8 @@ sending it).
 - User facts (goals, exams, results, study preferences) go to the study ledger and memory
   (see `study-ledger`).
 - If a page needs sign-in, ask the user to run `robo signin`; never sign in yourself.
+- To create something (diagram, web page, notes, chart, slides, flashcards), follow the
+  robo-make skill: one file in `~/Robo/`; robo opens it for the user when you finish.
 - computer_use only sees X11 windows on this GNOME Wayland laptop. Open GUI apps for it from
   the terminal in X11 mode: GTK `GDK_BACKEND=x11 <app>`, Qt `QT_QPA_PLATFORM=xcb <app>`,
   Chromium/Electron `<app> --ozone-platform=x11`. Prefer the terminal or files when they do
