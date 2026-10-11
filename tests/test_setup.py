@@ -1,3 +1,4 @@
+import plistlib
 import stat
 
 import pytest
@@ -181,7 +182,7 @@ def test_desktop_installs_the_focus_extension_and_autostart(tmp_path, monkeypatc
     src.mkdir()
     (src / "metadata.json").write_text("{}")
     (src / "extension.js").write_text("x")
-    kw = dict(extension=src, robo_cmd="/usr/bin/uv run robo",
+    kw = dict(extension=src, robo_cmd="/usr/bin/uv run robo", platform="linux",
               get_enabled=lambda: list(enabled), set_enabled=lambda ids: enabled.__init__(ids))
     done = setup.desktop(**kw)
     ext = home / ".local/share/gnome-shell/extensions/robo-focus@robo"
@@ -191,3 +192,40 @@ def test_desktop_installs_the_focus_extension_and_autostart(tmp_path, monkeypatc
     assert "Exec=/usr/bin/uv run robo" in desktop_file and "Type=Application" in desktop_file
     assert any("log out" in d for d in done)
     assert setup.desktop(**kw) == []  # idempotent
+
+
+def test_desktop_on_macos_writes_a_launch_agent_and_no_extension(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setattr(setup.Path, "home", lambda: home)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "/opt/homebrew/bin/uv")
+
+    def no_gsettings(*a):
+        raise AssertionError("no gsettings on a Mac")
+
+    kw = dict(platform="darwin", get_enabled=no_gsettings, set_enabled=no_gsettings)
+    done = setup.desktop(**kw)
+    agent = plistlib.loads((home / "Library/LaunchAgents/ai.robo.plist").read_bytes())
+    assert agent["Label"] == "ai.robo" and agent["RunAtLoad"] is True
+    assert agent["ProgramArguments"] == ["/opt/homebrew/bin/uv", "run", "--project",
+                                         str(setup.PROJECT), "robo"]
+    assert agent["StandardErrorPath"] == str(home / "Library/Logs/robo.log")
+    assert not (home / ".local/share/gnome-shell").exists()
+    assert any("log in" in d for d in done)
+    assert setup.desktop(**kw) == []  # idempotent
+
+
+@pytest.mark.parametrize("platform, says", [("linux", "GDK_BACKEND=x11"), ("darwin", "open -a")])
+def test_desktop_apps_rule_is_filled_per_os(tmp_path, monkeypatch, platform, says):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(setup.sys, "platform", platform)
+    (tmp_path / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n")
+    robo = tmp_path / "profiles" / "robo"
+    robo.mkdir(parents=True)
+    (robo / ".env").write_text("API_SERVER_KEY=r\n")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "SOUL.md").write_text("- {{DESKTOP_APPS}}\n")
+
+    setup.setup(templates=templates, config={}, run=lambda cmd: None, wait=lambda: True)
+    soul = (robo / "SOUL.md").read_text()
+    assert says in soul and "{{" not in soul

@@ -94,3 +94,8 @@ def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
 def test_templates_hold_no_machine_paths(path):
     """robo setup fills {{ROBO_PROJECT}}; a fixed /home/... path breaks on another laptop."""
     assert not re.search(r"/home/[a-z]", path.read_text(encoding="utf-8"))
+
+
+def test_soul_leaves_the_desktop_apps_rule_to_setup():
+    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    assert "- {{DESKTOP_APPS}}\n" in soul and "GDK_BACKEND" not in soul

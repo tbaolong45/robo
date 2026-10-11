@@ -10,10 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +31,16 @@ TEMPLATES = PROJECT / "hermes"
 EXTENSION = PROJECT / "gnome" / "robo-focus@robo"
 EXTENSION_ID = "robo-focus@robo"
 INSTALLED = ("SOUL.md", "skills", "plugins")  # what of TEMPLATES lands in the profile
+LAUNCH_AGENT = "ai.robo"  # macOS: ~/Library/LaunchAgents/ai.robo.plist starts robo at login
+# SOUL.md's rule for desktop apps (computer_use), per OS.
+DESKTOP_APPS = {
+    "linux": "computer_use only sees X11 windows on this GNOME Wayland laptop. Open GUI apps"
+             " for it from\n  the terminal in X11 mode: GTK `GDK_BACKEND=x11 <app>`, Qt"
+             " `QT_QPA_PLATFORM=xcb <app>`,\n  Chromium/Electron `<app> --ozone-platform=x11`."
+             " Prefer the terminal or files when they do\n  the job without the GUI.",
+    "darwin": "Open GUI apps on this Mac with `open -a \"<App>\"` from the terminal."
+              " Prefer the terminal or\n  files when they do the job without the GUI.",
+}
 
 
 class SetupError(RuntimeError):
@@ -143,8 +155,11 @@ def _set_enabled_extensions(ids: list[str]) -> None:
 
 def desktop(extension: Path = EXTENSION, robo_cmd: str | None = None,
             get_enabled: Callable[[], list[str]] = _enabled_extensions,
-            set_enabled: Callable[[list[str]], None] = _set_enabled_extensions) -> list[str]:
-    """Install robo's GNOME focus extension (activity watching) and start robo at login."""
+            set_enabled: Callable[[list[str]], None] = _set_enabled_extensions,
+            platform: str = sys.platform) -> list[str]:
+    """Start robo at login; on GNOME also install robo's focus extension (activity watching)."""
+    if platform == "darwin":
+        return _launch_agent()
     done = []
     home = Path.home()
     copied = _copy_tree(extension, home / ".local/share/gnome-shell/extensions" / EXTENSION_ID,
@@ -163,6 +178,27 @@ def desktop(extension: Path = EXTENSION, robo_cmd: str | None = None,
         entry.write_text(text)
         done.append("robo now starts when you log in")
     return done
+
+
+def _launch_agent() -> list[str]:
+    """macOS: launchd starts robo at each login. No extension: Quartz gives the focused app."""
+    home = Path.home()
+    log_file = str(home / "Library/Logs/robo.log")
+    data = plistlib.dumps({
+        "Label": LAUNCH_AGENT,
+        "ProgramArguments": [shutil.which("uv") or "uv", "run", "--project", str(PROJECT), "robo"],
+        "RunAtLoad": True, "ProcessType": "Interactive",
+        "StandardOutPath": log_file, "StandardErrorPath": log_file,
+    })
+    path = home / "Library/LaunchAgents" / f"{LAUNCH_AGENT}.plist"
+    if path.exists() and path.read_bytes() == data:
+        return []
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    except OSError as e:
+        raise SetupError(f"Could not write {path}: {e}") from e
+    return ["robo now starts when you log in (`uv run robo` starts it now)"]
 
 
 def _run(cmd: list[str]) -> None:
@@ -212,7 +248,8 @@ def setup(
     if moodle and set_env(robo_env, {"MOODLE_BASE_URL": moodle}):
         done.append(f"set your Moodle address to {moodle}")
     fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set",
-            "ROBO_PROJECT": str(PROJECT)}
+            "ROBO_PROJECT": str(PROJECT),
+            "DESKTOP_APPS": DESKTOP_APPS["darwin" if sys.platform == "darwin" else "linux"]}
     if _copy_tree(templates, profile_dir(), fill):
         done.append("installed the persona, skills and guard")
     cfg = profile_dir() / "config.yaml"
