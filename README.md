@@ -1,6 +1,6 @@
 # Robo
 
-A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small animated robot face that floats on top of your screen and drifts along its edges. You talk to it by voice, and it uses your whole laptop to help. It asks you only before steps that can't be undone. Its brain is [Hermes Agent](https://hermes-agent.nousresearch.com) (Nous Research).
+A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small animated robot face that floats on top of your screen and drifts along its edges. You talk to it by voice, and it uses your whole laptop to help. It asks you only before steps that can't be undone. Its brain is [Hermes Agent](https://hermes-agent.nousresearch.com) (Nous Research). It runs on Linux (GNOME) and macOS.
 
 - **Talk to it.** Robo is always listening, and it acts on any sentence that uses its name: "Robo, what time is it?", "What's due this week, robo?" or "Hey robo, …". Other speech, such as the TV or other people, is ignored.
   - About a second into "Robo, …" the face perks up and shows "listening…" while you are still talking.
@@ -30,7 +30,9 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
 
 ## Setup
 
-Robo needs a Linux laptop with GNOME (Wayland or X11), a microphone, [uv](https://docs.astral.sh/uv/), Brave and Hermes Agent.
+Robo needs a microphone, [uv](https://docs.astral.sh/uv/), Brave and Hermes Agent.
+
+### Linux (GNOME)
 
 **On a new laptop, once:**
 
@@ -59,6 +61,34 @@ Each laptop keeps its own sign-ins, memory, study ledger and activity history. N
 
 The first run downloads Parakeet TDT v2 (about 650 MB, Hugging Face cache); robo then uses about 1.2 GB of RAM. Without `libxcb-cursor0`, or without X11, robo opens as an ordinary window.
 
+### macOS
+
+Robo runs natively on a Mac (Apple silicon or Intel, macOS 13+), with nothing to log out for.
+
+```bash
+# Homebrew (brew.sh), then:
+brew install uv gh
+# Brave: https://brave.com/download/  (robo uses its own private Brave profile)
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash   # Hermes Agent
+hermes setup model                 # sign in to Anthropic (robo uses claude-sonnet-5.5)
+hermes gateway install             # Hermes' background service (launchd); robo talks to it
+hermes computer-use install        # the driver robo uses to work in desktop apps
+hermes computer-use permissions    # grant it Accessibility and Screen Recording
+gh auth login && gh repo clone tbaolong45/robo && cd robo   # the repo is private
+uv sync --extra dev
+uv run robo setup --moodle https://lms.your-school.edu/my/
+uv run robo signin                 # sign in to Outlook, Teams and Moodle, then press Enter
+uv run robo                        # it also starts by itself at every login from now on
+```
+
+macOS asks for these permissions, in **System Settings → Privacy & Security**:
+- **Microphone:** asked the first time robo listens. Allow it, or robo can't hear you.
+- **Screen Recording** (optional), for your terminal app: only so the activity log has window titles. Without it, robo records app names only.
+
+### Windows
+
+Not yet: coming next.
+
 `robo setup` does the following:
 1. Turns on the Hermes API server in your default profile (Hermes' default bind is `127.0.0.1:8642`), with a key. Only `API_SERVER_ENABLED` and `API_SERVER_KEY` are added to `~/.hermes/.env`.
 2. Creates a separate `robo` Hermes profile with its **own** key, served by the host gateway at `/p/robo/`.
@@ -68,7 +98,7 @@ The first run downloads Parakeet TDT v2 (about 650 MB, Hugging Face cache); robo
    - approvals off (all permissions), with a `*hermes*` deny rule
    - robo's own Brave (`browser.cdp_url`)
    - background review on (self-evolving memory), curator off, so robo's installed skills stay as they are
-5. Installs robo's GNOME focus extension and starts robo at login (`~/.config/autostart/robo.desktop`).
+5. Starts robo at login: on Linux it installs robo's GNOME focus extension and `~/.config/autostart/robo.desktop`; on macOS it writes `~/Library/LaunchAgents/ai.robo.plist`.
 6. Restarts the gateway, but only if something changed.
 
 Robo's browser is a separate Brave profile in `~/.hermes/profiles/robo/brave` (mode 0700). It runs headless on `127.0.0.1:9333`, next to your everyday Brave, whose login databases are locked while it is open.
@@ -84,9 +114,9 @@ Robo's browser is a separate Brave profile in `~/.hermes/profiles/robo/brave` (m
 | `src/robo/roam.py` | Pure wander logic: rest, drift along the edges, present, held, sleep |
 | `src/robo/listen.py` | Always-on listening: endpointing → Parakeet; name check, follow-up window, "over" |
 | `src/robo/app.py` | The floating window: face, speech bubble, approvals, drag, in-bubble menu |
-| `src/robo/activity.py` | Local activity watcher (focus via `gnome/robo-focus@robo`, idle, Brave domains, files) and `robo activity` |
+| `src/robo/activity.py` | Local activity watcher (focus via `gnome/robo-focus@robo` on Linux, Quartz on macOS; idle, Brave domains, files) and `robo activity` |
 | `src/robo/plan.py` | `robo plan`: free slots + deterministic study-block packing (JSON in/out) |
-| `src/robo/wake.py` | logind `PrepareForSleep` watcher + once-a-day digest clock (`data/robo_state.json`) |
+| `src/robo/wake.py` | Resume watcher (logind `PrepareForSleep` on Linux, a wall-vs-monotonic clock gap on macOS) + once-a-day digest clock (`data/robo_state.json`) |
 | `src/robo/browser.py` | Robo's own headless Brave and `robo signin` |
 | `src/robo/setup.py` | `robo setup` |
 | `hermes/` | Persona, school skills and the robo-guard plugin installed into the robo profile |
@@ -102,8 +132,9 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/face_snapshots.py /tmp/faces   #
 
 ## Limits (known)
 
-- **Wayland.** GNOME Wayland lets no app place itself or stay on top, so robo runs through XWayland. Robo can't chase or move your mouse pointer.
-- **computer_use sees only X11 windows.** The native Wayland backend has no adapter on GNOME (`hermes computer-use doctor`). Robo opens GUI apps for itself in X11 mode (`GDK_BACKEND=x11 …`). Desktop steps run without asking. Typing and clicks in desktop apps can't be classified, so a send inside a desktop chat app would not ask first. Robo's browser is where those checks apply.
+- **macOS.** Robo shows a Python icon in the Dock. It stays on the desktop Space where it started and doesn't follow you into full-screen apps. Window titles in the activity log need Screen Recording.
+- **Wayland (Linux).** GNOME Wayland lets no app place itself or stay on top, so robo runs through XWayland. Robo can't chase or move your mouse pointer.
+- **computer_use sees only X11 windows (Linux).** The native Wayland backend has no adapter on GNOME (`hermes computer-use doctor`). Robo opens GUI apps for itself in X11 mode (`GDK_BACKEND=x11 …`). Desktop steps run without asking. Typing and clicks in desktop apps can't be classified, so a send inside a desktop chat app would not ask first. Robo's browser is where those checks apply.
 - **Listening.**
   - Robo transcribes every sentence it hears, using about 10–20 % of one CPU core while people talk.
   - Speech on TV or in a video that says "robo, …", or anything said in the 10 s after an answer, counts as a request, with all of robo's permissions.
