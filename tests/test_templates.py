@@ -66,4 +66,6 @@ def test_guard_plugin_is_enabled_in_setup_config():
     from robo.setup import CONFIG
 
     assert CONFIG["plugins.enabled"] == '["robo-guard"]'
-    assert "terminal" not in CONFIG["platform_toolsets.api_server"]
+    assert CONFIG["platform_toolsets.api_server"] == '["browser", "search", "skills"]'
+    assert CONFIG["memory.memory_enabled"] == "false"
+    assert CONFIG["auxiliary.background_review.enabled"] == "false"

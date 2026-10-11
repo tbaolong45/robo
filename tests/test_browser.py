@@ -55,3 +55,12 @@ def test_pids_finds_only_our_data_dir(tmp_path):
         (tmp_path / "proc" / pid).mkdir(parents=True)
         (tmp_path / "proc" / pid / "cmdline").write_text(cmd)
     assert browser.pids(d, proc=tmp_path / "proc") == [1]
+
+
+def test_pids_matches_chromium_rewritten_cmdline(tmp_path):
+    d = tmp_path / "b"
+    (tmp_path / "proc" / "7").mkdir(parents=True)  # Chromium joins argv with spaces in place
+    (tmp_path / "proc" / "7" / "cmdline").write_text(f"brave --user-data-dir={d} --x=1\0\0\0")
+    (tmp_path / "proc" / "8").mkdir(parents=True)
+    (tmp_path / "proc" / "8" / "cmdline").write_text(f"brave --user-data-dir={d}-other --x\0")
+    assert browser.pids(d, proc=tmp_path / "proc") == [7]

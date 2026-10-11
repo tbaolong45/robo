@@ -77,9 +77,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- {line}")
             return 0
         if args.command == "signin":
-            browser.signin(setup.brave_dir())
-            print("Sign in to Outlook, Teams and Moodle in the Brave window that opened, then "
-                  "close it. Robo uses those logins from now on.")
+            lms = setup.read_env(setup.profile_dir() / ".env").get("MOODLE_BASE_URL")
+            browser.signin(setup.brave_dir(), (lms,) if lms else ())
+            print("Sign in to Outlook, Teams" + (" and your LMS" if lms else "") + " in the Brave "
+                  "window that opened, then close it. Robo uses those logins from now on.")
             return 0
         return chat() if args.command == "chat" else window()
     except (setup.SetupError, browser.BrowserError) as e:

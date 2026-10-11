@@ -191,8 +191,15 @@ CONFIG: dict[str, str] = {
     "model.provider": "anthropic",
     "model.default": "claude-sonnet-5.5",
     # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server": no terminal,
-    # no file writes, no code execution.
-    "platform_toolsets.api_server": '["browser", "web", "memory", "skills"]',
+    # no file writes, no code execution, no page fetching outside the guarded browser ("search",
+    # not "web": web_extract could post school content to any URL).
+    "platform_toolsets.api_server": '["browser", "search", "skills"]',
+    # Nothing a page says (e.g. a malicious email) may persist into later sessions: no memory,
+    # no self-written or self-edited skills, no curator archiving robo's skills.
+    "memory.memory_enabled": "false",
+    "memory.user_profile_enabled": "false",
+    "auxiliary.background_review.enabled": "false",
+    "curator.enabled": "false",
     # "off" keeps the built-in browser_* tools that robo-guard can judge; unset would pick the
     # Browser Use `browser_exec` tool, which is hidden without the terminal toolset.
     "browser.backend": "off",

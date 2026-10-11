@@ -32,4 +32,4 @@ decline, RSVP, mark as read or unread, upload, start a quiz attempt, or change s
 list views, because opening a message or chat marks it read. If a page needs sign-in, ask the
 user to run `robo signin`; never try to sign in yourself. A guard blocks typing, sign-in tools
 and other websites in robo's browser; if it blocks something, tell the user what you would have
-done and do not look for another way. Use web_search / web_extract for the public web.
+done and do not look for another way. Use web_search for the public web.

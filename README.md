@@ -11,10 +11,10 @@ A desktop study buddy with an animated robot face. Its brain is
 Hermes reads those sites in **robo's own Brave**. It is a separate profile in `~/.hermes/profiles/robo/brave` (mode 0700), signed in to your school accounts only. It runs headless on `127.0.0.1:9333` next to your everyday Brave. (Your everyday Brave profile can't be used: Brave locks its login databases while it is open.)
 
 Hermes only **reads** these sites. The persona and the skills forbid sending, replying, submitting, deleting and marking anything. The `robo-guard` plugin enforces it as an allowlist:
-- Robo's browser opens only Outlook, Teams, Microsoft sign-in and *your* Moodle. Sign-out, compose and prefilled-message links are refused.
-- It can click only elements from the latest page snapshot whose label has no write word.
-- It can't type, press Enter, accept dialogs, use the credential vault or edit skills.
-- Once a conversation has read school pages, it can't fetch other URLs, so injected instructions can't post your mail anywhere.
+- Robo's browser opens only Outlook, Teams, Microsoft sign-in and *your* Moodle. URLs with side effects are refused: sign-out, compose, `action=`, OAuth redirects.
+- It can click only links, tabs, list rows and navigation buttons (next week, Chat, show more…) from the latest page snapshot, and only when the label has no write word.
+- It can't type, press Enter, accept dialogs or use the credential vault.
+- Robo has no `web_extract` (only `web_search`), no memory and no self-editing skills, so a malicious email can't post your data to another site or leave instructions for later.
 
 ## Setup
 
@@ -29,7 +29,7 @@ uv run robo chat      # text-only debug REPL (prints [emotion] before each reply
 `robo setup` does the following:
 1. Turns on the Hermes API server in your default profile (Hermes' default bind is `127.0.0.1:8642`), with a key. Only `API_SERVER_ENABLED` and `API_SERVER_KEY` are added to `~/.hermes/.env`.
 2. Creates a separate `robo` Hermes profile with its **own** key, served by the host gateway at `/p/robo/`.
-3. Saves your Moodle address in the robo profile, then installs `hermes/SOUL.md`, `hermes/skills/school/*` and `hermes/plugins/robo-guard`. It also sets robo's model and its toolsets (browser, web, memory, skills; no terminal or file writes), and points robo's browser at robo's Brave (`browser.cdp_url`).
+3. Saves your Moodle address in the robo profile, then installs `hermes/SOUL.md`, `hermes/skills/school/*` and `hermes/plugins/robo-guard`. It also sets robo's model and its toolsets (browser, web search, skills; no terminal, file writes, memory or page fetching), and points robo's browser at robo's Brave (`browser.cdp_url`).
 4. Restarts the gateway, but only if something changed.
 
 It never changes your default profile beyond step 1.
@@ -65,4 +65,5 @@ QT_QPA_PLATFORM=offscreen uv run python scripts/face_snapshots.py /tmp/faces   #
 - **Any local program can drive robo's Brave** through its debug port while it runs. The port listens on 127.0.0.1 only.
 - **Opening a mail or a Teams chat marks it read.** The skills read the list views. Teams opens your most recent chat by itself when its Chat tab is shown, so that one chat may be marked read.
 - **Long or virtual lists.** Robo reports what the page shows (the first part of a long inbox), plus Moodle's upcoming and timeline pages only.
-- **Public pages:** `web_search` works with Hermes' Brave Search backend. That backend can't fetch whole pages, so `web_extract` needs another Hermes web backend (e.g. Firecrawl, via `hermes -p robo tools`).
+- **Public web:** search results only (no full-page fetching), by design.
+- **Search queries still leave the machine.** A query goes to the search provider, so in principle a manipulated model could put school text into a query.

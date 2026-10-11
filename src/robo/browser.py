@@ -66,7 +66,8 @@ def pids(data_dir: Path, proc: Path = Path("/proc")) -> list[int]:
     for d in proc.iterdir():
         if d.name.isdigit():
             try:
-                if flag in (d / "cmdline").read_bytes().split(b"\0"):
+                # Chromium rewrites its argv in place, joined by spaces, so split on both.
+                if flag in (d / "cmdline").read_bytes().replace(b"\0", b" ").split():
                     out.append(int(d.name))
             except OSError:
                 pass
@@ -83,9 +84,9 @@ def stop(data_dir: Path) -> None:
         time.sleep(0.25)
 
 
-def signin(data_dir: Path) -> None:
+def signin(data_dir: Path, extra: tuple[str, ...] = ()) -> None:
     """Show robo's Brave so the user can sign in; robo goes back to headless afterwards."""
     stop(data_dir)
     ensure(data_dir, headless=False, url=SIGNIN_URLS[0])
-    for extra in SIGNIN_URLS[1:]:
-        _spawn([BINARY, f"--user-data-dir={data_dir}", extra])  # opens a tab in that instance
+    for url in (*SIGNIN_URLS[1:], *extra):
+        _spawn([BINARY, f"--user-data-dir={data_dir}", url])  # opens a tab in that instance
