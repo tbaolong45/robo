@@ -78,22 +78,42 @@ class Login1:
 GAP_S = 60  # wall time this far ahead of awake time: the machine slept
 
 
+def _idle() -> float:
+    from robo.activity import mac_idle  # Quartz; raises where there is none
+
+    return mac_idle()
+
+
 class ClockGap:
     """A SleepSource for any OS: monotonic time stops while the machine sleeps, wall time
-    does not, so a jump between them after a short wait is a resume."""
+    does not, so a jump between them after a short wait is a sleep. It counts as a resume once
+    the user touches the keyboard or mouse after it: Power Nap wakes a shut Mac with nobody
+    there, and that must not take the morning digest."""
 
     def __init__(self, wall: Callable[[], float] = time.time,
                  awake: Callable[[], float] = time.monotonic,
-                 wait: Callable[[float], None] = time.sleep):
-        self.wall, self.awake, self.wait = wall, awake, wait
+                 wait: Callable[[float], None] = time.sleep,
+                 idle: Callable[[], float] = _idle):
+        self.wall, self.awake, self.wait, self.idle = wall, awake, wait, idle
         self._last = (wall(), awake())
+        self._woke: float | None = None  # awake time when the last sleep was seen
 
     def recv(self, timeout: float) -> bool | None:
         self.wait(timeout)
         now = (self.wall(), self.awake())
-        slept = (now[0] - self._last[0]) - (now[1] - self._last[1])
+        if (now[0] - self._last[0]) - (now[1] - self._last[1]) > GAP_S:
+            self._woke = now[1]
         self._last = now
-        return False if slept > GAP_S else None
+        if self._woke is None:
+            return None
+        try:  # input no older than the sleep we saw (idle time may or may not count the sleep)
+            back = self.idle() <= now[1] - self._woke
+        except Exception:
+            back = True  # no way to tell: resume as soon as the gap is seen
+        if back:
+            self._woke = None
+            return False
+        return None
 
     def close(self) -> None:
         pass

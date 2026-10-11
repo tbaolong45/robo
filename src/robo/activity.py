@@ -272,9 +272,9 @@ def mac_focus() -> tuple[str, str]:
         return "", ""
 
 
-def mac_idle() -> int:
+def mac_idle() -> float:
     q = _quartz()
-    return int(q.CGEventSourceSecondsSinceLastEventType(
+    return float(q.CGEventSourceSecondsSinceLastEventType(
         q.kCGEventSourceStateCombinedSessionState, q.kCGAnyInputEventType))
 
 

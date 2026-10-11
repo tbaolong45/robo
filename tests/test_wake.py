@@ -162,9 +162,10 @@ def test_bus_error_reconnects():
     assert broken.closed.is_set() and good.closed.is_set()
 
 
-def clocks():
+def clocks(idle=lambda: 0.0):
     t = {"wall": 1000.0, "awake": 50.0}
-    gap = ClockGap(wall=lambda: t["wall"], awake=lambda: t["awake"], wait=lambda s: None)
+    gap = ClockGap(wall=lambda: t["wall"], awake=lambda: t["awake"], wait=lambda s: None,
+                   idle=idle)
     return t, gap
 
 
@@ -208,3 +209,36 @@ def test_watcher_on_clock_gap_calls_on_resume():
     step(t, 900)
     assert woke.wait(2)
     w.stop()
+
+
+def test_clock_gap_waits_for_the_user_after_a_dark_wake():
+    """Power Nap wakes a shut Mac with nobody there: only input after the gap is a resume."""
+    since_input = {"s": 0.0}
+    t, gap = clocks(idle=lambda: since_input["s"])
+    step(t, 3 * 3600)  # lid shut overnight; a maintenance wake runs robo at 3 am
+    for _ in range(4):
+        since_input["s"] += 0.5  # nobody touches the keyboard
+        assert gap.recv(0.5) is None
+        step(t, 0.5)
+    since_input["s"] = 0.2  # the user is back and moves the mouse
+    assert gap.recv(0.5) is False
+    step(t, 0.5)
+    assert gap.recv(0.5) is None  # once per sleep
+
+
+def test_clock_gap_ignores_input_from_just_before_the_sleep():
+    """Idle time may not count the sleep: a key pressed 0.3 s before the lid shut stays old."""
+    t, gap = clocks(idle=lambda: 0.3 + (t["awake"] - 50.5))
+    step(t, 1800)
+    for _ in range(4):
+        assert gap.recv(0.5) is None
+        step(t, 0.5)
+
+
+def test_clock_gap_resumes_when_idle_cannot_be_read():
+    def no_idle():
+        raise OSError("no Quartz")
+
+    t, gap = clocks(idle=no_idle)
+    step(t, 1800)
+    assert gap.recv(0.5) is False
