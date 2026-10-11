@@ -29,13 +29,12 @@ All Mac paths that home-relative code uses stay the same as on Linux: `~/.hermes
 | `app.RoboWindow` | Floating mode also sets `WA_MacAlwaysShowToolWindow`. Without it, macOS hides Tool windows whenever robo is not the active app. |
 | `app.open_file` | `open <path>` on macOS, `xdg-open` elsewhere. |
 | `browser.BINARY` | On macOS: `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`, unless `brave` is on PATH. |
-| `browser.pids` | When `/proc` is missing (macOS), parse `ps -axww -o pid=,args=`, using the same exact `--user-data-dir=` token match. |
-| `activity` focus | `front_window(windows)`, a pure function: the first on-screen window at layer 0 in Quartz's front-to-back list. It gives `(kCGWindowOwnerName, kCGWindowName or "")`. Robo's own window is at a higher level (`WindowStaysOnTopHint`), so it is skipped. The title is filled only after the user grants Screen Recording. The Quartz call is a thin, lazily imported wrapper. |
+| `browser.pids` | When `/proc` is missing (macOS), parse `ps -A -ww -o pid=,args=` (valid on both macOS and procps). Match `--user-data-dir=<dir>` as a whole space-bounded token, so a home folder with a space still matches and `brave2` does not. |
+| `activity` focus | `front_window(windows)`, a pure function: the first window at layer 0 with alpha > 0 in Quartz's on-screen, front-to-back list. It gives `(kCGWindowOwnerName, kCGWindowName or "")`. Robo's own window is at a higher level (`WindowStaysOnTopHint`), so it is skipped. The title is filled only after the user grants Screen Recording. The Quartz call is a thin, lazily imported wrapper. |
 | `activity` idle | `CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType)`. |
 | `activity` lock | `CGSessionCopyCurrentDictionary().get("CGSSessionScreenIsLocked")`. |
 | `activity` sites | History is read from `~/Library/Application Support/BraveSoftware/Brave-Browser/Default/History`. The private copy, host-only SQL and immediate delete stay as on Linux. |
 | `activity` files | `mdfind -onlyin ~ 'kMDItemLastUsedDate > $time.iso(since) && kMDItemLastUsedDate <= $time.iso(now)'`, with a parser for its output. It returns `[]` on any error (for example, Spotlight off). |
-| `activity` status | On macOS, `extension_status()` returns "on" when `CGPreflightScreenCaptureAccess()` is true. Otherwise it returns "titles need Screen Recording". |
 | `wake` | `ClockGap`, a new `SleepSource`. `recv(timeout)` waits `timeout`. If `time.time()` advanced more than `time.monotonic()` by over `GAP_S = 60`, it returns `False` (resumed); otherwise it returns `None`. `time.monotonic()` stops during suspend on macOS and Linux, and wall time does not. `WakeWatcher`'s default source is `Login1` on Linux and `ClockGap` elsewhere. |
 | `setup.desktop()` | On macOS it writes `~/Library/LaunchAgents/ai.robo.plist` with Label `ai.robo`, ProgramArguments `[<abs uv>, run, --project, <PROJECT>, robo]`, `RunAtLoad`, `ProcessType Interactive` and a log at `~/Library/Logs/robo.log`. It installs no GNOME extension. It doesn't `launchctl bootstrap`: robo starts at the next login, and the user runs `uv run robo` now. Starting it from setup would open a second robo next to one the user already runs. |
 | `hermes/SOUL.md` | The X11 bullet becomes `{{DESKTOP_APPS}}`, which `setup()` fills per OS. On Linux it is today's X11 text. On macOS: "Open GUI apps with `open -a "<App>"`; prefer the terminal or files when they do the job without the GUI." |
@@ -45,13 +44,11 @@ The Hermes config is unchanged. `computer_use.native_wayland` is read only on Li
 
 ## Errors
 
-Every macOS reader fails soft, like the Linux readers:
+The macOS readers fail the same way as their Linux twins. Focus, sites and files fail soft. Idle and lock raise, so that minute is not recorded and a warning is logged:
 
 | Reader | When it fails it returns |
 |---|---|
 | focus | `("", "")` |
-| idle | `0` |
-| lock | `False` |
 | sites, files | `[]` |
 
 A failed `ps` returns `[]`. `browser.ensure` still detects a running Brave by its CDP port. `ClockGap` can't fail. If the LaunchAgent can't be written, a `SetupError` names the path.
