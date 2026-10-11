@@ -42,9 +42,13 @@ For "draft/write an email to X about Y":
    then open the compose link again.
 3. `browser_snapshot()` until the compose form shows (at most 3 times). Check To, Subject and
    body; fix any wrong or empty field with `browser_type`.
-4. Leave it as a DRAFT: Outlook autosaves (wait for "Draft saved"; click "Save draft" if
-   shown), then close the compose with `browser_press(key="Escape")`. Never click "Discard".
-5. Tell the user it is in Drafts, with the subject, and offer to send it.
+4. Leave it as a DRAFT. A form that was only prefilled is NOT saved by Outlook: click into the
+   body, type one space (`browser_type` appending " "), wait ~5 s for "Draft saved", then
+   close the compose with `browser_press(key="Escape")`. Never click "Discard".
+5. Verify before you claim it: `browser_navigate(url="https://outlook.office.com/mail/drafts")`
+   and find a row "[Draft] <recipient> <subject>". If it is not there, say so and try once
+   more. Then tell the user it is in their university Outlook Drafts (not Gmail), with the
+   subject, and offer to send it.
 
 NEVER click Send unless the user's request explicitly says "send" (then check the fields once
 more first). For a reply, open the message and use its Reply the same way: draft unless told

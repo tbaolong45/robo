@@ -28,6 +28,7 @@ DATA_DIR = Path.home() / ".local/share/robo"
 DEFAULT_DB = DATA_DIR / "activity.db"
 BRAVE_HISTORY = Path.home() / ".config/BraveSoftware/Brave-Browser/Default/History"
 RECENT_XBEL = Path.home() / ".local/share/recently-used.xbel"
+LEDGER = DATA_DIR / "study.md"  # goals, exams, results the user tells robo (study-ledger skill)
 IDLE_S = 120  # a minute this idle (or locked) is not active
 _WEBKIT_EPOCH = 11_644_473_600  # seconds from 1601-01-01 (Chromium's epoch) to 1970-01-01
 
@@ -51,6 +52,15 @@ class Sample:
     locked: bool
     domains: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
+
+
+def ensure_ledger(path: Path = LEDGER) -> None:
+    """Create the study ledger private (0600) before Hermes writes it; Hermes keeps the mode of a
+    file it edits, while a file it creates would be readable by others."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text("# Study ledger\n\n## Goals\n\n## Exams\n\n## Results\n\n## Notes\n")
+    os.chmod(path, 0o600)
 
 
 class ActivityStore:

@@ -8,13 +8,24 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
   - Clicking the face also makes it listen.
   - End a request with **"over"** to send it at once. This helps when the room never goes quiet, for example when the TV is on. Otherwise robo sends after 0.7 s of silence.
   - Everything runs locally (NVIDIA Parakeet TDT 0.6B v2, int8 via onnx-asr), and no audio leaves the laptop.
-- **Speech bubble.** It shows what you said, then "listening…", "thinking…" or "browsing…", then the streamed answer. It closes by itself 20 s after the reply, or press Esc.
+- **Speech bubble.** It shows what you said, in full (long requests scroll), then "listening…", Messenger-style typing dots while robo thinks (with "searching the web…" and the like beside them), then the streamed answer. It closes by itself 20 s after the reply, or press Esc.
 - **The face shows what Hermes is doing and how it feels.** States: listening, thinking, browsing, talking, idle, sleepy after 5 min, asleep after 15 min. Hermes starts each reply with a hidden `[[feel:x]]` tag, and the face changes expression before the first word appears.
 - **Floating pet.** Robo rests, then drifts to another spot near the bottom or a side of the screen. It stays put while you're talking to it and naps in the bottom-right corner. Drag it anywhere and it stays there for 10 min. Right-click: 📚 Digest · ⌨ Type · 📌 Stay/🚶 Wander · ✕ Quit.
 - **All permissions.** At your request, robo uses everything without asking (`approvals.mode: off`): apps (Hermes `computer_use`), the terminal, files, code execution, its own browser (any site, raw browser control), web search and memory. Its persona tells it to do exactly what you asked: send, post, submit, delete or pay only when your request says so.
   - It still can't change its own Hermes setup or its installed school skills (`robo-guard` + an `approvals.deny` rule).
   - Switch `approvals.mode` back to `manual` (in `src/robo/setup.py`, then `robo setup`) and robo asks Allow/Deny before irreversible steps again: deleting, sending, sudo, Send/Submit-style clicks.
 - **Self-evolving memory.** Robo saves what you tell it about yourself (goals, exams, results, preferences). After each conversation Hermes reviews it and keeps what it learned (memory and new skills of its own).
+- **Makes things.** Ask for a diagram, a web page, notes, a chart, slides or flashcards. Robo writes one self-contained file into `~/Robo/` and opens it when it's done.
+- **Goals, exams and results.** Tell robo ("I got 8/10 on the quiz", "my goal is an A in linear algebra"). It keeps them in a private study ledger (`~/.local/share/robo/study.md`, 0600) and in its memory. It answers "how am I doing in …" from the ledger, past conversations and your Moodle grades.
+- **Study plans and scheduling.** "Plan my day" builds timed blocks around your classes, deadlines and exams, using `robo plan` for packing: no overlaps, breaks, nothing after a deadline. Say "yes" and they go into a **Robo Plan** Outlook calendar. "Add a study block tomorrow 9–10" works the same way.
+- **Mail drafts.** "Draft an email to … about …" creates a draft in your university Outlook and checks it is in Drafts. Robo sends only when you say "send".
+- **Activity watching.** While the laptop is on, robo records each minute, locally only:
+  - the focused app and window (through its small GNOME extension, which loads after one log-out/in);
+  - idle and locked time;
+  - the websites you visit (domains only, from Brave);
+  - the files you open.
+
+  It's stored in `~/.local/share/robo/activity.db` (0600) and deleted after 30 days. Pause it with ⏸ Watch in the right-click menu. `robo activity` prints a summary that robo uses for plans and for "what did I work on today?". Robo starts at login.
 - **School digest.** Today's classes (Outlook calendar), important new mail, Teams chats and what's due on Moodle. It runs once a day, when robo starts or on the first wake from sleep, or from 📚.
 
 ## Setup
@@ -55,6 +66,8 @@ Robo's browser is a separate Brave profile in `~/.hermes/profiles/robo/brave` (m
 | `src/robo/roam.py` | Pure wander logic: rest, drift along the edges, present, held, sleep |
 | `src/robo/listen.py` | Always-on listening: endpointing → Whisper; name check, follow-up window, "over" |
 | `src/robo/app.py` | The floating window: face, speech bubble, approvals, drag, in-bubble menu |
+| `src/robo/activity.py` | Local activity watcher (focus via `gnome/robo-focus@robo`, idle, Brave domains, files) and `robo activity` |
+| `src/robo/plan.py` | `robo plan`: free slots + deterministic study-block packing (JSON in/out) |
 | `src/robo/wake.py` | logind `PrepareForSleep` watcher + once-a-day digest clock (`data/robo_state.json`) |
 | `src/robo/browser.py` | Robo's own headless Brave and `robo signin` |
 | `src/robo/setup.py` | `robo setup` |

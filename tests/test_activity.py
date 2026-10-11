@@ -253,3 +253,17 @@ def test_summary_is_compact_and_handles_empty(tmp_path):
         store.add(s(at(8, 0) + 60 * i, f"app{i % 40}", "T" * 300 + str(i),
                     domains=[f"site{i}.example.com"], files=[f"/home/u/{'d' * 80}/{i}.txt"]))
     assert len(summary(store, date(2026, 10, 11))) <= 2500
+
+
+def test_the_study_ledger_is_created_private_and_tightened(tmp_path):
+    from robo.activity import ensure_ledger
+
+    path = tmp_path / "robo" / "study.md"
+    ensure_ledger(path)
+    assert path.read_text().startswith("# Study ledger\n\n## Goals")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    path.write_text("# Study ledger\n\n## Goals\n- mine\n")
+    path.chmod(0o664)
+    ensure_ledger(path)
+    assert "- mine" in path.read_text()  # never overwritten
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

@@ -63,11 +63,12 @@ def window() -> int:
         os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"  # Qt aborts on plain "xcb" if it cannot load
     from PySide6.QtWidgets import QApplication
 
-    from robo.activity import ActivityStore, Watcher
+    from robo.activity import ActivityStore, Watcher, ensure_ledger
     from robo.app import RoboWindow
     from robo.listen import Listener
     from robo.wake import DigestClock
 
+    ensure_ledger()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # a Tool window and dialogs come and go; Quit quits
     floating = app.platformName() == "xcb"
