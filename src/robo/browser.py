@@ -62,7 +62,11 @@ def ensure(data_dir: Path, *, headless: bool = True, url: str | None = None,
             "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check"]
     if headless:
         argv.append("--headless=new")
-    spawn(argv + ([url] if url else []))
+    try:
+        spawn(argv + ([url] if url else []))
+    except OSError as e:  # not installed, or installed somewhere else
+        raise BrowserError(f"Could not start Brave ({BINARY}): {e}. Install it from "
+                           "https://brave.com, or put `brave` on your PATH.") from e
     for _ in range(int(wait / 0.5)):
         if up():
             return True

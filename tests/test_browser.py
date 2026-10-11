@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from robo import browser
 
 
@@ -110,3 +112,11 @@ def test_pids_find_a_real_process_through_ps_and_proc(tmp_path):
     finally:
         p.kill()
         p.wait()
+
+
+def test_a_missing_brave_is_a_browser_error_not_a_crash(tmp_path):
+    def spawn(argv):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    with pytest.raises(browser.BrowserError, match="Brave"):
+        browser.ensure(tmp_path / "b", up=lambda: False, spawn=spawn)
