@@ -640,3 +640,17 @@ def test_a_failed_request_opens_nothing(tmp_path, monkeypatch):
     win.ask("x")
     assert pump(win, lambda: not win.busy)
     assert opened == []
+
+
+def test_floating_face_stays_shown_while_another_app_is_active(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    assert win.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+
+
+def test_open_file_uses_the_os_opener(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(robo_app.subprocess, "Popen", lambda argv, **kw: calls.append(argv))
+    for platform in ("linux", "darwin"):
+        monkeypatch.setattr(robo_app.sys, "platform", platform)
+        robo_app.open_file(tmp_path / "a.html")
+    assert calls == [["xdg-open", str(tmp_path / "a.html")], ["open", str(tmp_path / "a.html")]]

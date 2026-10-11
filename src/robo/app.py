@@ -10,6 +10,7 @@ import contextlib
 import math
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -65,7 +66,8 @@ QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 
 def open_file(path: Path) -> None:
     """Open a file robo made in the user's default app for it."""
-    subprocess.Popen(["xdg-open", str(path)], stdin=subprocess.DEVNULL,
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.Popen([opener, str(path)], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
@@ -198,6 +200,8 @@ class RoboWindow(QWidget):
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                                 | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            # macOS hides Tool windows whenever robo is not the active app; a pet stays out.
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.panel = QFrame(objectName="panel")
         self.panel.setFixedWidth(BUBBLE_W)
         self.heard = QTextBrowser(objectName="heard")  # what you said, in full

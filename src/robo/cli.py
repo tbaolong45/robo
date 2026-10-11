@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import MutableMapping
 from datetime import date
 from pathlib import Path
 
@@ -56,11 +57,20 @@ def chat() -> int:
             print(f"[error] {e}")
 
 
+FLOATING = ("xcb", "cocoa")  # Qt platforms where a window may place itself and stay on top
+
+
+def _use_xwayland(env: MutableMapping[str, str], platform: str = sys.platform) -> None:
+    """On GNOME Wayland only XWayland lets a window place itself and stay on top. Linux only:
+    XQuartz sets DISPLAY on a Mac too, and Qt for macOS has no xcb plugin."""
+    if platform == "linux" and env.get("DISPLAY") and "QT_QPA_PLATFORM" not in env:
+        env["QT_QPA_PLATFORM"] = "xcb;wayland"  # Qt aborts on plain "xcb" if it cannot load
+
+
 def window() -> int:
     """The floating robo: on GNOME Wayland it runs through XWayland, the only way a window can
     place itself and stay on top; voice in through robo.listen."""
-    if os.environ.get("DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
-        os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"  # Qt aborts on plain "xcb" if it cannot load
+    _use_xwayland(os.environ)
     from PySide6.QtWidgets import QApplication
 
     from robo.activity import ActivityStore, Watcher, ensure_ledger
@@ -71,7 +81,7 @@ def window() -> int:
     ensure_ledger()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # a Tool window and dialogs come and go; Quit quits
-    floating = app.platformName() == "xcb"
+    floating = app.platformName() in FLOATING
     if not floating:
         print("robo: XWayland unavailable, so robo opens as a normal window "
               "(sudo apt install libxcb-cursor0 for the floating face).", file=sys.stderr)
