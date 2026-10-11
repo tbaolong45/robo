@@ -95,12 +95,14 @@ def test_typing_is_blocked_everywhere(guard):
         assert blocked(call(guard, "browser_type", {"ref": ref, "text": "hello"}))
 
 
-@pytest.mark.parametrize("key", ["Enter", "enter", "Space", "a", "Control+Enter"])
+@pytest.mark.parametrize("key", ["Enter", "enter", "Space", "a", "Control+Enter",
+                                 "Control+Shift+3", "Control+2"])
 def test_activating_keys_are_blocked(guard, key):
     assert blocked(call(guard, "browser_press", {"key": key}))
 
 
-@pytest.mark.parametrize("key", ["Escape", "PageDown", "PageUp", "ArrowDown", "Home", "End"])
+@pytest.mark.parametrize("key", ["Escape", "PageDown", "PageUp", "ArrowDown", "Home", "End",
+                                 "Control+Shift+2", "ctrl+shift+2"])
 def test_scroll_keys_are_allowed(guard, key):
     assert call(guard, "browser_press", {"key": key}) is None
 

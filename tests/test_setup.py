@@ -144,3 +144,14 @@ def test_persona_stamp_changes_with_soul_or_skills(tmp_path, monkeypatch):
     second = setup.persona_stamp()
     (robo / "skills" / "s" / "SKILL.md").write_text("b")
     assert len({first, second, setup.persona_stamp()}) == 3
+
+
+@pytest.mark.parametrize(("pasted", "base"), [
+    ("https://lms.mbzuai.ac.ae/my/", "https://lms.mbzuai.ac.ae"),
+    ("https://lms.uni.example/my/index.php", "https://lms.uni.example"),
+    ("https://uni.example/moodle/my/", "https://uni.example/moodle"),
+    ("https://uni.example/moodle/", "https://uni.example/moodle"),
+    ("https://lms.uni.example/login/index.php", "https://lms.uni.example"),
+])
+def test_moodle_url_takes_the_base_of_a_pasted_page(pasted, base):
+    assert setup._moodle_url(pasted) == base

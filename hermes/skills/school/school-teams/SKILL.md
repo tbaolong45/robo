@@ -18,14 +18,17 @@ Course announcements live in CHATS, not in teams or channels.
 
 ## Procedure
 1. `browser_navigate(url="https://teams.microsoft.com/")`. Read the page snapshot it returns.
-2. Not signed in? If the page is `login.microsoftonline.com`, or shows "Sign in" or "Pick an
-   account", stop and reply: "I'm not signed in to Teams. Please run `robo signin` and sign
-   in, then ask me again." Never try to sign in.
-3. Teams takes 10-30 s to start. If the snapshot shows a splash screen, call
-   `browser_snapshot()` again (at most 3 times).
-4. If the chat list is not visible, click the "Chat" item in the left rail ONCE. Teams then
-   opens the most recent chat by itself, which marks that one chat read; this is known and
-   accepted. Never click any chat in the list.
+2. Signing in passes through `login.microsoftonline.com` for a few seconds by itself. Only if
+   a snapshot (take up to 3) still shows a "Sign in", "Pick an account" or password form, stop
+   and reply: "I'm not signed in to Teams. Please run `robo signin` and sign in, then ask me
+   again." Never try to sign in or pick an account.
+3. Teams takes 10-60 s to start. While the snapshot shows a spinner, "We're setting things up
+   for you" or no app bar, call `browser_snapshot()` again (at most 6 times). Clicks made
+   before that are lost.
+4. When it is ready, `browser_press(key="Control+Shift+2")` ONCE (Teams' shortcut for Chat;
+   clicking the app bar is unreliable), then `browser_snapshot()` until the chat list shows
+   (at most 3 times). Teams opens the most recent chat by itself, which marks that one chat
+   read; this is known and accepted. Never click any chat in the list.
 5. Read the chat LIST only. Each row gives chat name, last message preview, time and unread
    state. Report what is visible.
 

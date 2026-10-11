@@ -18,9 +18,13 @@ The user asks about new or important mail, or the digest needs it.
 ## Procedure
 1. `browser_navigate(url="https://outlook.office.com/mail/inbox")`. Read the page snapshot it
    returns.
-2. Not signed in? If the page is `login.microsoftonline.com`, or shows "Sign in" or "Pick an
-   account", stop and reply: "I'm not signed in to Outlook. Please run `robo signin` and sign
-   in, then ask me again." Never try to sign in.
+2. Signing in passes through `login.microsoftonline.com` for a few seconds by itself. Only if
+   a snapshot (take up to 3) shows "Pick an account" with the user's school address on it,
+   navigate ONCE to `https://outlook.office.com/mail/inbox?login_hint=<that address>`; this
+   picks the already signed-in account without typing anything. If a snapshot still shows a
+   "Sign in", "Pick an account" or password form, stop
+   and reply: "I'm not signed in to Outlook. Please run `robo signin` and sign in, then ask me
+   again." Never try to sign in or pick an account.
 3. Outlook can take up to a minute to load. If the snapshot shows no message list yet, call
    `browser_snapshot()` again (at most 3 times).
 4. Read the message LIST only. Each row gives sender, subject, preview, time and whether it is

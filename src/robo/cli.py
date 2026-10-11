@@ -80,7 +80,12 @@ def main(argv: list[str] | None = None) -> int:
             lms = setup.read_env(setup.profile_dir() / ".env").get("MOODLE_BASE_URL")
             browser.signin(setup.brave_dir(), (lms,) if lms else ())
             print("Sign in to Outlook, Teams" + (" and your LMS" if lms else "") + " in the Brave "
-                  "window that opened, then close it. Robo uses those logins from now on.")
+                  "window that opened. When Microsoft asks \"Stay signed in?\", choose Yes, or "
+                  "the sign-in is lost when robo's browser restarts.")
+            input("Press Enter here when you are signed in everywhere... ")
+            browser.stop(setup.brave_dir())  # robo works in the background from now on
+            browser.ensure(setup.brave_dir())
+            print("Done: robo's browser runs in the background with those logins.")
             return 0
         return chat() if args.command == "chat" else window()
     except (setup.SetupError, browser.BrowserError) as e:

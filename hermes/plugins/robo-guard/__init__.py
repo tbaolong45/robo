@@ -45,7 +45,9 @@ NAV_BUTTON = re.compile(
     r"|upcoming|show more|load more|view|expand|collapse|sort|filter)\b",
     re.IGNORECASE,
 )
-SCROLL_KEYS = {"escape", "pageup", "pagedown", "arrowup", "arrowdown", "home", "end"}
+# Scrolling, plus Teams' own "go to Chat" shortcut (a ref click on its app bar is unreliable).
+SAFE_KEYS = {"escape", "pageup", "pagedown", "arrowup", "arrowdown", "home", "end",
+             "control+shift+2", "ctrl+shift+2"}
 ALWAYS_BLOCKED = {
     "browser_cdp", "browser_exec", "browser_dialog", "browser_vault_fill",
     "browser_vault_save_login", "browser_vault_enter_code", "browser_vault_list",
@@ -104,7 +106,7 @@ def _reason(tool: str, args: dict, task_id: str) -> str | None:
         return "typing is disabled"
     if tool == "browser_press":
         key = str(args.get("key", "")).replace(" ", "").lower()
-        return None if key in SCROLL_KEYS else f"key {args.get('key')!r} is disabled"
+        return None if key in SAFE_KEYS else f"key {args.get('key')!r} is disabled"
     if tool == "browser_click":
         return _click(_labels.get(task_id, {}).get(str(args.get("ref", "")).strip().lstrip("@")))
     return None

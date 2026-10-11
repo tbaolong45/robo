@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -120,7 +121,8 @@ def _moodle_url(url: str) -> str:
     if parts.scheme != "https" or not parts.hostname:
         raise SetupError(f"The Moodle address must look like https://moodle.your-school.edu, "
                          f"not {url!r}.")
-    return f"https://{parts.netloc}{parts.path}".rstrip("/")
+    path = re.sub(r"/(?:my|login|course|calendar|mod)(?:/.*)?$", "", parts.path)  # a pasted page
+    return f"https://{parts.netloc}{path}".rstrip("/")
 
 
 def _run(cmd: list[str]) -> None:
