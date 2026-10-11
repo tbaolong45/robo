@@ -1,4 +1,4 @@
-"""Hands-free voice input: robo hears every sentence (faster-whisper, on this laptop) and takes
+"""Hands-free voice input: robo hears every sentence (Parakeet TDT v2, on this laptop) and takes
 the ones that call it by name ("robo, what time is it?", "what's due, robo?"), plus anything said
 in the few seconds after it answers, or after a click on its face. Nothing leaves the laptop."""
 
@@ -30,8 +30,7 @@ NO_SPEECH_S = 6.0
 MAX_UTTERANCE_S = 15.0
 MIN_SPEECH_FRAMES = 4  # ~0.3 s above the gate, or it was a knock, not a sentence
 READ_TIMEOUT = 0.5
-WHISPER_MODEL = "base.en"  # ~0.8 s per sentence on this CPU
-QUICK_MODEL = "tiny.en"  # ~0.4 s: only to notice "robo, ..." while the sentence is still going
+STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"  # int8 ONNX: ~0.4 s for 3 s of speech on this CPU
 EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's name
 OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
 OVER_WINDOW = 25  # ~2 s of the latest audio for that check
@@ -125,18 +124,17 @@ class SoundDeviceMic:
         self._stream.close()
 
 
-class Whisper:
-    """faster-whisper on CPU (int8); construct it where it should load (~1 s)."""
+class Parakeet:
+    """NVIDIA Parakeet TDT 0.6B v2 (English) via onnx-asr, int8 on CPU; loads in a few seconds
+    (downloaded once, ~650 MB, into the Hugging Face cache)."""
 
-    def __init__(self, model: str = WHISPER_MODEL):
-        from faster_whisper import WhisperModel
+    def __init__(self):
+        import onnx_asr
 
-        self._model = WhisperModel(model, device="cpu", compute_type="int8")
+        self._model = onnx_asr.load_model(STT_MODEL, quantization="int8")
 
     def __call__(self, audio: np.ndarray) -> str:
-        segments, _ = self._model.transcribe(audio, language="en", beam_size=1, vad_filter=True,
-                                             initial_prompt="Robo,")
-        return " ".join(s.text.strip() for s in segments).strip()
+        return str(self._model.recognize(audio, sample_rate=SAMPLE_RATE)).strip()
 
 
 class Listener:
@@ -151,8 +149,8 @@ class Listener:
 
     def __init__(self, on_wake: Callable[[], None], on_text: Callable[[str], None],
                  on_error: Callable[[str], None], mic: Callable[[], Mic] = SoundDeviceMic,
-                 transcriber: Callable[[], Callable[[np.ndarray], str]] = Whisper,
-                 quick: Callable[[], Callable[[np.ndarray], str]] = lambda: Whisper(QUICK_MODEL),
+                 transcriber: Callable[[], Callable[[np.ndarray], str]] = Parakeet,
+                 quick: Callable[[], Callable[[np.ndarray], str]] | None = None,
                  clock: Callable[[], float] = time.monotonic):
         self.on_wake, self.on_text, self.on_error = on_wake, on_text, on_error
         self._mic, self._transcriber, self._quick_factory = mic, transcriber, quick
@@ -165,14 +163,15 @@ class Listener:
         self._thread: threading.Thread | None = None
 
     def start(self) -> bool:
-        """Open the mic and load Whisper; False (and on_error) if either fails."""
+        """Open the mic and load speech recognition; False (and on_error) if either fails."""
         try:
             mic = self._mic()
         except Exception as e:
             self.on_error(f"I can't open the microphone: {e}")
             return False
         try:
-            self._stt, self._quick = self._transcriber(), self._quick_factory()
+            self._stt = self._transcriber()
+            self._quick = self._quick_factory() if self._quick_factory else self._stt
         except Exception as e:
             mic.close()
             self.on_error(f"I can't load speech recognition: {e}")
@@ -224,7 +223,7 @@ class Listener:
                 if loud >= MIN_SPEECH_FRAMES:
                     text = self._stt(np.concatenate(frames)) if self._stt else ""
                     self._heard(without_over(text) if over else text, woke)
-        except Exception as e:  # the mic or Whisper failed: say so, stop listening
+        except Exception as e:  # the mic or the recogniser failed: say so, stop listening
             log.exception("listener stopped")
             self.on_error(f"Voice input stopped: {e}")
         finally:

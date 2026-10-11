@@ -190,21 +190,19 @@ def setup(
 
 
 # robo's profile config, applied with `hermes -p robo config set` (which refuses unknown keys).
-# code_execution is left out: Hermes always refuses it on API runs (approvals.unattended_mode).
 TOOLSETS = ["browser", "web", "vision", "skills", "memory", "todo", "terminal", "file",
-            "computer_use"]
+            "computer_use", "code_execution"]
 CONFIG: dict[str, str] = {
     "model.provider": "anthropic",
     "model.default": "claude-sonnet-5.5",
     # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server". The user gave
     # robo the whole laptop: apps (computer_use), terminal, files, browser, web.
     "platform_toolsets.api_server": json.dumps(TOOLSETS),
-    # Risky actions wait for Allow/Deny in robo's bubble (Hermes approvals for terminal/file/
-    # computer actions; robo-guard's approve directive for browser writes). "manual" = always ask
-    # for a flagged action, never an auto-approving guardian model.
-    "approvals.mode": "manual",
-    # Hermes refuses these commands even when approvals are off: no request may touch robo's own
-    # Hermes setup (approvals, plugins, persona). robo-guard blocks file writes there too.
+    # The user granted robo all permissions: nothing asks (Hermes approves robo-guard's "ask"s
+    # too). "manual" turns the Allow/Deny prompts in the bubble back on.
+    "approvals.mode": "off",
+    # These still hold with approvals off: no request may touch robo's own Hermes setup
+    # (persona, plugins, config). robo-guard blocks file writes and skill edits there too.
     "approvals.deny": '["*hermes*"]',
     "approvals.timeout": "300",
     # GNOME Wayland: the native backend has no target-activation adapter here (`hermes
@@ -212,8 +210,9 @@ CONFIG: dict[str, str] = {
     "computer_use.native_wayland": "false",
     "memory.memory_enabled": "true",
     "memory.user_profile_enabled": "true",
-    # robo's own skills are installed by `robo setup`: nothing rewrites or archives them.
-    "auxiliary.background_review.enabled": "false",
+    # Self-evolving: after a conversation Hermes reviews it and saves what it learned (memory,
+    # new skills). The curator stays off so robo's installed skills are never archived.
+    "auxiliary.background_review.enabled": "true",
     "curator.enabled": "false",
     # "off" keeps the built-in browser_* tools that robo-guard can judge; unset would pick the
     # Browser Use `browser_exec` tool, which is hidden without the terminal toolset.

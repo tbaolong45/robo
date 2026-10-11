@@ -1,5 +1,9 @@
 """robo-guard: robo may do anything on the laptop; only irreversible steps ask the user first.
 
+The user granted all permissions (approvals.mode off), and then Hermes approves every "ask" below
+by itself; the asks only take effect again if approvals are switched back on. The blocks always
+hold: they keep robo from rewriting its own setup and school skills.
+
 Hermes contract (hermes_cli/plugins.py `_get_pre_tool_call_directive_details`,
 `_resolve_block_from_details`): a pre_tool_call hook returning {"action": "approve", "message",
 "rule_key"} asks the user and a deny, timeout or gate error blocks the call; {"action": "block",
@@ -11,12 +15,11 @@ ask for the commands it flags as dangerous.
   Join, Pay...); Enter, Space and send/call shortcuts, except Enter right after typing into a
   search box; page dialogs; the password vault; non-web URLs and URLs with side effects (sign-out,
   compose, action=, OAuth redirect_uri...); a patch that deletes a file.
-- block: raw CDP, browser_exec and JavaScript (console expressions, javascript: URLs), which
-  cannot be judged; skill_manage; anything touching robo's own Hermes setup (the hermes CLI,
-  ~/.hermes, also through symlinks, relative paths, a workdir or patch headers), so no request can
-  switch approvals or this guard off.
+- block: changing robo's installed school-* skills (new skills of its own are fine: it learns), and
+  anything touching robo's own Hermes setup (the hermes CLI, ~/.hermes, also through symlinks,
+  relative paths, a workdir or patch headers), so no request can switch this guard off.
 - allow: everything else: any website, typing, toggles, reversible clicks (Like, Pin, Archive),
-  file and memory writes, fetches and ordinary commands.
+  file and memory writes, fetches, ordinary commands, raw browser control (CDP, JavaScript).
 Refs are read only outside quoted text, a ref listed twice is not trusted, and refs are forgotten
 after any click, key, back or screenshot. The rule_key names the tool and the exact action:
 without it Hermes uses the bare tool name, so one "always" would approve every later click.
@@ -66,7 +69,7 @@ SEARCH = re.compile(r"\bsearch", re.IGNORECASE)
 MESSAGE = re.compile(r"\b(message|comment|compose|subject|body)", re.IGNORECASE)
 ACTIVATE = {"enter", "return", "numpadenter", "space"}  # with any modifiers
 SHORTCUTS = {"alt+s", "shift+delete", "control+shift+c", "control+shift+u"}  # send, purge, call
-BLOCKED = {"browser_cdp", "browser_exec", "skill_manage"}
+OWN_SKILLS = "school-"  # skills `robo setup` installs; skill_manage may not change them
 QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 REF = re.compile(r"\[[^\]]*\bref=(e\d+)[^\]]*\]")  # [ref=e5] or [level=2, ref=e5]
 FORGET_AFTER = {"browser_click", "browser_press", "browser_back", "browser_vision"}
@@ -133,9 +136,11 @@ def _write(args: dict, task: str) -> tuple[str, str] | None:
 def _check(tool: str, args: dict, task: str) -> tuple[str, str] | None:
     """("block", reason) or ("approve", what robo wants to do); None lets the call through."""
     url = unquote(re.sub(r"[\t\r\n]", "", str(args.get("url", ""))))
-    if (tool in BLOCKED or (tool == "browser_console" and args.get("expression") is not None)
-            or (tool == "browser_navigate" and urlsplit(url).scheme.lower() == "javascript")):
-        return "block", "robo may not run raw page code or change its own skills"
+    if tool == "skill_manage":
+        ops = args.get("operations") if isinstance(args.get("operations"), list) else [args]
+        if any(str((op or {}).get("name", "")).startswith(OWN_SKILLS) for op in ops):
+            return "block", "robo may not change its installed school skills"
+        return None
     if tool == "terminal" or tool.startswith("process"):
         return _command(args, task)
     if tool in ("write_file", "patch"):

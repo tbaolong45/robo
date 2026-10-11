@@ -339,3 +339,16 @@ def test_saying_over_ends_the_command_even_while_the_tv_keeps_talking():
 def test_over_is_dropped_only_when_it_ended_the_command(text, command):
     ended = text != "Robo, flip the page over"
     assert listen.without_name(listen.without_over(text) if ended else text) == command
+
+
+def test_one_model_serves_the_quick_checks_by_default():
+    loads = []
+
+    def model():
+        loads.append(1)
+        return FakeStt()
+
+    lis = Listener(lambda: None, lambda t: None, lambda m: None, mic=FakeMic, transcriber=model)
+    assert lis.start()
+    lis.stop()
+    assert len(loads) == 1 and lis._quick is lis._stt  # Parakeet is fast enough for both

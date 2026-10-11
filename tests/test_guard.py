@@ -254,16 +254,26 @@ def test_dialogs_and_the_password_vault_ask(guard, tool):
     assert kind(call(guard, tool, {"action": "accept"})) == "approve"
 
 
-@pytest.mark.parametrize("tool", ["browser_cdp", "browser_exec", "skill_manage"])
-def test_unjudgeable_tools_and_skill_editing_are_blocked(guard, tool):
-    ret = call(guard, tool, {})
+@pytest.mark.parametrize("tool, args", [
+    ("browser_cdp", {"method": "Page.reload"}), ("browser_exec", {"code": "x"}),
+    ("browser_console", {"expression": "document.title"}),
+    ("skill_manage", {"operations": [{"name": "study-planner", "action": "create",
+                                      "content": "x"}]}),
+])
+def test_raw_browser_control_and_new_skills_are_allowed(guard, tool, args):
+    assert kind(call(guard, tool, args)) == "allow"  # the user granted all permissions
+
+
+@pytest.mark.parametrize("ops", [
+    [{"name": "school-mail", "action": "patch", "old_string": "a", "new_string": "b"}],
+    [{"name": "notes", "action": "create", "content": "x"},
+     {"name": "school-digest", "action": "delete"}],
+    {"name": "school-teams", "action": "delete"},  # the legacy flat shape
+])
+def test_robos_own_school_skills_cannot_be_changed(guard, ops):
+    args = {"operations": ops} if isinstance(ops, list) else ops
+    ret = call(guard, "skill_manage", args)
     assert kind(ret) == "block" and "another way" in ret["message"]
-
-
-def test_console_javascript_blocked_but_reading_logs_allowed(guard):
-    assert kind(call(guard, "browser_console", {"expression": "document.title"})) == "block"
-    assert kind(call(guard, "browser_console", {"expression": ""})) == "block"
-    assert kind(call(guard, "browser_console", {"clear": False})) == "allow"
 
 
 # --- navigation -----------------------------------------------------------------------------
@@ -300,8 +310,8 @@ def test_side_effect_and_non_web_urls_ask_the_user(guard, url):
 
 @pytest.mark.parametrize("url", ["javascript:alert(1)", " JavaScript:alert(1)",
                                  "java\nscript:alert(1)"])
-def test_javascript_urls_are_blocked(guard, url):
-    assert kind(call(guard, "browser_navigate", {"url": url})) == "block"
+def test_javascript_urls_ask(guard, url):
+    assert kind(call(guard, "browser_navigate", {"url": url})) == "approve"
 
 
 def test_host_follows_the_final_url_and_back(guard):

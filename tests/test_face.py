@@ -144,3 +144,22 @@ def test_widget_renders_offscreen():
     assert img.width() == 320
     assert len({img.pixel(x, y) for x in range(0, 320, 8) for y in range(0, 240, 8)}) > 3
     assert app is not None
+
+
+def test_expression_changes_happen_behind_a_blink():
+    """No half-happy, half-sad eyes: lid and eye shapes change only while the eyes are shut."""
+    from robo.face.animator import SHAPE
+
+    a = Animator(seed=8)
+    happy, sad = target("talking", "happy"), target("idle", "sad")
+    run(a, happy, 1.0)
+    frames = run(a, sad, 1.0, t0=1.0)
+    for _, p in frames:
+        open_eyes = p.eye_h > 0.4 * sad.eye_h
+        for n in SHAPE:
+            v, before, after = getattr(p, n), getattr(happy, n), getattr(sad, n)
+            if open_eyes:  # visible: either the old shape or the new one, never a mix
+                assert min(abs(v - before), abs(v - after)) < 1e-6, n
+    t, p = frames[-1]
+    assert all(getattr(p, n) == pytest.approx(getattr(sad, n)) for n in SHAPE)
+    assert frames[0][0] - 1.0 < 0.05 and min(q.eye_h for _, q in frames[:20]) < 0.4 * sad.eye_h

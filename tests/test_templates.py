@@ -70,9 +70,10 @@ def test_guard_plugin_is_enabled_in_setup_config():
     assert "robo-guard" in json.loads(CONFIG["plugins.enabled"])
 
 
-def test_robo_gets_the_whole_laptop_with_manual_approvals():
+def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
     from robo.setup import CONFIG, TOOLSETS
 
     assert json.loads(CONFIG["platform_toolsets.api_server"]) == TOOLSETS
     assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
-    assert CONFIG["approvals.mode"] == "manual"
+    assert CONFIG["approvals.mode"] == "off"  # the user granted all permissions
+    assert json.loads(CONFIG["approvals.deny"]) == ["*hermes*"]
