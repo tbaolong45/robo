@@ -263,11 +263,16 @@ def _quartz():
     return Quartz
 
 
+def _mac_windows() -> list:
+    """On-screen windows, front to back (Quartz window dicts)."""
+    q = _quartz()
+    opts = q.kCGWindowListOptionOnScreenOnly | q.kCGWindowListExcludeDesktopElements
+    return list(q.CGWindowListCopyWindowInfo(opts, q.kCGNullWindowID) or [])
+
+
 def mac_focus() -> tuple[str, str]:
     try:
-        q = _quartz()
-        opts = q.kCGWindowListOptionOnScreenOnly | q.kCGWindowListExcludeDesktopElements
-        return front_window(list(q.CGWindowListCopyWindowInfo(opts, q.kCGNullWindowID) or []))
+        return front_window(_mac_windows())
     except Exception:
         return "", ""
 

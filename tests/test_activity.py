@@ -321,6 +321,20 @@ def test_real_mac_readers():
     assert "Library/Application Support/BraveSoftware" in str(act.BRAVE_HISTORY)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="real Quartz and Spotlight")
+def test_real_mac_readers_would_fail_loudly():
+    """mac_focus and mac_files fail soft at runtime; here the same calls must not fail at all."""
+    windows = act._mac_windows()  # a wrong Quartz name raises here instead of "(unknown)"
+    assert windows and all("kCGWindowLayer" in w and "kCGWindowOwnerName" in w for w in windows)
+    asked = []
+    act.mac_files(time.time() - 3600, time.time(), find=lambda q: asked.append(q) or "")
+    run = subprocess.run(["mdfind", "-onlyin", str(act.Path.home()), asked[0]],
+                         capture_output=True, text=True, timeout=60)
+    assert "Failed to create query" not in run.stderr, run.stderr
+    # ClockGap's premise: Python's monotonic clock stops while the Mac sleeps.
+    assert "mach_absolute_time" in time.get_clock_info("monotonic").implementation
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="GNOME readers")
 def test_linux_keeps_the_gnome_readers():
     assert (act.read_focus, act.read_idle, act.read_locked, act.read_files) == (

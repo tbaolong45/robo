@@ -968,7 +968,7 @@ The user does these on the Mac following the README, then reports each result:
    - **If it says to sign in again,** headless Brave can't read the Keychain cookie key. Add `"--use-mock-keychain"` to the `argv` in `browser.ensure()` (both headless and visible launches use it) with a test, push, then `git pull` and `robo signin` again.
 4. After 5 minutes, `uv run robo activity`: real app names, such as Finder, Brave Browser or Code.
 5. "Robo, draw a diagram of the water cycle": the file opens by itself.
-6. Log out and in: robo starts by itself.
+6. Log out and in: robo starts by itself. Say "Robo, what time is it?": it must hear you. If not, allow the microphone for the login robo (README, macOS permissions).
 7. Close the lid for 2 or more minutes on a day the digest hasn't run, then open it: the digest runs.
 
 For each failure, fix it test-first, push, then on the Mac run `git pull` and `uv sync`.

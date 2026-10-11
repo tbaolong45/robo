@@ -20,7 +20,7 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
 - **Study plans and scheduling.** "Plan my day" builds timed blocks around your classes, deadlines and exams, using `robo plan` for packing: no overlaps, breaks, nothing after a deadline. Say "yes" and they go into a **Robo Plan** Outlook calendar. "Add a study block tomorrow 9–10" works the same way.
 - **Mail drafts.** "Draft an email to … about …" creates a draft in your university Outlook and checks it is in Drafts. Robo sends only when you say "send".
 - **Activity watching.** While the laptop is on, robo records each minute, locally only:
-  - the focused app and window (through its small GNOME extension, which loads after one log-out/in);
+  - the focused app and window (on Linux through its small GNOME extension, which loads after one log-out/in; on macOS from the system, with window titles once you allow Screen Recording);
   - idle and locked time;
   - the websites you visit (domains only, from Brave);
   - the files you open.
@@ -63,7 +63,7 @@ The first run downloads Parakeet TDT v2 (about 650 MB, Hugging Face cache); robo
 
 ### macOS
 
-Robo runs natively on a Mac (Apple silicon or Intel, macOS 13+), with nothing to log out for.
+Robo runs natively on a Mac with Apple silicon and macOS 14 or newer (its speech model's runtime has no Intel build), with nothing to log out for.
 
 ```bash
 # Homebrew (brew.sh), then:
@@ -73,7 +73,8 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash   # Hermes Ag
 hermes setup model                 # sign in to Anthropic (robo uses claude-sonnet-5.5)
 hermes gateway install             # Hermes' background service (launchd); robo talks to it
 hermes computer-use install        # the driver robo uses to work in desktop apps
-hermes computer-use permissions    # grant it Accessibility and Screen Recording
+hermes computer-use permissions grant    # macOS asks you to allow Accessibility and Screen Recording
+hermes computer-use permissions status   # both should now say granted
 gh auth login && gh repo clone tbaolong45/robo && cd robo   # the repo is private
 uv sync --extra dev
 uv run robo setup --moodle https://lms.your-school.edu/my/
@@ -84,6 +85,8 @@ uv run robo                        # it also starts by itself at every login fro
 macOS asks for these permissions, in **System Settings → Privacy & Security**:
 - **Microphone:** asked the first time robo listens. Allow it, or robo can't hear you.
 - **Screen Recording** (optional), for your terminal app: only so the activity log has window titles. Without it, robo records app names only.
+- **The robo that starts at login counts as a different app.** macOS should ask for the microphone again the first time it listens. If it never hears you after a login, check the **Microphone** list (it may show as Python or uv), and allow Screen Recording there too if you want window titles.
+- **Login Items:** robo appears under **General → Login Items & Extensions → Allow in the Background** (perhaps as "uv"). Leave it on, or robo won't start at login. Its log is `~/Library/Logs/robo.log`.
 
 ### Windows
 
