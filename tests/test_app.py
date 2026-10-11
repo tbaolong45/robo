@@ -108,8 +108,7 @@ def test_escape_stops_the_run(tmp_path):
     assert pump(win, lambda: not win.busy)
 
 
-@pytest.mark.parametrize(("button", "choice"),
-                         [("allow", "once"), ("allow_today", "session"), ("deny", "deny")])
+@pytest.mark.parametrize(("button", "choice"), [("allow", "once"), ("deny", "deny")])
 def test_approval_bar(tmp_path, button, choice):
     gate = threading.Event()
     client = FakeClient([ApprovalNeeded("open a page"), "WAIT", RunEnded("completed", "ok")],
@@ -233,7 +232,7 @@ class FakeListener:
     def listen_now(self):
         self.now += 1
 
-    def stop(self):
+    def stop(self, wait=5.0):
         self.stopped = True
 
 
@@ -384,3 +383,109 @@ def test_type_opens_its_own_focusable_window_and_asks(tmp_path):
     box.accept()
     assert pump(win, lambda: client.asked and not win.busy)
     assert client.asked[0][0] == "what is 2+2"
+
+
+def test_after_a_drag_robo_wanders_again_later(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._system_move = lambda: True
+    from PySide6.QtCore import QPointF
+    from PySide6.QtTest import QTest
+
+    QTest.mousePress(win.face, Qt.MouseButton.LeftButton, pos=QPointF(10, 10).toPoint())
+    QTest.mouseMove(win.face, QPointF(60, 10).toPoint())
+    win.move(200, 300)
+    assert pump(win, lambda: not win.moving)  # the compositor drag is over
+    win.roamer.held_until = 0  # the hold expires
+    win.move(250, 300)  # a roaming move must not re-pin it
+    assert win.roamer.held_until == 0
+
+
+def test_speaking_over_an_answer_asks_the_new_question(tmp_path):
+    gate = threading.Event()
+    client = FakeClient([Delta("long"), "WAIT", RunEnded("cancelled")], gate=gate)
+    win, ear = floating(tmp_path, client)
+    win.ask("tell me a story")
+    assert pump(win, lambda: win.mind.activity == "talking")
+    ear.on_wake()
+    assert pump(win, lambda: client.stopped == ["run_1"])
+    gate.set()  # the old run ends while robo is still listening
+    assert pump(win, lambda: not win.busy)
+    assert win.mind.activity == "listening" and "cancelled" not in win.bubble.toPlainText()
+    client.script = [RunEnded("completed", "ok")]
+    ear.on_text("what's due")
+    assert pump(win, lambda: [a[0] for a in client.asked] == ["tell me a story", "what's due"])
+
+
+def test_a_question_during_a_run_waits_for_it(tmp_path):
+    gate = threading.Event()
+    client = FakeClient([Delta("x"), "WAIT", RunEnded("completed", "x")], gate=gate)
+    win, ear = floating(tmp_path, client)
+    win.ask("first")
+    assert pump(win, lambda: win.mind.activity == "talking")
+    client2 = [RunEnded("completed", "second done")]
+    ear.on_text("second")  # heard while the first still runs (its stop is on the way)
+    client.script = client2
+    gate.set()
+    assert pump(win, lambda: [a[0] for a in client.asked] == ["first", "second"])
+
+
+def test_a_listener_error_ends_listening(tmp_path):
+    win, ear = floating(tmp_path, FakeClient([]))
+    ear.on_wake()
+    assert pump(win, lambda: win.mind.activity == "listening")
+    ear.on_error("Voice input stopped: device unplugged")
+    assert pump(win, lambda: win.mind.activity == "idle")
+    assert "unplugged" in win.bubble.toPlainText()
+
+
+def test_long_question_is_shortened_in_the_bubble(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([RunEnded("completed", "ok")]))
+    win.ask("word " * 400)
+    assert len(win.heard.text()) < 200
+    assert pump(win, lambda: not win.busy)
+
+
+def test_click_while_answering_interrupts_and_listens(tmp_path):
+    from PySide6.QtTest import QTest
+
+    gate = threading.Event()
+    client = FakeClient([Delta("long"), "WAIT", RunEnded("cancelled")], gate=gate)
+    win, ear = floating(tmp_path, client)
+    win.ask("story")
+    assert pump(win, lambda: win.mind.activity == "talking")
+    QTest.mouseClick(win.face, Qt.MouseButton.LeftButton)
+    assert pump(win, lambda: client.stopped == ["run_1"]) and ear.now == 1
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+
+
+def test_bubble_fits_its_content_exactly(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._say("line\n\n" * 3)
+    assert pump(win, lambda: not win.panel.isHidden())
+    pump(win, lambda: False, timeout=0.2)
+    panel = win.panel.geometry()
+    assert win.bubble.geometry().bottom() <= panel.height()
+    assert win.height() - panel.height() - win.face.height() < 40  # no blank band
+
+
+def test_a_huge_approval_is_shortened_so_the_buttons_stay_on_screen(tmp_path):
+    gate = threading.Event()
+    client = FakeClient([ApprovalNeeded("run: " + "x" * 5000), "WAIT", RunEnded("cancelled")],
+                        gate=gate)
+    win, _ = floating(tmp_path, client)
+    win.ask("go")
+    assert pump(win, lambda: win.approval.isVisibleTo(win))
+    assert len(win.approval_text.text()) < 400
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+
+
+def test_a_face_press_ends_a_compositor_drag(tmp_path):
+    from PySide6.QtTest import QTest
+
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.moving = True
+    QTest.mousePress(win.face, Qt.MouseButton.LeftButton)
+    assert not win.moving
+    QTest.mouseRelease(win.face, Qt.MouseButton.LeftButton)

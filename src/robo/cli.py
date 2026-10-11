@@ -59,7 +59,7 @@ def window() -> int:
     """The floating robo: on GNOME Wayland it runs through XWayland, the only way a window can
     place itself and stay on top; voice in through robo.listen."""
     if os.environ.get("DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"  # Qt aborts on plain "xcb" if it cannot load
     from PySide6.QtWidgets import QApplication
 
     from robo.app import RoboWindow

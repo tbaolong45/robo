@@ -221,10 +221,11 @@ class Listener:
     def listen_now(self) -> None:
         self._now.set()
 
-    def stop(self) -> None:
+    def stop(self, wait: float = READ_TIMEOUT + 5) -> None:
+        """End the thread; waits up to `wait` s (a transcription in flight finishes on its own)."""
         self._stop.set()
         if self._thread:
-            self._thread.join(READ_TIMEOUT + 5)
+            self._thread.join(wait)
 
     def _run(self, mic: Mic, spotter: Spotter) -> None:
         pre_roll: deque[np.ndarray] = deque(maxlen=PRE_ROLL_FRAMES)
@@ -251,6 +252,9 @@ class Listener:
                 self._now.clear()  # a click while already listening is not a second request
                 pre_roll.clear()
                 spotter.reset()
+        except Exception as e:  # the mic or the wake word model failed: say so, stop listening
+            log.exception("listener stopped")
+            self.on_error(f"Voice input stopped: {e}")
         finally:
             mic.close()
 
@@ -269,10 +273,13 @@ class Listener:
         ep, frames = Endpointer(gate), []
         while not self._stop.is_set():
             frame = mic.read(READ_TIMEOUT)
-            if frame is not None:
-                frames.append(frame)
-                if ep.feed(rms(frame)):
+            if frame is None:  # the mic went quiet: that time counts as silence
+                if any(ep.feed(0.0) for _ in range(round(READ_TIMEOUT / FRAME_S))):
                     break
+                continue
+            frames.append(frame)
+            if ep.feed(rms(frame)):
+                break
         return frames, ep.heard
 
     def _transcribe(self, frames: list[np.ndarray]) -> str:

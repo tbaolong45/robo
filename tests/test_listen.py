@@ -226,3 +226,38 @@ def test_kws_model_downloaded_once(tmp_path):
     assert ensure_kws_model(tmp_path, fetch=fetch) == model
     assert calls == [listen.KWS_URL]
     assert [p.name for p in tmp_path.iterdir()] == [listen.KWS_NAME]  # no .part / temp left
+
+
+def test_a_mic_that_goes_quiet_still_ends_the_recording():
+    mic = FakeMic(frames(0, 10) + frames(10, 13, SPEECH))  # then no frames at all
+    spot, stt = FakeSpotter(at=9), FakeStt("Hey Robo, open Moodle")
+    lis, events = start(mic, spot, stt)
+    assert until_text(events) == ["wake", ("text", "open Moodle")]
+    lis.stop()
+
+
+def test_an_idle_error_is_reported_not_silent():
+    class Broken(FakeMic):
+        def read(self, timeout):
+            raise OSError("device unplugged")
+
+    lis, events = start(Broken(), FakeSpotter(), FakeStt())
+    kind, message = events.get(timeout=5)
+    assert kind == "error" and "unplugged" in message
+    lis._thread.join(2)
+    assert not lis._thread.is_alive()
+
+
+def test_stop_can_return_quickly_while_busy():
+    class Slow(FakeStt):
+        def __call__(self, audio):
+            time.sleep(3)
+            return "x"
+
+    mic = FakeMic(frames(0, 10) + frames(10, 13, SPEECH) + frames(13, 40))
+    lis, events = start(mic, FakeSpotter(at=9), Slow())
+    assert events.get(timeout=5) == "wake"
+    time.sleep(0.6)  # transcribing now
+    t = time.monotonic()
+    lis.stop(wait=0.2)
+    assert time.monotonic() - t < 1.0

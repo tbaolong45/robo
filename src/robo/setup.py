@@ -190,8 +190,9 @@ def setup(
 
 
 # robo's profile config, applied with `hermes -p robo config set` (which refuses unknown keys).
+# code_execution is left out: Hermes always refuses it on API runs (approvals.unattended_mode).
 TOOLSETS = ["browser", "web", "vision", "skills", "memory", "todo", "terminal", "file",
-            "computer_use", "code_execution"]
+            "computer_use"]
 CONFIG: dict[str, str] = {
     "model.provider": "anthropic",
     "model.default": "claude-sonnet-5.5",
@@ -202,6 +203,9 @@ CONFIG: dict[str, str] = {
     # computer actions; robo-guard's approve directive for browser writes). "manual" = always ask
     # for a flagged action, never an auto-approving guardian model.
     "approvals.mode": "manual",
+    # Hermes refuses these commands even when approvals are off: no request may touch robo's own
+    # Hermes setup (approvals, plugins, persona). robo-guard blocks file writes there too.
+    "approvals.deny": '["*hermes*"]',
     "approvals.timeout": "300",
     # GNOME Wayland: the native backend has no target-activation adapter here (`hermes
     # computer-use doctor`), so robo drives X11/XWayland windows; SOUL.md says how to open apps so.

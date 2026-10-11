@@ -38,6 +38,8 @@ DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill
 FACE = (128, 96)  # px, the floating face
 BUBBLE_W = 340  # px
 TEXT_MAX = 300  # px of reply text before the bubble scrolls
+HEARD_MAX = 140  # characters of your own question shown above the reply
+APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
 CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
 DRAG = 6  # px of movement that turns a click on the face into a drag
 STYLE = """
@@ -87,13 +89,16 @@ class RoboWindow(QWidget):
         self.lock = threading.Lock()  # run_id/cancel are shared with the worker thread
         self.run_id: str | None = None
         self.cancel = False
+        self.pending = ""  # a question asked during a run, asked when it ends
+        self.listening = False
         self.close_at = 0.0  # when the finished reply's bubble closes (0 = not scheduled)
         self.press: QPoint | None = None  # global position of a mouse press on the face
         self.moving = False  # the compositor is dragging robo (startSystemMove)
+        self.drag_end = QTimer(self, singleShot=True, interval=600, timeout=self._drag_done)
         self.bridge = _Bridge()
         self.bridge.event.connect(self._on_event)
         self.bridge.heard.connect(self._on_heard)
-        self.bridge.note.connect(self._say)
+        self.bridge.note.connect(self._on_note)
         self.resumed.connect(self._maybe_digest)
         self.roamer: Roamer | None = None
         self._build()
@@ -103,6 +108,8 @@ class RoboWindow(QWidget):
                                  (self.width(), self.height()))
             self.move(*map(int, self.roamer.pos))
             QTimer(self, interval=33, timeout=self._roam).start()
+            QGuiApplication.primaryScreen().availableGeometryChanged.connect(
+                lambda g: self.roamer.set_screen(Rect(g.x(), g.y(), g.width(), g.height())))
         self.ticker = QTimer(self, interval=100, timeout=self._tick)
         self.ticker.start()
         self.watcher = WakeWatcher(self.resumed.emit) if watch_wake else None
@@ -133,17 +140,14 @@ class RoboWindow(QWidget):
         self.bubble.document().contentsChanged.connect(self.sizer.start)
         self.approval_text = QLabel(wordWrap=True)
         self.allow, self.deny = QPushButton("Allow"), QPushButton("Deny")
-        self.allow_today = QPushButton("Allow today", toolTip="Allow this same kind of action "
-                                       "for the rest of today's chat")
         self.allow.clicked.connect(lambda: self._approve("once"))
-        self.allow_today.clicked.connect(lambda: self._approve("session"))
         self.deny.clicked.connect(lambda: self._approve("deny"))
         self.approval = QWidget()
         box = QVBoxLayout(self.approval)
         box.setContentsMargins(0, 0, 0, 0)
         box.addWidget(self.approval_text)
         row = QHBoxLayout()
-        for button in (self.allow, self.allow_today, self.deny):
+        for button in (self.allow, self.deny):
             row.addWidget(button)
         box.addLayout(row)
         self.approval.hide()
@@ -184,15 +188,18 @@ class RoboWindow(QWidget):
             self.ask(text)
 
     def ask(self, text: str, *, wait_network: bool = False) -> None:
-        """Start one run (ignored while another is in flight)."""
+        """Start one run; while another is in flight, stop it and ask this one after it."""
         if self.busy:
+            self.pending = text
+            self.stop()
             return
         day = self.today()
         self.busy, self.reply, self.run_id, self.cancel = True, "", None, False
         # One Hermes session per day and persona version (see setup.persona_stamp).
         self.session_id = "-".join(filter(None, ("robo", day.isoformat(), self.persona)))
         self.digest_day = day if text == DIGEST_PROMPT else None
-        self.heard.setText("" if self.digest_day else f"You: {text}")
+        shown = text if len(text) <= HEARD_MAX else text[:HEARD_MAX - 1] + "…"
+        self.heard.setText("" if self.digest_day else f"You: {shown}")
         self.bubble.clear()
         self._on_event(UserSent(text))
         threading.Thread(target=self._work, args=(text, wait_network), daemon=True).start()
@@ -253,6 +260,10 @@ class RoboWindow(QWidget):
         elif not self.busy:
             self._say("Sorry, I didn't catch that.")
 
+    def _on_note(self, text: str) -> None:
+        self._on_event(Listening(False))
+        self._say(text)
+
     def _say(self, text: str) -> None:
         """Show a short local message (no model involved)."""
         self.heard.setText("")
@@ -276,6 +287,7 @@ class RoboWindow(QWidget):
                 self.bubble.setMarkdown(self.reply)
                 self.bubble.moveCursor(self.bubble.textCursor().MoveOperation.End)
             case ApprovalNeeded(description=d):
+                d = d if len(d) <= APPROVAL_MAX else d[:APPROVAL_MAX - 1] + "…"
                 self.approval_text.setText(f"Allow? {d}")
                 self.approval.show()
                 self._open()
@@ -284,11 +296,18 @@ class RoboWindow(QWidget):
                     self.busy, self.run_id = False, None
                 self.approval.hide()
                 text = out or self.reply if status == "completed" else err or f"Run {status}."
-                self.bubble.setMarkdown(text)
+                if self.listening:  # interrupted by the user speaking: keep listening
+                    self.mind = minds.react(self.mind, Listening(True), time.monotonic())
+                elif not self.pending:
+                    self.bubble.setMarkdown(text)
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
                 self.digest_day = None
-                self._open(close_after=CLOSE_AFTER)
+                self._open(close_after=0.0 if self.listening else CLOSE_AFTER)
+                if self.pending:
+                    text, self.pending = self.pending, ""
+                    QTimer.singleShot(0, lambda: self.ask(text))
+        self.listening = self.mind.activity == "listening"
         self._show()
 
     def _tick(self) -> None:
@@ -341,6 +360,7 @@ class RoboWindow(QWidget):
         change()
         if not self.floating:
             return
+        self.panel.layout().activate()
         self.layout().activate()
         self.setFixedSize(self.layout().totalSizeHint())
         self.layout().setGeometry(self.rect())  # place the children now, not at the next event
@@ -366,6 +386,7 @@ class RoboWindow(QWidget):
         if kind == ev.Type.MouseButtonPress and button == Qt.MouseButton.RightButton:
             self._show_menu()
         elif kind == ev.Type.MouseButtonPress and left:
+            self.moving = False  # any earlier compositor drag is over
             self.press, self.dragged = ev.globalPosition().toPoint(), False
             self.grab_at = self.press - self.pos()
         elif kind == ev.Type.MouseMove and self.press is not None:
@@ -374,6 +395,7 @@ class RoboWindow(QWidget):
                 self.dragged = True
                 if self.floating and self._system_move():
                     self.press, self.moving = None, True  # Mutter moves it; see moveEvent
+                    self.drag_end.start()
                 elif self.floating:
                     self.move(here - self.grab_at)
         elif kind == ev.Type.MouseButtonRelease and left and self.press is not None:
@@ -394,11 +416,11 @@ class RoboWindow(QWidget):
     def moveEvent(self, event) -> None:  # noqa: N802 - Qt override
         if self.moving and self.roamer:
             self.roamer.hold(time.monotonic(), (self.x(), self.y()))
+            self.drag_end.start()  # the drag is over once the moves stop for a moment
         super().moveEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
-        self.moving = False  # a compositor drag ends before the next press reaches us
-        super().mousePressEvent(event)
+    def _drag_done(self) -> None:
+        self.moving = False
 
     def _show_menu(self) -> None:
         self.menu.findChildren(QPushButton)[2].setText(
@@ -414,10 +436,12 @@ class RoboWindow(QWidget):
     def _clicked(self) -> None:
         if not self.busy and not self.panel.isHidden() and self.close_at:
             self._close_bubble()
-        elif self.listener and not self.busy:
+        elif self.listener:
             self.listener.listen_now()
-            self._on_event(Listening(True))  # show it at once; the listener has no wake event
-        elif not self.busy:
+            self._on_event(Listening(True))  # show it at once (and interrupt an answer)
+        elif self.busy:
+            self.stop()
+        else:
             self._type()
 
     def _type(self) -> None:
@@ -450,14 +474,18 @@ class RoboWindow(QWidget):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         """Never leave a run (maybe acting on the laptop) going with nobody watching."""
         with self.lock:
-            run_id = self.run_id if self.busy else None
-            self.cancel = self.busy
-        if run_id:
-            with contextlib.suppress(BrainError):
-                self.client.stop(run_id)
+            busy, self.cancel = self.busy, self.busy
+        for _ in range(30 if busy else 0):  # a run being created gets its id within moments
+            with self.lock:
+                run_id = self.run_id
+            if run_id:
+                with contextlib.suppress(BrainError):
+                    self.client.stop(run_id)
+                break
+            time.sleep(0.1)
         if self.watcher:
             self.watcher.stop()
         if self.listener:
-            self.listener.stop()
+            self.listener.stop(wait=0.5)
         super().closeEvent(event)
         QGuiApplication.quit()

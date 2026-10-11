@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 
+from robo import brain
 from robo.brain import BrainError, HermesClient
 from robo.events import (
     ApprovalNeeded,
@@ -54,7 +55,7 @@ def test_events_parses_split_frames():
     events = list(client(sse(*chunks)).events("r1"))
     assert events == [
         Delta("[[feel:happy]] Hel"), ToolStarted("web_search"),
-        ToolCompleted("web_search", False), ApprovalNeeded("recursive delete"),
+        ToolCompleted("web_search", False), ApprovalNeeded("recursive delete: rm -rf /tmp/x"),
         Delta("lo"), RunEnded("completed", output="[[feel:happy]] Hello"),
     ]
 
@@ -150,7 +151,7 @@ def test_connection_refused_says_not_running():
         client(boom).stop("r1")
 
 
-@pytest.mark.parametrize("choice", ["once", "session", "deny"])
+@pytest.mark.parametrize("choice", ["once", "deny"])
 def test_approve_and_stop_bodies(choice):
     seen = []
 
@@ -231,4 +232,19 @@ def test_ask_forgets_the_previous_run_before_starting():
 
 def test_approve_refuses_unknown_choices():
     with pytest.raises(ValueError):
-        client(lambda req: httpx.Response(200, json={})).approve("r1", "always")
+        client(lambda req: httpx.Response(200, json={})).approve("r1", "session")
+
+
+def test_approval_shows_the_command_not_just_the_category():
+    ev = brain._parse({"event": "approval.request", "description": "recursive delete",
+                       "command": "rm -rf ~/Documents"})
+    assert ev == ApprovalNeeded("recursive delete: rm -rf ~/Documents")
+    assert brain._parse({"event": "approval.request", "description": "Robo wants to open x.",
+                         "command": ""}) == ApprovalNeeded("Robo wants to open x.")
+
+
+def test_guard_approvals_show_only_the_guards_own_sentence():
+    ev = brain._parse({"event": "approval.request",
+                       "description": "Robo wants to open https://x.example/.",
+                       "command": "<browser_navigate> (plugin approval rule)"})
+    assert ev == ApprovalNeeded("Robo wants to open https://x.example/.")
