@@ -1,6 +1,6 @@
 ---
 name: school-moodle
-description: "List Moodle deadlines, homework and quizzes, read-only."
+description: "List Moodle deadlines, homework and quizzes."
 version: 1.0.0
 author: robo
 metadata:
@@ -10,7 +10,7 @@ metadata:
     related_skills: [school-digest]
 ---
 
-# School Moodle (deadlines, read-only)
+# School Moodle (deadlines)
 
 ## When to Use
 The user asks what is due, about assignments, homework, quizzes or practice, or the digest
@@ -19,7 +19,7 @@ needs deadlines.
 ## Moodle address
 The user's Moodle is `{{MOODLE_BASE_URL}}` (written as <base> below). If that says "not set",
 reply: "I don't know your Moodle address yet. Please run `robo setup --moodle <address>`." and
-stop. Never guess it: robo's browser can only open that one Moodle.
+stop. Never guess it.
 
 ## Procedure
 1. `browser_navigate(url="<base>/calendar/view.php?view=upcoming")`. Read the page snapshot it
@@ -28,12 +28,13 @@ stop. Never guess it: robo's browser can only open that one Moodle.
    reply: "I'm not signed in to Moodle. Please run `robo signin`, open Moodle there and sign
    in, then ask me again." Never try to sign in.
 3. For overdue work, `browser_navigate(url="<base>/my/")` and read the Timeline block.
-4. Stay on these two list pages. Do not open activity pages (an assignment or quiz view can
-   mark the activity as viewed for completion tracking); say "open it in Moodle for details".
+4. For deadlines stay on these two list pages: opening an assignment or quiz page can mark it
+   viewed for completion tracking, so open one only when the user asks about it.
 
-## Do Not
-Click Add submission, Edit submission, Submit, Upload, Remove, Save changes, Attempt quiz,
-Continue attempt, Mark as done, Reply or Post. Never start or continue a quiz attempt.
+## Acting
+Submit, upload, post or mark done only when the user asked. Start or continue a quiz attempt
+only when the user explicitly asks (it starts the timer). Writes bring up an approval prompt
+for the user; if they deny, stop.
 
 ## Output
 Overdue first, then by due date, one bullet each, with dates:

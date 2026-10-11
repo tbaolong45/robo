@@ -150,8 +150,8 @@ def test_connection_refused_says_not_running():
         client(boom).stop("r1")
 
 
-@pytest.mark.parametrize("allow,choice", [(True, "once"), (False, "deny")])
-def test_approve_and_stop_bodies(allow, choice):
+@pytest.mark.parametrize("choice", ["once", "session", "deny"])
+def test_approve_and_stop_bodies(choice):
     seen = []
 
     def handler(req):
@@ -159,7 +159,7 @@ def test_approve_and_stop_bodies(allow, choice):
         return httpx.Response(200, json={})
 
     c = client(handler, base="http://h/p")
-    c.approve("r1", allow)
+    c.approve("r1", choice)
     c.stop("r1")
     assert str(seen[0].url) == "http://h/p/v1/runs/r1/approval"
     assert json.loads(seen[0].content) == {"choice": choice}
@@ -227,3 +227,8 @@ def test_ask_forgets_the_previous_run_before_starting():
     with pytest.raises(BrainError):
         list(c.ask("hi", "s1"))
     assert c.run_id is None
+
+
+def test_approve_refuses_unknown_choices():
+    with pytest.raises(ValueError):
+        client(lambda req: httpx.Response(200, json={})).approve("r1", "always")

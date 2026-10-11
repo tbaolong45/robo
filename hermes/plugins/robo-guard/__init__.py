@@ -1,30 +1,28 @@
-"""robo-guard: robo's browser holds the user's school logins, so it may only READ school sites.
+"""robo-guard: robo's browser is signed in as the user, so risky browser actions ask the user first.
 
-Hermes contract (hermes_cli/plugins.py `_get_pre_tool_call_directive_details`): a pre_tool_call
-callback returning {"action": "block", "message": <str>} vetoes the call and the message becomes
-the tool result. Allowlist, fail closed:
-- the browser opens only school hosts (Outlook, Teams, Microsoft sign-in, the user's Moodle),
-  never URLs with side effects (sign-out, compose, actions, OAuth redirects);
-- clicks only on elements from the latest snapshot: links, tabs and list rows without a write
-  word, and buttons only when they navigate (next week, Chat, show more...); refs are read only
-  outside quoted text, a ref listed twice is not trusted, and refs are forgotten after any
-  click, key or screenshot; no typing, no activating keys;
-- tools that cannot be judged, fetch arbitrary URLs, or persist instructions across sessions
-  (raw CDP, dialogs, the credential vault, web_extract, memory, skill editing) are off.
+Hermes' own approvals (approvals.mode manual) gate dangerous terminal, file and computer-use
+actions; this plugin covers the browser. Hermes contract (hermes_cli/plugins.py
+`_get_pre_tool_call_directive_details`, `_resolve_block_from_details`): a pre_tool_call hook
+returning {"action": "approve", "message", "rule_key"} asks the user and a deny, timeout or gate
+error blocks the call; {"action": "block", "message"} vetoes it, and any block beats any approve.
+- ask: clicking an element whose label is a write word (Send, Reply, Submit, Delete...), a toggle,
+  or a ref missing from the latest snapshot; typing anywhere but a search box; any key but
+  scrolling and Escape; page dialogs; the password vault; URLs with side effects (sign-out,
+  compose, action=, unenrol, subscribe, completion, OAuth redirect_uri...).
+- block: raw CDP, browser_exec and JavaScript (browser_console expressions, javascript: URLs),
+  which cannot be judged, and skill_manage (installed skills stay as installed).
+- allow: everything else, including opening any other page and reading.
+Refs are read only outside quoted text, a ref listed twice is not trusted, and refs are forgotten
+after any click, key, back or screenshot. The rule_key names the tool and the exact action:
+without it Hermes uses the bare tool name, so one "always" would approve every later click.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
-PROFILE = Path(__file__).resolve().parents[2]  # <hermes home>/profiles/robo
-SCHOOL_HOSTS = (
-    "outlook.office.com", "outlook.office365.com", "outlook.cloud.microsoft",
-    "teams.microsoft.com", "teams.cloud.microsoft", "login.microsoftonline.com",
-)
 BAD_URL = re.compile(
     r"log_?out|sign_?out|compose|deeplink|/l/(?:chat|call|meetup|meeting)|sesskey=|action="
     r"|unenrol|subscribe|completion|/oauth2/|redirect_uri=|[?&](?:body|message|subject)=",
@@ -39,88 +37,72 @@ WRITE = re.compile(
     r"|away|disturb|heart|laugh|love|surprised|sad|angry|gửi|trả lời|xóa)\b",
     re.IGNORECASE,
 )
-READ_ROLES = {"link", "tab", "option", "row", "gridcell", "treeitem", "listitem", "menuitem"}
-NAV_BUTTON = re.compile(
-    r"\b(next|previous|prev|today|week|month|day|chat|chats|calendar|mail|inbox|timeline"
-    r"|upcoming|show more|load more|view|expand|collapse|sort|filter)\b",
-    re.IGNORECASE,
-)
+TOGGLES = {"checkbox", "switch", "radio", "menuitemcheckbox", "menuitemradio"}
+SEARCH = re.compile(r"\bsearch", re.IGNORECASE)
+MESSAGE = re.compile(r"\b(message|comment|compose|subject|body)", re.IGNORECASE)
 # Scrolling, plus Teams' own "go to Chat" shortcut (a ref click on its app bar is unreliable).
 SAFE_KEYS = {"escape", "pageup", "pagedown", "arrowup", "arrowdown", "home", "end",
              "control+shift+2", "ctrl+shift+2"}
-ALWAYS_BLOCKED = {
-    "browser_cdp", "browser_exec", "browser_dialog", "browser_vault_fill",
-    "browser_vault_save_login", "browser_vault_enter_code", "browser_vault_list",
-    "browser_vault_unlock", "skill_manage", "memory",
-    "web_extract",
-}
+BLOCKED = {"browser_cdp", "browser_exec", "skill_manage"}
 LINE = re.compile(r"^\s*-\s*(\w+)")
 QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 REF = re.compile(r"\[ref=(e\d+)\]")
 FORGET_AFTER = {"browser_click", "browser_press", "browser_back", "browser_vision"}
 
 _labels: dict[str, dict[str, str]] = {}  # task_id -> {"e5": snapshot line}
+_hosts: dict[str, str] = {}  # task_id -> host of the page last opened
 
 
-def _hosts() -> tuple[str, ...]:
-    """School hosts plus the Moodle host from the profile's .env (`robo setup --moodle`)."""
-    moodle = ""
-    try:
-        for line in (PROFILE / ".env").read_text().splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "MOODLE_BASE_URL":
-                moodle = urlsplit(value.strip().strip("'\"")).hostname or ""
-    except OSError:
-        pass
-    return SCHOOL_HOSTS + ((moodle,) if moodle else ())
+def _short(text: object, limit: int = 60) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _school_url(url: str) -> bool:
-    parts = urlsplit(str(url).strip())
-    return (parts.scheme == "https" and (parts.hostname or "") in _hosts()
-            and not BAD_URL.search(url))
+def _label(line: str) -> str:
+    quoted = QUOTED.search(line)
+    return _short(quoted.group(0)[1:-1] if quoted else REF.sub("", line).strip(" -:"))
 
 
-def _click(line: str | None) -> str | None:
-    """Why clicking this snapshot line is refused (None = allowed)."""
-    if line is None:
-        return "unknown element: take browser_snapshot() first"
-    m = WRITE.search(line)
-    if m:
-        return f"looks like a write action ({m.group(0)!r})"
-    role = (LINE.match(line) or [None, ""])[1].lower()
-    if role in READ_ROLES or (role == "button" and NAV_BUTTON.search(line)):
-        return None
-    return f"only links, tabs, list items and navigation buttons can be clicked, not {role!r}"
-
-
-def _reason(tool: str, args: dict, task_id: str) -> str | None:
-    if tool in ALWAYS_BLOCKED:
-        return "this tool is disabled for robo"
+def _check(tool: str, args: dict, task: str) -> tuple[str, str] | None:
+    """("block", reason) or ("approve", what robo wants to do); None lets the call through."""
+    url = unquote(re.sub(r"[\t\r\n]", "", str(args.get("url", ""))))
+    if (tool in BLOCKED or (tool == "browser_console" and args.get("expression") is not None)
+            or (tool == "browser_navigate" and urlsplit(url).scheme.lower() == "javascript")):
+        return "block", "robo may not run raw page code or change its own skills"
     if tool == "browser_navigate":
-        ok = _school_url(args.get("url", ""))
-        return None if ok else "robo's browser only opens school sites"
-    if tool == "browser_console" and args.get("expression"):
-        return "JavaScript evaluation is disabled"
-    if tool == "browser_type":
-        return "typing is disabled"
-    if tool == "browser_press":
-        key = str(args.get("key", "")).replace(" ", "").lower()
-        return None if key in SAFE_KEYS else f"key {args.get('key')!r} is disabled"
+        return ("approve", f"open {_short(url, 120)}") if BAD_URL.search(url) else None
+    ref = str(args.get("ref", "")).strip().lstrip("@")
+    line = _labels.get(task, {}).get(ref)
+    target = f'"{_label(line)}"' if line else f"an unknown element (@{_short(ref, 20)})"
+    host = _hosts.get(task)
+    on = f" on {host}" if host else ""
     if tool == "browser_click":
-        return _click(_labels.get(task_id, {}).get(str(args.get("ref", "")).strip().lstrip("@")))
+        role = (LINE.match(line or "") or [None, ""])[1].lower()
+        if line is None or WRITE.search(line) or role in TOGGLES:
+            return "approve", f"click {target}{on}"
+    elif tool == "browser_type":
+        if line is None or not SEARCH.search(line) or WRITE.search(line) or MESSAGE.search(line):
+            return "approve", f'type "{_short(args.get("text", ""))}" into {target}{on}'
+    elif tool == "browser_press":
+        if str(args.get("key", "")).replace(" ", "").lower() not in SAFE_KEYS:
+            return "approve", f'press "{_short(args.get("key", ""), 30)}"{on}'
+    elif tool == "browser_dialog":
+        return "approve", f"{_short(args.get('action', 'answer'), 20)} a page dialog{on}"
+    elif tool.startswith("browser_vault_"):
+        return "approve", f"use the password vault ({tool}){on}"
     return None
 
 
 def pre_tool_call(tool_name: str = "", args: dict | None = None, task_id: str = "", **_):
-    reason = _reason(tool_name, args if isinstance(args, dict) else {}, task_id or "")
-    if reason is None:
+    verdict = _check(tool_name, args if isinstance(args, dict) else {}, task_id or "")
+    if verdict is None:
         return None
-    return {
-        "action": "block",
-        "message": f"robo-guard blocked {tool_name}: {reason}. Robo is read-only on school "
-        "sites; tell the user what you wanted to do instead of trying another way.",
-    }
+    action, text = verdict
+    if action == "block":
+        return {"action": "block", "message": f"robo-guard blocked {tool_name}: {text}. Tell the "
+                "user what you wanted to do instead of trying another way."}
+    return {"action": "approve", "message": f"Robo wants to {text}.",
+            "rule_key": f"robo-guard:{tool_name}:{text}"}
 
 
 def _refs(snapshot: str) -> dict[str, str]:
@@ -135,16 +117,24 @@ def _refs(snapshot: str) -> dict[str, str]:
     return {ref: line for ref, line in seen.items() if ref not in twice}
 
 
-def post_tool_call(tool_name: str = "", result: object = "", task_id: str = "", **_):
+def post_tool_call(tool_name: str = "", args: dict | None = None, result: object = "",
+                   task_id: str = "", **_):
+    task = task_id or ""
     if tool_name in FORGET_AFTER:
-        _labels.pop(task_id or "", None)
-    if tool_name not in ("browser_navigate", "browser_snapshot"):
+        _labels.pop(task, None)
+    if tool_name not in ("browser_navigate", "browser_snapshot", "browser_back"):
         return None
     try:
-        snapshot = str(json.loads(result).get("snapshot", ""))
-    except (TypeError, ValueError, AttributeError):
-        snapshot = str(result)
-    _labels[task_id or ""] = _refs(snapshot)
+        data = json.loads(result)
+        data = data if isinstance(data, dict) else {}
+        snapshot = str(data.get("snapshot", ""))
+    except (TypeError, ValueError):
+        data, snapshot = {}, str(result)
+    if tool_name != "browser_snapshot":  # navigate and back report the final URL
+        url = data.get("url") if data else (args if isinstance(args, dict) else {}).get("url")
+        _hosts[task] = urlsplit(str(url or "")).hostname or ""
+    if tool_name != "browser_back":
+        _labels[task] = _refs(snapshot)
     return None
 
 

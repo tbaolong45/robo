@@ -153,6 +153,16 @@ def _effects(painter: QPainter, p: FaceParams, t: float, oy: float) -> None:
             painter.setBrush(_colour(p, a))
             painter.drawEllipse(QPointF(c.x() + 11 * math.cos(ang), c.y() + 11 * math.sin(ang)),
                                 2.6, 2.6)
+    if "pulse" in fx:
+        for i in range(2):
+            k = (t * 0.8 + i / 2) % 1
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(_pen(_colour(p, 0.6 * (1 - k)), 3))
+            for side in (-1, 1):
+                rr = 18 + 22 * k
+                cx = W / 2 + side * (EYE_X + EYE_W / 2 + 6)
+                box = QRectF(cx - rr, EYE_Y + oy - rr, 2 * rr, 2 * rr)
+                painter.drawArc(box, (0 if side > 0 else 180) * 16 - 35 * 16, 70 * 16)
     if "sparkle" in fx:
         for i, (x, y, s) in enumerate(((W / 2 - EYE_X - 48, 52, 9), (W / 2 + EYE_X + 50, 44, 12))):
             s *= 0.75 + 0.25 * math.sin(t * 4 + i * 2)
@@ -190,8 +200,10 @@ def render_params(painter: QPainter, rect: QRectF, p: FaceParams, t: float = 0.0
 class FaceWidget(QWidget):
     """Animated robot face. Call `set_state`; it animates itself at ~60 fps."""
 
-    def __init__(self, parent: QWidget | None = None, seed: int | None = None):
+    def __init__(self, parent: QWidget | None = None, seed: int | None = None,
+                 radius: float = 0.0):
         super().__init__(parent)
+        self.radius = radius  # > 0: a rounded screen, transparent outside (floating mode)
         self.anim = Animator(seed)
         self.goal = target("idle", "neutral")
         self.talking = False
@@ -212,5 +224,10 @@ class FaceWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
+        if self.radius:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(self.rect()), self.radius, self.radius)
+            painter.setClipPath(clip)
         render_params(painter, QRectF(self.rect()), self.params, self.last - self.t0)
         painter.end()

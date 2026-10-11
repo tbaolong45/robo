@@ -1,4 +1,8 @@
-"""The robo window: face on top, reply bubble, input line; Hermes runs in a worker thread."""
+"""Robo on the desktop: a floating face with a speech bubble; Hermes runs in a worker thread.
+
+Floating mode (X11/XWayland) is a frameless, always-on-top, see-through window that drifts around
+the screen edges (robo.roam). Otherwise the same widgets live in an ordinary window.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,12 @@ import time
 from collections.abc import Callable
 from datetime import date
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -23,18 +29,28 @@ from PySide6.QtWidgets import (
 
 from robo import mind as minds
 from robo.brain import BrainError
-from robo.events import ApprovalNeeded, Delta, Event, RunEnded, UserSent
+from robo.events import ApprovalNeeded, Delta, Event, Listening, RunEnded, UserSent
 from robo.face.widget import FaceWidget
+from robo.roam import Rect, Roamer
 from robo.wake import DigestClock, WakeWatcher, wait_for_network
 
 DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill)."
+FACE = (128, 96)  # px, the floating face
+BUBBLE_W = 340  # px
+TEXT_MAX = 300  # px of reply text before the bubble scrolls
+CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
+DRAG = 6  # px of movement that turns a click on the face into a drag
 STYLE = """
-QWidget { background: #090d16; color: #d8e6ff; font-size: 14px; }
-QTextBrowser, QLineEdit { background: #121a2b; border: 1px solid #1f2b44; border-radius: 10px;
-                          padding: 6px; }
-QPushButton { background: #1b2640; border: none; border-radius: 8px; padding: 6px 10px; }
+QWidget { color: #d8e6ff; font-size: 14px; }
+QFrame#panel { background: rgba(14, 20, 34, 238); border: 1px solid #2a3a5c; border-radius: 14px; }
+QTextBrowser, QLineEdit { background: transparent; border: none; }
+QLineEdit { background: #121a2b; border: 1px solid #1f2b44; border-radius: 8px; padding: 5px; }
+QPushButton { background: #1b2640; border: none; border-radius: 8px; padding: 5px 10px; }
 QPushButton:hover { background: #26355a; }
-QLabel#status { color: #7f93b8; font-size: 12px; }
+QLabel#status, QLabel#heard { color: #7f93b8; font-size: 12px; }
+QScrollBar:vertical { background: transparent; width: 6px; }
+QScrollBar::handle:vertical { background: #2a3a5c; border-radius: 3px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 """
 
 
@@ -48,7 +64,9 @@ def _online() -> bool:
 
 
 class _Bridge(QObject):
-    event = Signal(object)  # emitted from worker threads, delivered on the UI thread
+    event = Signal(object)  # Hermes events, from the worker thread
+    heard = Signal(str)  # a transcribed voice command, from the listener thread
+    note = Signal(str)  # a listener problem worth showing once
 
 
 class RoboWindow(QWidget):
@@ -56,10 +74,11 @@ class RoboWindow(QWidget):
 
     def __init__(self, client, clock: DigestClock, *, today: Callable[[], date] = date.today,
                  network: Callable[[], bool] | None = None, watch_wake: bool = True,
-                 persona: str = ""):
+                 persona: str = "", floating: bool = False, listener=None):
         super().__init__()
         self.client, self.clock, self.today, self.persona = client, clock, today, persona
         self.network = network or _online
+        self.floating = floating
         self.session_id = ""
         self.mind = minds.initial(time.monotonic())
         self.busy = False
@@ -68,51 +87,93 @@ class RoboWindow(QWidget):
         self.lock = threading.Lock()  # run_id/cancel are shared with the worker thread
         self.run_id: str | None = None
         self.cancel = False
+        self.close_at = 0.0  # when the finished reply's bubble closes (0 = not scheduled)
+        self.press: QPoint | None = None  # global position of a mouse press on the face
+        self.moving = False  # the compositor is dragging robo (startSystemMove)
         self.bridge = _Bridge()
         self.bridge.event.connect(self._on_event)
+        self.bridge.heard.connect(self._on_heard)
+        self.bridge.note.connect(self._say)
         self.resumed.connect(self._maybe_digest)
+        self.roamer: Roamer | None = None
         self._build()
+        if floating:
+            area = QGuiApplication.primaryScreen().availableGeometry()
+            self.roamer = Roamer(Rect(area.x(), area.y(), area.width(), area.height()),
+                                 (self.width(), self.height()))
+            self.move(*map(int, self.roamer.pos))
+            QTimer(self, interval=33, timeout=self._roam).start()
         self.ticker = QTimer(self, interval=100, timeout=self._tick)
         self.ticker.start()
         self.watcher = WakeWatcher(self.resumed.emit) if watch_wake else None
         if self.watcher:
             self.watcher.start()
+        self.listener = listener(self._wake, self.bridge.heard.emit, self.bridge.note.emit) \
+            if listener else None
+        if self.listener and not self.listener.start():
+            self.listener = None
         QTimer.singleShot(0, self._maybe_digest)
 
     def _build(self) -> None:
         self.setWindowTitle("Robo")
         self.setStyleSheet(STYLE)
-        self.resize(380, 560)
-        self.face = FaceWidget(self)
-        self.face.setMinimumHeight(220)
+        if self.floating:
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint
+                                | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.panel = QFrame(objectName="panel")
+        self.panel.setFixedWidth(BUBBLE_W)
+        self.heard = QLabel("", objectName="heard", wordWrap=True)
         self.status = QLabel("", objectName="status")
         self.bubble = QTextBrowser(openExternalLinks=True)
-        self.bubble.setPlaceholderText("Ask me anything - or press 📚 for today's school digest.")
+        self.bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Resize after the document finished laying out (resizing inside its signal re-enters
+        # the text layout and aborts); one timer also coalesces a burst of streamed deltas.
+        self.sizer = QTimer(self, singleShot=True, interval=0, timeout=self._size_text)
+        self.bubble.document().contentsChanged.connect(self.sizer.start)
         self.approval_text = QLabel(wordWrap=True)
-        self.allow, self.deny = QPushButton("Allow once"), QPushButton("Deny")
-        self.allow.clicked.connect(lambda: self._approve(True))
-        self.deny.clicked.connect(lambda: self._approve(False))
+        self.allow, self.deny = QPushButton("Allow"), QPushButton("Deny")
+        self.allow_today = QPushButton("Allow today", toolTip="Allow this same kind of action "
+                                       "for the rest of today's chat")
+        self.allow.clicked.connect(lambda: self._approve("once"))
+        self.allow_today.clicked.connect(lambda: self._approve("session"))
+        self.deny.clicked.connect(lambda: self._approve("deny"))
         self.approval = QWidget()
-        row = QHBoxLayout(self.approval)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(self.approval_text, 1)
-        row.addWidget(self.allow)
-        row.addWidget(self.deny)
+        box = QVBoxLayout(self.approval)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(self.approval_text)
+        row = QHBoxLayout()
+        for button in (self.allow, self.allow_today, self.deny):
+            row.addWidget(button)
+        box.addLayout(row)
         self.approval.hide()
-        self.input = QLineEdit(placeholderText="Type and press Enter (Esc stops)")
+        self.menu = QWidget()  # right-click: robo's menu inside its bubble (a popup menu needs
+        menu_row = QHBoxLayout(self.menu)  # a pointer grab XWayland refuses a Tool window)
+        menu_row.setContentsMargins(0, 0, 0, 0)
+        for label, fn in (("📚 Digest", lambda: self.ask(DIGEST_PROMPT)), ("⌨ Type", self._type),
+                          ("📌 Stay", self._toggle_stay), ("✕ Quit", self.close)):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, fn=fn: (self._hide_menu(), fn()))
+            menu_row.addWidget(button)
+        self.menu.hide()
+        self.input = QLineEdit(placeholderText="Type and press Enter")
         self.input.returnPressed.connect(self.send)
-        digest = QPushButton("📚", toolTip="Today's school digest")
-        digest.clicked.connect(lambda: self.ask(DIGEST_PROMPT))
-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self.stop)
-        bottom = QHBoxLayout()
-        bottom.addWidget(self.input, 1)
-        bottom.addWidget(digest)
+        self.input.setVisible(not self.floating)  # floating: voice, or "Type a message…"
+        inner = QVBoxLayout(self.panel)
+        for w in (self.menu, self.heard, self.status, self.bubble, self.approval, self.input):
+            inner.addWidget(w)
+        self.face = FaceWidget(self, radius=22 if self.floating else 0)
+        self.face.setFixedSize(*FACE) if self.floating else self.face.setMinimumHeight(220)
+        self.face.installEventFilter(self)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self._escape)
         layout = QVBoxLayout(self)
-        layout.addWidget(self.face, 3)
-        layout.addWidget(self.status)
-        layout.addWidget(self.bubble, 2)
-        layout.addWidget(self.approval)
-        layout.addLayout(bottom)
+        layout.setContentsMargins(*(4,) * 4 if self.floating else (9,) * 4)
+        layout.addWidget(self.panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.face, 0, Qt.AlignmentFlag.AlignHCenter)
+        if self.floating:
+            self._fit(self.panel.hide)
+        else:
+            self.resize(380, 560)
 
     # --- talking to Hermes ---------------------------------------------------------------
 
@@ -131,6 +192,8 @@ class RoboWindow(QWidget):
         # One Hermes session per day and persona version (see setup.persona_stamp).
         self.session_id = "-".join(filter(None, ("robo", day.isoformat(), self.persona)))
         self.digest_day = day if text == DIGEST_PROMPT else None
+        self.heard.setText("" if self.digest_day else f"You: {text}")
+        self.bubble.clear()
         self._on_event(UserSent(text))
         threading.Thread(target=self._work, args=(text, wait_network), daemon=True).start()
 
@@ -151,7 +214,7 @@ class RoboWindow(QWidget):
             emit(RunEnded("failed", error=f"Something went wrong: {e}"))
 
     def _started(self, run_id: str) -> None:
-        """Worker thread: the run exists now; stop it at once if Esc came first."""
+        """Worker thread: the run exists now; stop it at once if a stop came first."""
         with self.lock:
             self.run_id, cancel = run_id, self.cancel
         if cancel:
@@ -166,10 +229,10 @@ class RoboWindow(QWidget):
         if run_id:
             self._background(self.client.stop, run_id)
 
-    def _approve(self, allow: bool) -> None:
+    def _approve(self, choice: str) -> None:
         self.approval.hide()
         if self.run_id:
-            self._background(self.client.approve, self.run_id, allow)
+            self._background(self.client.approve, self.run_id, choice)
 
     def _background(self, fn, *args) -> None:
         def call():
@@ -177,18 +240,45 @@ class RoboWindow(QWidget):
                 fn(*args)
         threading.Thread(target=call, daemon=True).start()
 
+    # --- voice ---------------------------------------------------------------------------
+
+    def _wake(self) -> None:
+        """Listener thread: the wake word (or a click) - robo listens."""
+        self.bridge.event.emit(Listening(True))
+
+    def _on_heard(self, text: str) -> None:
+        self._on_event(Listening(False))
+        if text.strip():
+            self.ask(text.strip())
+        elif not self.busy:
+            self._say("Sorry, I didn't catch that.")
+
+    def _say(self, text: str) -> None:
+        """Show a short local message (no model involved)."""
+        self.heard.setText("")
+        self.bubble.setMarkdown(text)
+        self._open(close_after=8.0)
+
     # --- UI thread -----------------------------------------------------------------------
 
     def _on_event(self, ev: Event) -> None:
         self.mind = minds.react(self.mind, ev, time.monotonic())
         match ev:
+            case Listening(on=True):
+                self.stop()  # speaking over robo interrupts its answer
+                self.heard.setText("")
+                self.bubble.clear()
+                self._open()
+            case UserSent():
+                self._open()
             case Delta(text=t):
                 self.reply += t
                 self.bubble.setMarkdown(self.reply)
                 self.bubble.moveCursor(self.bubble.textCursor().MoveOperation.End)
             case ApprovalNeeded(description=d):
-                self.approval_text.setText(f"Hermes asks to: {d}")
+                self.approval_text.setText(f"Allow? {d}")
                 self.approval.show()
+                self._open()
             case RunEnded(status=status, output=out, error=err):
                 with self.lock:
                     self.busy, self.run_id = False, None
@@ -198,23 +288,167 @@ class RoboWindow(QWidget):
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
                 self.digest_day = None
+                self._open(close_after=CLOSE_AFTER)
         self._show()
 
     def _tick(self) -> None:
-        self.mind = minds.tick(self.mind, time.monotonic())
+        now = time.monotonic()
+        self.mind = minds.tick(self.mind, now)
+        if self.close_at and now >= self.close_at and not self.busy:
+            if self.panel.underMouse():
+                self.close_at = now + 5
+            else:
+                self._close_bubble()
         self._show()
 
     def _show(self) -> None:
         m = self.mind
         self.face.set_state(m.activity, m.emotion, m.talking)
-        self.status.setText(m.label)
+        waiting = self.busy and not self.reply or m.activity == "listening"
+        dots = "." * (1 + int(time.monotonic() * 3) % 3) if waiting else ""
+        label = m.label.rstrip("…") or ("thinking" if waiting else "")
+        self.status.setText(f"{label}{dots}" if label else "")
+        self.status.setVisible(bool(self.status.text()))
+        self.heard.setVisible(bool(self.heard.text()))
+
+    def _size_text(self) -> None:
+        """The reply area is as tall as its text (up to TEXT_MAX, then it scrolls)."""
+        if not self.floating:
+            return
+        doc = self.bubble.document()
+        doc.setTextWidth(self.bubble.viewport().width() or BUBBLE_W - 30)
+        height = min(int(doc.size().height()) + 12, TEXT_MAX) if not doc.isEmpty() else 0
+        if height != self.bubble.height() or self.bubble.isHidden() != (height == 0):
+            def resize() -> None:
+                self.bubble.setFixedHeight(height)
+                self.bubble.setVisible(height > 0)
+            self._fit(resize)
+
+    def _open(self, close_after: float = 0.0) -> None:
+        self.close_at = time.monotonic() + close_after if close_after else 0.0
+        if self.panel.isHidden():
+            self._fit(self.panel.show)
+
+    def _close_bubble(self) -> None:
+        self.close_at = 0.0
+        self.menu.hide()
+        if self.floating and not self.panel.isHidden():
+            self._fit(self.panel.hide)
+
+    def _fit(self, change: Callable[[], None]) -> None:
+        """Apply `change` (show/hide the bubble) and resize, keeping the face where it is."""
+        face = self.pos() + self.face.pos()  # before `change`: Qt moves the face at once
+        change()
+        if not self.floating:
+            return
+        self.layout().activate()
+        self.setFixedSize(self.layout().totalSizeHint())
+        self.layout().setGeometry(self.rect())  # place the children now, not at the next event
+        if self.roamer:
+            self.roamer.resize((self.width(), self.height()))
+            self.roamer.pos = (face.x() - self.face.x(), face.y() - self.face.y())
+            self.roamer.resize((self.width(), self.height()))  # and keep it on screen
+            self.move(*map(int, self.roamer.pos))
+
+    def _roam(self) -> None:
+        engaged = self.busy or not self.panel.isHidden() or self.press is not None
+        x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged)
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802 - Qt override
+        """Face: click = listen (or open the bubble), drag = move robo and leave it there."""
+        if obj is not self.face:
+            return False
+        kind = ev.type()
+        button = getattr(ev, "button", lambda: None)()
+        left = button == Qt.MouseButton.LeftButton
+        if kind == ev.Type.MouseButtonPress and button == Qt.MouseButton.RightButton:
+            self._show_menu()
+        elif kind == ev.Type.MouseButtonPress and left:
+            self.press, self.dragged = ev.globalPosition().toPoint(), False
+            self.grab_at = self.press - self.pos()
+        elif kind == ev.Type.MouseMove and self.press is not None:
+            here = ev.globalPosition().toPoint()
+            if self.dragged or (here - self.press).manhattanLength() > DRAG:
+                self.dragged = True
+                if self.floating and self._system_move():
+                    self.press, self.moving = None, True  # Mutter moves it; see moveEvent
+                elif self.floating:
+                    self.move(here - self.grab_at)
+        elif kind == ev.Type.MouseButtonRelease and left and self.press is not None:
+            if self.dragged and self.roamer:
+                self.roamer.hold(time.monotonic(), (self.x(), self.y()))
+            elif not self.dragged:
+                self._clicked()
+            self.press = None
+        else:
+            return False
+        return True
+
+    def _system_move(self) -> bool:
+        """Let the compositor drag the window (XWayland ignores client moves mid-drag)."""
+        handle = self.windowHandle()
+        return bool(handle and handle.startSystemMove())
+
+    def moveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if self.moving and self.roamer:
+            self.roamer.hold(time.monotonic(), (self.x(), self.y()))
+        super().moveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.moving = False  # a compositor drag ends before the next press reaches us
+        super().mousePressEvent(event)
+
+    def _show_menu(self) -> None:
+        self.menu.findChildren(QPushButton)[2].setText(
+            "🚶 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
+            else "📌 Stay")
+        self._fit(self.menu.show)
+        self._open(close_after=8.0)
+
+    def _hide_menu(self) -> None:
+        if not self.menu.isHidden():
+            self._fit(self.menu.hide)
+
+    def _clicked(self) -> None:
+        if not self.busy and not self.panel.isHidden() and self.close_at:
+            self._close_bubble()
+        elif self.listener and not self.busy:
+            self.listener.listen_now()
+            self._on_event(Listening(True))  # show it at once; the listener has no wake event
+        elif not self.busy:
+            self._type()
+
+    def _type(self) -> None:
+        """A small window of its own: XWayland never focuses robo's Tool window."""
+        self.typer = QInputDialog(None, Qt.WindowType.WindowStaysOnTopHint)
+        self.typer.setWindowTitle("Ask robo")
+        self.typer.setLabelText("Ask robo:")
+        self.typer.setStyleSheet("QWidget { background: #0e1422; color: #d8e6ff; }")
+        self.typer.textValueSelected.connect(lambda text: text.strip() and self.ask(text.strip()))
+        self.typer.show()
+        self.typer.raise_()
+        self.typer.activateWindow()
+
+    def _toggle_stay(self) -> None:
+        if not self.roamer:
+            return
+        stay = self.roamer.held_until > time.monotonic() + 3600
+        self.roamer.hold(time.monotonic(), (self.x(), self.y()), seconds=0 if stay else 10**9)
+
+    def _escape(self) -> None:
+        if self.busy:
+            self.stop()
+        else:
+            self._close_bubble()
 
     def _maybe_digest(self) -> None:
         if self.clock.due(self.today()) and not self.busy:
             self.ask(DIGEST_PROMPT, wait_network=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        """Never leave a run (maybe browsing school sites) going with nobody watching."""
+        """Never leave a run (maybe acting on the laptop) going with nobody watching."""
         with self.lock:
             run_id = self.run_id if self.busy else None
             self.cancel = self.busy
@@ -223,4 +457,7 @@ class RoboWindow(QWidget):
                 self.client.stop(run_id)
         if self.watcher:
             self.watcher.stop()
+        if self.listener:
+            self.listener.stop()
         super().closeEvent(event)
+        QGuiApplication.quit()

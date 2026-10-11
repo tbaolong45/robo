@@ -8,6 +8,7 @@ Hermes runs one host gateway for every profile; a profile's API is the host's AP
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -189,17 +190,25 @@ def setup(
 
 
 # robo's profile config, applied with `hermes -p robo config set` (which refuses unknown keys).
+TOOLSETS = ["browser", "web", "vision", "skills", "memory", "todo", "terminal", "file",
+            "computer_use", "code_execution"]
 CONFIG: dict[str, str] = {
     "model.provider": "anthropic",
     "model.default": "claude-sonnet-5.5",
-    # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server": no terminal,
-    # no file writes, no code execution, no page fetching outside the guarded browser ("search",
-    # not "web": web_extract could post school content to any URL).
-    "platform_toolsets.api_server": '["browser", "search", "skills"]',
-    # Nothing a page says (e.g. a malicious email) may persist into later sessions: no memory,
-    # no self-written or self-edited skills, no curator archiving robo's skills.
-    "memory.memory_enabled": "false",
-    "memory.user_profile_enabled": "false",
+    # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server". The user gave
+    # robo the whole laptop: apps (computer_use), terminal, files, browser, web.
+    "platform_toolsets.api_server": json.dumps(TOOLSETS),
+    # Risky actions wait for Allow/Deny in robo's bubble (Hermes approvals for terminal/file/
+    # computer actions; robo-guard's approve directive for browser writes). "manual" = always ask
+    # for a flagged action, never an auto-approving guardian model.
+    "approvals.mode": "manual",
+    "approvals.timeout": "300",
+    # GNOME Wayland: the native backend has no target-activation adapter here (`hermes
+    # computer-use doctor`), so robo drives X11/XWayland windows; SOUL.md says how to open apps so.
+    "computer_use.native_wayland": "false",
+    "memory.memory_enabled": "true",
+    "memory.user_profile_enabled": "true",
+    # robo's own skills are installed by `robo setup`: nothing rewrites or archives them.
     "auxiliary.background_review.enabled": "false",
     "curator.enabled": "false",
     # "off" keeps the built-in browser_* tools that robo-guard can judge; unset would pick the

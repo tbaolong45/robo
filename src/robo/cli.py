@@ -4,6 +4,7 @@ school sign-ins, `robo chat` is a text-only debug REPL."""
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -55,13 +56,24 @@ def chat() -> int:
 
 
 def window() -> int:
+    """The floating robo: on GNOME Wayland it runs through XWayland, the only way a window can
+    place itself and stay on top; voice in through robo.listen."""
+    if os.environ.get("DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
     from PySide6.QtWidgets import QApplication
 
     from robo.app import RoboWindow
+    from robo.listen import Listener
     from robo.wake import DigestClock
 
     app = QApplication(sys.argv)
-    win = RoboWindow(_client(), DigestClock(STATE), persona=setup.persona_stamp())
+    app.setQuitOnLastWindowClosed(False)  # a Tool window and dialogs come and go; Quit quits
+    floating = app.platformName() == "xcb"
+    if not floating:
+        print("robo: XWayland unavailable, so robo opens as a normal window "
+              "(sudo apt install libxcb-cursor0 for the floating face).", file=sys.stderr)
+    win = RoboWindow(_client(), DigestClock(STATE), persona=setup.persona_stamp(),
+                     floating=floating, listener=Listener)
     win.show()
     return app.exec()
 

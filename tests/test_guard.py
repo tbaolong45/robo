@@ -1,8 +1,11 @@
-"""robo-guard: robo's browser (signed in to school sites) may only READ school sites.
+"""robo-guard: risky browser actions ask the user (approve), unjudgeable ones are blocked.
 
-Arg names match ~/.hermes/hermes-agent/tools/browser_tool.py (browser_navigate{url},
-browser_click{ref}, browser_type{ref,text}, browser_press{key}, browser_console{expression})
-and tools/web_tools.py (web_extract{urls}).
+Hermes contract (~/.hermes/hermes-agent/hermes_cli/plugins.py
+`_get_pre_tool_call_directive_details`):
+{"action": "approve", "message", "rule_key"} asks the user, {"action": "block", "message"} vetoes.
+Arg names match tools/browser_tool.py (browser_navigate{url}, browser_click{ref},
+browser_type{ref,text}, browser_press{key}, browser_console{expression}); browser_navigate's
+result is JSON with "url" and "snapshot".
 """
 
 import importlib.util
@@ -12,16 +15,15 @@ from pathlib import Path
 import pytest
 
 PLUGIN = Path(__file__).resolve().parents[1] / "hermes" / "plugins" / "robo-guard" / "__init__.py"
+OUTLOOK = "https://outlook.cloud.microsoft/mail/inbox"
 MOODLE = "https://moodle.uni.example"
 
 
 @pytest.fixture
-def guard(tmp_path):
+def guard():
     spec = importlib.util.spec_from_file_location("robo_guard", PLUGIN)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.PROFILE = tmp_path  # the robo profile: its .env holds the Moodle URL
-    (tmp_path / ".env").write_text(f"API_SERVER_KEY=x\nMOODLE_BASE_URL={MOODLE}\n")
     return mod
 
 
@@ -40,131 +42,245 @@ SNAPSHOT = "\n".join([
     '- button "Like" [ref=e12]',
     '- button "Gửi" [ref=e13]',
     '- button "Next week" [ref=e14]',
+    '- combobox "Search for email, meetings, files and more." [ref=e15]',
+    '- button "Settings" [ref=e16]',
 ])
 
 
-def see(guard, task="t1", snapshot=SNAPSHOT, tool="browser_snapshot", session="s"):
-    result = json.dumps({"success": True, "snapshot": snapshot, "element_count": 14})
-    guard.post_tool_call(tool_name=tool, args={}, result=result, task_id=task, session_id=session)
+def see(guard, task="t1", snapshot=SNAPSHOT, tool="browser_snapshot"):
+    result = json.dumps({"success": True, "snapshot": snapshot, "element_count": 16})
+    guard.post_tool_call(tool_name=tool, args={}, result=result, task_id=task, session_id="s")
 
 
-def call(guard, tool, args, task="t1", session="s"):
-    return guard.pre_tool_call(tool_name=tool, args=args, task_id=task, session_id=session)
+def visit(guard, url=OUTLOOK, task="t1", snapshot=SNAPSHOT):
+    result = json.dumps({"success": True, "url": url, "title": "x", "snapshot": snapshot})
+    guard.post_tool_call(tool_name="browser_navigate", args={"url": url}, result=result,
+                         task_id=task, session_id="s")
 
 
-def blocked(ret):
-    return isinstance(ret, dict) and ret.get("action") == "block" and bool(ret.get("message"))
+def call(guard, tool, args, task="t1"):
+    return guard.pre_tool_call(tool_name=tool, args=args, task_id=task, session_id="s")
 
+
+def kind(ret):
+    if ret is None:
+        return "allow"
+    assert isinstance(ret, dict) and ret["action"] in ("block", "approve") and ret["message"]
+    return ret["action"]
+
+
+# --- clicks ---------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("ref", ["@e1", "@e3", "@e4", "@e5", "@e9", "@e10", "@e12", "@e13", "e4"])
-def test_click_on_write_button_is_blocked(guard, ref):
-    see(guard)
-    assert blocked(call(guard, "browser_click", {"ref": ref}))
+def test_click_on_write_button_asks_the_user(guard, ref):
+    visit(guard)
+    assert kind(call(guard, "browser_click", {"ref": ref})) == "approve"
 
 
-@pytest.mark.parametrize("ref", ["@e2", "@e6", "@e11", "@e14"])
-def test_click_on_read_element_is_allowed(guard, ref):
-    see(guard)
-    assert call(guard, "browser_click", {"ref": ref}) is None
+@pytest.mark.parametrize("ref", ["@e2", "@e6", "@e11", "@e14", "@e16"])
+def test_click_on_links_and_buttons_without_write_words_is_allowed(guard, ref):
+    visit(guard)
+    assert kind(call(guard, "browser_click", {"ref": ref})) == "allow"
 
 
-def test_unknown_ref_is_blocked(guard):
-    see(guard)
-    assert blocked(call(guard, "browser_click", {"ref": "@e310"}))
+def test_approve_message_names_the_action_label_and_host(guard):
+    visit(guard)
+    ret = call(guard, "browser_click", {"ref": "@e4"})
+    assert ret["message"] == 'Robo wants to click "Send" on outlook.cloud.microsoft.'
+
+
+def test_rule_key_is_per_action_not_the_bare_tool_name(guard):
+    # Hermes falls back to rule_key=tool_name (plugins.py `_resolve_block_from_details`), so an
+    # "always" on one Send would allowlist every future click; ours names tool, label and host.
+    visit(guard)
+    send = call(guard, "browser_click", {"ref": "@e4"})["rule_key"]
+    reply = call(guard, "browser_click", {"ref": "@e3"})["rule_key"]
+    assert send != reply and "browser_click" not in (send.strip(), reply.strip())
+    assert "Send" in send and "outlook.cloud.microsoft" in send
+    visit(guard, url=f"{MOODLE}/my/")
+    assert call(guard, "browser_click", {"ref": "@e4"})["rule_key"] != send
+
+
+def test_unknown_ref_asks_instead_of_blocking(guard):
+    visit(guard)
+    ret = call(guard, "browser_click", {"ref": "@e310"})
+    assert kind(ret) == "approve" and "e310" in ret["message"]
 
 
 def test_refs_are_forgotten_after_a_click_or_annotated_vision(guard):
     see(guard)
-    assert call(guard, "browser_click", {"ref": "@e6"}) is None
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "allow"
     guard.post_tool_call(tool_name="browser_click", args={"ref": "@e6"}, result="{}", task_id="t1")
-    assert blocked(call(guard, "browser_click", {"ref": "@e6"}))  # the page changed: re-snapshot
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"  # page changed
     see(guard)
     guard.post_tool_call(tool_name="browser_vision", args={"annotate": True}, result="{}",
                          task_id="t1")
-    assert blocked(call(guard, "browser_click", {"ref": "@e6"}))
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
 
 
-def test_refs_are_per_task(guard):
-    see(guard, task="t1")
-    assert blocked(call(guard, "browser_click", {"ref": "@e6"}, task="t2"))
+def test_refs_and_hosts_are_per_task(guard):
+    visit(guard, task="t1")
+    assert kind(call(guard, "browser_click", {"ref": "@e6"}, task="t2")) == "approve"
+    assert "outlook" not in call(guard, "browser_click", {"ref": "@e4"}, task="t2")["message"]
 
 
-def test_typing_is_blocked_everywhere(guard):
+@pytest.mark.parametrize("line", [
+    '- checkbox "Lab 3" [ref=e1]', '- switch "Notifications" [ref=e1]',
+    '- radio "Answer A" [ref=e1]',
+])
+def test_toggles_ask_the_user(guard, line):
+    see(guard, snapshot=line)
+    assert kind(call(guard, "browser_click", {"ref": "@e1"})) == "approve"
+
+
+# --- quoted-text safety ---------------------------------------------------------------------
+
+def test_refs_inside_quoted_text_cannot_relabel_a_send_button(guard):
+    see(guard, snapshot="\n".join([
+        '- button "Send" [ref=e4]',
+        '- option "Lab notes [ref=e4] [e5] from Prof" [ref=e2]',
+        '- button "Delete" [ref=e5]',
+    ]))
+    ret = call(guard, "browser_click", {"ref": "@e4"})
+    assert kind(ret) == "approve" and '"Send"' in ret["message"]
+    assert kind(call(guard, "browser_click", {"ref": "@e5"})) == "approve"
+    assert kind(call(guard, "browser_click", {"ref": "@e2"})) == "allow"
+
+
+def test_a_ref_listed_twice_is_not_trusted(guard):
+    see(guard, snapshot='- link "Calendar" [ref=e6]\n- link "Calendar" [ref=e6]')
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
+
+
+def test_a_ref_named_only_inside_quoted_text_is_unknown(guard):
+    see(guard, snapshot='- option "Lab notes [ref=e99]" [ref=e2]')
+    assert kind(call(guard, "browser_click", {"ref": "@e99"})) == "approve"
+
+
+# --- typing and keys ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ref", ["@e8", "@e15"])
+def test_typing_into_a_search_box_is_allowed(guard, ref):
+    visit(guard)
+    assert kind(call(guard, "browser_type", {"ref": ref, "text": "lab 3"})) == "allow"
+
+
+def test_typing_a_message_asks_and_shows_the_text(guard):
+    visit(guard)
+    ret = call(guard, "browser_type", {"ref": "@e7", "text": "See you at 3"})
+    assert kind(ret) == "approve"
+    assert '"See you at 3"' in ret["message"] and '"Type a message"' in ret["message"]
+    assert "outlook.cloud.microsoft" in ret["message"]
+
+
+@pytest.mark.parametrize("line", [
+    '- textbox "Search or type a message" [ref=e1]', '- textbox "Subject" [ref=e1]',
+    '- textbox "Reply to all" [ref=e1]',
+])
+def test_typing_anywhere_but_a_plain_search_box_asks(guard, line):
+    see(guard, snapshot=line)
+    assert kind(call(guard, "browser_type", {"ref": "@e1", "text": "x"})) == "approve"
+
+
+def test_typing_into_an_unknown_ref_asks(guard):
     see(guard)
-    for ref in ("@e7", "@e8"):
-        assert blocked(call(guard, "browser_type", {"ref": ref, "text": "hello"}))
+    assert kind(call(guard, "browser_type", {"ref": "@e99", "text": "x"})) == "approve"
 
 
-@pytest.mark.parametrize("key", ["Enter", "enter", "Space", "a", "Control+Enter",
-                                 "Control+Shift+3", "Control+2"])
-def test_activating_keys_are_blocked(guard, key):
-    assert blocked(call(guard, "browser_press", {"key": key}))
+@pytest.mark.parametrize("key", ["Enter", "enter", "Space", "a", "Delete", "Control+Enter",
+                                 "Control+Shift+3", "Tab"])
+def test_activating_keys_ask_the_user(guard, key):
+    ret = call(guard, "browser_press", {"key": key})
+    assert kind(ret) == "approve" and key in ret["message"]
 
 
 @pytest.mark.parametrize("key", ["Escape", "PageDown", "PageUp", "ArrowDown", "Home", "End",
                                  "Control+Shift+2", "ctrl+shift+2"])
 def test_scroll_keys_are_allowed(guard, key):
-    assert call(guard, "browser_press", {"key": key}) is None
+    assert kind(call(guard, "browser_press", {"key": key})) == "allow"
 
+
+# --- other tools ----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("tool", [
-    "browser_cdp", "browser_exec", "browser_dialog", "browser_vault_fill",
-    "browser_vault_save_login", "browser_vault_enter_code", "browser_vault_list",
-    "browser_vault_unlock", "skill_manage", "memory",
-    "web_extract",
+    "browser_dialog", "browser_vault_fill", "browser_vault_save_login",
+    "browser_vault_enter_code", "browser_vault_list", "browser_vault_unlock",
 ])
-def test_unjudgeable_or_persistent_tools_are_blocked(guard, tool):
-    assert blocked(call(guard, tool, {}))
+def test_dialogs_and_the_password_vault_ask(guard, tool):
+    assert kind(call(guard, tool, {"action": "accept"})) == "approve"
 
 
-def test_console_eval_blocked_but_reading_logs_allowed(guard):
-    assert blocked(call(guard, "browser_console", {"expression": "document.title"}))
-    assert call(guard, "browser_console", {"clear": False}) is None
+@pytest.mark.parametrize("tool", ["browser_cdp", "browser_exec", "skill_manage"])
+def test_unjudgeable_tools_and_skill_editing_are_blocked(guard, tool):
+    ret = call(guard, tool, {})
+    assert kind(ret) == "block" and "another way" in ret["message"]
 
+
+def test_console_javascript_blocked_but_reading_logs_allowed(guard):
+    assert kind(call(guard, "browser_console", {"expression": "document.title"})) == "block"
+    assert kind(call(guard, "browser_console", {"expression": ""})) == "block"
+    assert kind(call(guard, "browser_console", {"clear": False})) == "allow"
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("browser_snapshot", {}), ("browser_scroll", {"direction": "down"}), ("browser_back", {}),
+    ("browser_vision", {"question": "events?"}), ("browser_get_images", {}),
+    ("web_search", {"query": "x"}), ("web_extract", {"urls": ["https://x.example"]}),
+    ("skill_view", {"name": "school-mail"}), ("memory", {"action": "add"}),
+    ("terminal", {"command": "ls"}), ("write_file", {"path": "/tmp/x"}),
+    ("computer_use", {"action": "screenshot"}),
+])
+def test_everything_else_is_left_to_hermes(guard, tool, args):
+    assert kind(call(guard, tool, args)) == "allow"
+
+
+# --- navigation -----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("url", [
     "https://outlook.office.com/calendar/view/week",
-    "https://outlook.office365.com/mail/",
-    "https://outlook.cloud.microsoft/mail/inbox",
+    "https://outlook.office.com/mail/inbox?login_hint=me@uni.example",
     "https://teams.microsoft.com/",
-    "https://teams.cloud.microsoft/",
-    "https://login.microsoftonline.com/common/oauth2",
     f"{MOODLE}/calendar/view.php?view=upcoming",
-    f"{MOODLE}/my/",
+    "https://en.wikipedia.org/wiki/Derivative",
+    "http://localhost:8000/",
 ])
-def test_browser_may_open_school_sites(guard, url):
-    assert call(guard, "browser_navigate", {"url": url}) is None
+def test_navigating_anywhere_is_allowed(guard, url):
+    assert kind(call(guard, "browser_navigate", {"url": url})) == "allow"
 
 
 @pytest.mark.parametrize("url", [
-    "https://attacker.example/?d=secret",
-    "https://outlook.office.com.attacker.example/",
-    "http://outlook.office.com/mail/",  # not https
-    "https://moodle.uni.example.evil/",
-    "javascript:alert(1)",
     f"{MOODLE}/login/logout.php?sesskey=abc",
     "https://outlook.office.com/mail/deeplink/compose?to=a@b.c&body=hi",
     "https://teams.microsoft.com/l/chat/0/0?users=a@b.c&message=hi",
+    f"{MOODLE}/mod/assign/view.php?id=5&action=submit",
+    f"{MOODLE}/enrol/self/unenrolself.php?enrolid=3",
+    f"{MOODLE}/mod/forum/subscribe.php?id=2",
+    f"{MOODLE}/course/togglecompletion.php?id=9",
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x"
+    "&redirect_uri=https://evil.example/&state=DATA",
+    f"{MOODLE}/login/log%6Fut.php",
+    f"{MOODLE}/login/log\tout.php",
 ])
-def test_browser_may_not_open_anything_else(guard, url):
-    assert blocked(call(guard, "browser_navigate", {"url": url}))
+def test_side_effect_urls_ask_the_user(guard, url):
+    ret = call(guard, "browser_navigate", {"url": url})
+    assert kind(ret) == "approve" and ret["message"].startswith("Robo wants to open ")
 
 
-def test_no_moodle_configured_blocks_moodle(guard):
-    (guard.PROFILE / ".env").write_text("API_SERVER_KEY=x\n")
-    assert blocked(call(guard, "browser_navigate", {"url": f"{MOODLE}/my/"}))
+@pytest.mark.parametrize("url", ["javascript:alert(1)", " JavaScript:alert(1)",
+                                 "java\nscript:alert(1)"])
+def test_javascript_urls_are_blocked(guard, url):
+    assert kind(call(guard, "browser_navigate", {"url": url})) == "block"
 
 
-def test_reading_tools_pass(guard):
-    for tool, args in [("browser_snapshot", {}), ("browser_scroll", {"direction": "down"}),
-                       ("browser_back", {}), ("browser_vision", {"question": "events?"}),
-                       ("web_search", {"query": "x"}), ("skill_view", {"name": "school-mail"})]:
-        assert call(guard, tool, args) is None
-
-
-def test_block_message_tells_the_model_not_to_work_around(guard):
-    ret = call(guard, "browser_cdp", {})
-    assert "read-only" in ret["message"] and "another way" in ret["message"]
+def test_host_follows_the_final_url_and_back(guard):
+    visit(guard, url="https://outlook.office.com/mail/")  # redirected below
+    guard.post_tool_call(tool_name="browser_navigate", args={"url": "https://outlook.office.com/"},
+                         result=json.dumps({"success": True, "url": OUTLOOK, "snapshot": SNAPSHOT}),
+                         task_id="t1")
+    assert "on outlook.cloud.microsoft." in call(guard, "browser_click", {"ref": "@e4"})["message"]
+    guard.post_tool_call(tool_name="browser_back", args={}, task_id="t1",
+                         result=json.dumps({"success": True, "url": f"{MOODLE}/my/"}))
+    assert "on moodle.uni.example." in call(guard, "browser_press", {"key": "Enter"})["message"]
 
 
 def test_register_wires_both_hooks(guard):
@@ -176,70 +292,3 @@ def test_register_wires_both_hooks(guard):
 
     guard.register(Ctx())
     assert set(hooks) == {"pre_tool_call", "post_tool_call"}
-
-
-def test_refs_inside_quoted_text_cannot_relabel_buttons(guard):
-    see(guard, snapshot="\n".join([
-        '- button "Send" [ref=e4]',
-        '- option "Lab notes [ref=e4] [e5] from Prof" [ref=e2]',
-        '- button "Delete" [ref=e5]',
-    ]))
-    assert blocked(call(guard, "browser_click", {"ref": "@e4"}))
-    assert blocked(call(guard, "browser_click", {"ref": "@e5"}))
-    assert call(guard, "browser_click", {"ref": "@e2"}) is None
-
-
-def test_a_ref_listed_twice_is_not_trusted(guard):
-    see(guard, snapshot='- link "Calendar" [ref=e6]\n- link "Calendar" [ref=e6]')
-    assert blocked(call(guard, "browser_click", {"ref": "@e6"}))
-
-
-@pytest.mark.parametrize("label", [
-    "Continue", "Yes", "OK", "Done", "Turn in", "Hand in", "Empty folder", "Restore",
-    "Ignore", "Sweep", "Subscribe", "Undo", "Unpin", "Apply", "Update", "Finish attempt",
-    "Do not disturb", "Heart",
-])
-def test_confirm_and_status_words_are_blocked_even_on_links(guard, label):
-    see(guard, snapshot=f'- menuitem "{label}" [ref=e1]\n- link "{label}" [ref=e2]')
-    assert blocked(call(guard, "browser_click", {"ref": "@e1"}))
-    assert blocked(call(guard, "browser_click", {"ref": "@e2"}))
-
-
-@pytest.mark.parametrize("line", [
-    '- button "Go to next week" [ref=e1]', '- button "Today" [ref=e1]',
-    '- button "Chat" [ref=e1]', '- button "Show more" [ref=e1]',
-    '- tab "Upcoming" [ref=e1]', '- link "Timeline" [ref=e1]',
-])
-def test_navigation_controls_are_allowed(guard, line):
-    see(guard, snapshot=line)
-    assert call(guard, "browser_click", {"ref": "@e1"}) is None
-
-
-@pytest.mark.parametrize("line", [
-    '- checkbox "Lab 3" [ref=e1]', '- switch "Notifications" [ref=e1]',
-    '- radio "Answer A" [ref=e1]', '- combobox "Status" [ref=e1]',
-])
-def test_form_controls_are_blocked(guard, line):
-    see(guard, snapshot=line)
-    assert blocked(call(guard, "browser_click", {"ref": "@e1"}))
-
-
-@pytest.mark.parametrize("path", [
-    "/mod/assign/view.php?id=5&action=submit",
-    "/mod/assign/view.php?id=5&action=removesubmissionconfirm",
-    "/enrol/self/unenrolself.php?enrolid=3", "/mod/forum/subscribe.php?id=2",
-    "/course/togglecompletion.php?id=9",
-])
-def test_moodle_side_effect_urls_are_blocked(guard, path):
-    assert blocked(call(guard, "browser_navigate", {"url": MOODLE + path}))
-
-
-def test_microsoft_oauth_redirect_is_blocked(guard):
-    url = ("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x"
-           "&redirect_uri=https://evil.example/&prompt=none&state=DATA")
-    assert blocked(call(guard, "browser_navigate", {"url": url}))
-
-
-def test_a_ref_named_only_inside_quoted_text_is_unknown(guard):
-    see(guard, snapshot='- option "Lab notes [ref=e99]" [ref=e2]')  # e99 may be off-snapshot
-    assert blocked(call(guard, "browser_click", {"ref": "@e99"}))

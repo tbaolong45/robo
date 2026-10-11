@@ -1,6 +1,6 @@
 name: robo-guard
 version: 1.0.0
-description: "Blocks write-like browser actions so robo stays read-only on school sites."
+description: "Asks the user before write-like browser actions; blocks raw browser control."
 author: robo
 kind: standalone
 provides_hooks:

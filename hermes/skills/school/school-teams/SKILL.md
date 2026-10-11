@@ -1,6 +1,6 @@
 ---
 name: school-teams
-description: "Scan Teams web chats for course news, read-only."
+description: "Read Teams web chats for course news; post when asked."
 version: 1.0.0
 author: robo
 metadata:
@@ -10,7 +10,7 @@ metadata:
     related_skills: [school-digest]
 ---
 
-# School Teams (chat list, read-only)
+# School Teams (chats)
 
 ## When to Use
 The user asks about Teams messages or announcements, or the digest needs Teams highlights.
@@ -28,13 +28,14 @@ Course announcements live in CHATS, not in teams or channels.
 4. When it is ready, `browser_press(key="Control+Shift+2")` ONCE (Teams' shortcut for Chat;
    clicking the app bar is unreliable), then `browser_snapshot()` until the chat list shows
    (at most 3 times). Teams opens the most recent chat by itself, which marks that one chat
-   read; this is known and accepted. Never click any chat in the list.
-5. Read the chat LIST only. Each row gives chat name, last message preview, time and unread
-   state. Report what is visible.
+   read; this is known and accepted.
+5. Read the chat LIST. Each row gives chat name, last message preview, time and unread state.
+   Report what is visible. Opening a chat marks it read: open one only when the user asks
+   about it, and say so.
 
-## Do Not
-Click a chat, type anywhere, send, reply, react, like, post, start a call, join a meeting, or
-change any setting or status. Do not press keys.
+## Acting
+Post, reply, react, call or change the user's status only when the user asked. Writes
+(typing a message, Send, Like...) bring up an approval prompt for the user; if they deny, stop.
 
 ## Output
 Unread chats first, then the rest with news from today, at most 6 bullets:

@@ -16,7 +16,7 @@ metadata:
 The first wake of the day, or whenever the user asks for the digest or "what's up today".
 
 ## Procedure
-Load and follow each skill with `skill_view`, read-only as they say:
+Load and follow each skill with `skill_view`; the digest only reads, never acts:
 1. `school-timetable`: today's classes only.
 2. `school-moodle`: everything due in the next 7 days, plus anything overdue.
 3. `school-mail`: new important mail (unread, school-related).

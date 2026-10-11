@@ -46,9 +46,12 @@ class HermesClient:
     def stop(self, run_id: str) -> None:
         self._request("POST", f"/v1/runs/{run_id}/stop")
 
-    def approve(self, run_id: str, allow: bool) -> None:
-        self._request("POST", f"/v1/runs/{run_id}/approval",
-                          {"choice": "once" if allow else "deny"})
+    def approve(self, run_id: str, choice: str) -> None:
+        """Answer a pending approval: "once", "session" (the same action, rest of the session)
+        or "deny". Never "always": that would allowlist the action for every future session."""
+        if choice not in ("once", "session", "deny"):
+            raise ValueError(f"unsupported approval choice {choice!r}")
+        self._request("POST", f"/v1/runs/{run_id}/approval", {"choice": choice})
 
     def events(self, run_id: str) -> Iterator[Event]:
         """Yield the run's events; always ends with exactly one `RunEnded`.

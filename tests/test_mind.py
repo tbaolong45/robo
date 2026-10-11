@@ -9,6 +9,7 @@ from robo.events import (
     ApprovalNeeded,
     Delta,
     Feeling,
+    Listening,
     RunEnded,
     ToolCompleted,
     ToolStarted,
@@ -182,3 +183,21 @@ def test_run_ending_during_a_flash_keeps_the_reply_emotion():
     assert (m.activity, m.emotion) == ("idle", "proud")
     m = tick(m, t + mind.EMOTION_HOLD)
     assert m.emotion == "neutral"
+
+
+def test_listening_wakes_and_shows_listening_until_the_text_or_it_stops():
+    m = initial(0.0)
+    m = tick(m, mind.ASLEEP_AFTER + 1)
+    assert m.activity == "asleep"
+    t = mind.ASLEEP_AFTER + 2
+    m = react(m, Listening(True), t)
+    assert (m.activity, m.emotion) == ("listening", "neutral")
+    assert tick(m, t + mind.SLEEPY_AFTER * 3).activity == "listening"  # never dozes mid-sentence
+    assert react(m, UserSent("hi"), t + 1).activity == "thinking"
+    m = react(m, Listening(False), t + 2)
+    assert m.activity == "idle" and m.last_input == t + 2
+
+
+def test_listening_off_during_a_run_changes_nothing():
+    m, t = run(UserSent("x"), ToolStarted("web_search"))
+    assert react(m, Listening(False), t + 1).activity == "working"

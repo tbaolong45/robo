@@ -10,7 +10,7 @@ metadata:
     related_skills: [school-digest]
 ---
 
-# School timetable (Outlook calendar, read-only)
+# School timetable (Outlook calendar)
 
 ## When to Use
 The user asks about classes today or this week, or the digest needs today's classes.
@@ -29,11 +29,11 @@ The user asks about classes today or this week, or the digest needs today's clas
    `browser_snapshot()` again (at most 3 times).
 4. Read the events: title, day, start and end time, location. If they are missing from the
    text, use `browser_vision(question="List every event with day, time, title and room")`.
-5. To see another week, click the calendar's previous or next week button; nothing else.
+5. To see another week, click the calendar's previous or next week button.
 
-## Do Not
-Open an event, drag anything, or click Accept, Decline, Tentative, RSVP, New event, Delete or
-any settings. Stay on the week view.
+## Acting
+Accept, decline, create or delete events only when the user asked. Writes bring up an
+approval prompt for the user; if they deny, stop.
 
 ## Output
 Today first, then the remaining days, one bullet per class in time order:

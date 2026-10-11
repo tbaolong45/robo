@@ -11,6 +11,7 @@ from robo.events import (
     Delta,
     Event,
     Feeling,
+    Listening,
     RunEnded,
     ToolCompleted,
     ToolStarted,
@@ -67,6 +68,11 @@ def react(m: Mind, ev: Event, now: float) -> Mind:
         case UserSent():
             return _go(m, "thinking", now, emotion="neutral", emotion_until=math.inf,
                        label="", talking=False, last_input=now, after=None)
+        case Listening(on=True):
+            return _go(m, "listening", now, emotion="neutral", emotion_until=math.inf,
+                       label="listening…", talking=False, last_input=now, after=None)
+        case Listening(on=False) if m.activity == "listening":
+            return _go(m, "idle", now, label="", last_input=now)
         case ToolStarted(tool=tool):
             return _go(m, "working", now, label=tool_label(tool))
         case ToolCompleted(error=error):  # the model reads the result and decides what next

@@ -5,6 +5,7 @@ Rules mirrored from ~/.hermes/hermes-agent/tools/skill_manager_tool.py `_validat
 skills) and the YAML error "mapping values not allowed here" (an unquoted value with ': ').
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -63,9 +64,15 @@ def test_soul_lists_exactly_the_app_emotions():
 
 
 def test_guard_plugin_is_enabled_in_setup_config():
+    # Toolsets and memory are robo.setup's policy (tests/test_setup.py); the guard must stay on.
     from robo.setup import CONFIG
 
-    assert CONFIG["plugins.enabled"] == '["robo-guard"]'
-    assert CONFIG["platform_toolsets.api_server"] == '["browser", "search", "skills"]'
-    assert CONFIG["memory.memory_enabled"] == "false"
-    assert CONFIG["auxiliary.background_review.enabled"] == "false"
+    assert "robo-guard" in json.loads(CONFIG["plugins.enabled"])
+
+
+def test_robo_gets_the_whole_laptop_with_manual_approvals():
+    from robo.setup import CONFIG, TOOLSETS
+
+    assert json.loads(CONFIG["platform_toolsets.api_server"]) == TOOLSETS
+    assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
+    assert CONFIG["approvals.mode"] == "manual"

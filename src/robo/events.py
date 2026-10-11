@@ -8,7 +8,7 @@ EMOTIONS = (
     "neutral", "happy", "curious", "proud", "concerned", "confused", "playful", "sad", "calm",
 )
 ACTIVITIES = (
-    "idle", "thinking", "working", "talking", "waiting", "error", "sleepy", "asleep",
+    "idle", "listening", "thinking", "working", "talking", "waiting", "error", "sleepy", "asleep",
 )
 
 
@@ -60,10 +60,19 @@ class Feeling:
 
 
 @dataclass(frozen=True)
+class Listening:
+    """Robo heard its wake word (or was clicked) and listens (`on`), or stopped (`on=False`)."""
+
+    on: bool
+
+
+@dataclass(frozen=True)
 class UserSent:
     """The user sent a message (typed, or the digest button / wake trigger)."""
 
     text: str
 
 
-Event = Delta | ToolStarted | ToolCompleted | ApprovalNeeded | RunEnded | Feeling | UserSent
+Event = (
+    Delta | ToolStarted | ToolCompleted | ApprovalNeeded | RunEnded | Feeling | Listening | UserSent
+)

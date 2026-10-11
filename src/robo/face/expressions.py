@@ -36,6 +36,7 @@ class FaceParams:
 # Activity sets the base pose (absolute values). `fx` lists overlay effects.
 ACTIVITY: dict[str, dict] = {
     "idle": dict(wander=1.0),
+    "listening": dict(eye_w=1.05, eye_h=1.12, gaze_y=-0.1, wander=0.4, mouth_w=0.8, fx="pulse"),
     "thinking": dict(eye_w=0.85, eye_h=0.85, gaze_x=0.6, gaze_y=-0.7, skew=0.15,
                      mouth_w=0.6, mouth_curve=-0.1, fx="dots"),
     "working": dict(eye_w=1.08, eye_h=0.9, lid_top=0.3, lid_angle=0.08, gaze_y=0.35,
