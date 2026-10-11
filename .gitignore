@@ -14,3 +14,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .serena/
+
+# Local worktrees and plan workspaces
+.worktrees/
+.superpowers/
