@@ -87,3 +87,10 @@ def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
     assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
     assert CONFIG["approvals.mode"] == "off"  # the user granted all permissions
     assert json.loads(CONFIG["approvals.deny"]) == ["*hermes*"]
+
+
+@pytest.mark.parametrize("path", sorted(p for p in HERMES.rglob("*") if p.is_file()
+                                        and "__pycache__" not in p.parts), ids=str)
+def test_templates_hold_no_machine_paths(path):
+    """robo setup fills {{ROBO_PROJECT}}; a fixed /home/... path breaks on another laptop."""
+    assert not re.search(r"/home/[a-z]", path.read_text(encoding="utf-8"))

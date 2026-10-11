@@ -24,8 +24,9 @@ import httpx
 from robo.browser import CDP_URL
 
 PROFILE = "robo"
-TEMPLATES = Path(__file__).resolve().parents[2] / "hermes"
-EXTENSION = Path(__file__).resolve().parents[2] / "gnome" / "robo-focus@robo"
+PROJECT = Path(__file__).resolve().parents[2]  # this checkout, wherever it was cloned
+TEMPLATES = PROJECT / "hermes"
+EXTENSION = PROJECT / "gnome" / "robo-focus@robo"
 EXTENSION_ID = "robo-focus@robo"
 INSTALLED = ("SOUL.md", "skills", "plugins")  # what of TEMPLATES lands in the profile
 
@@ -153,8 +154,7 @@ def desktop(extension: Path = EXTENSION, robo_cmd: str | None = None,
         set_enabled([*enabled, EXTENSION_ID])
     if copied or EXTENSION_ID not in enabled:
         done.append("installed robo's GNOME focus extension: log out and in once to load it")
-    project = Path(__file__).resolve().parents[2]
-    cmd = robo_cmd or f"{shutil.which('uv') or 'uv'} run --project {project} robo"
+    cmd = robo_cmd or f"{shutil.which('uv') or 'uv'} run --project {PROJECT} robo"
     entry = home / ".config/autostart/robo.desktop"
     text = (f"[Desktop Entry]\nType=Application\nName=Robo\nExec={cmd}\n"
             "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n")
@@ -211,7 +211,8 @@ def setup(
         done.append("gave robo its own API key")
     if moodle and set_env(robo_env, {"MOODLE_BASE_URL": moodle}):
         done.append(f"set your Moodle address to {moodle}")
-    fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set"}
+    fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set",
+            "ROBO_PROJECT": str(PROJECT)}
     if _copy_tree(templates, profile_dir(), fill):
         done.append("installed the persona, skills and guard")
     cfg = profile_dir() / "config.yaml"
