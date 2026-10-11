@@ -37,12 +37,15 @@ EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's
 OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
 OVER_WINDOW = 25  # ~2 s of the latest audio for that check
 
-# How Parakeet writes the user's "robo" (measured on their voice): Robo, Rubo, Robot; never
-# "robots" (that is just the word, e.g. "Robots are interesting").
-_NAME = r"r[ou]bb?(?:o|oh|ow|ot)"
-_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W+)?{_NAME}\b\W*", re.I)
-_TAIL = re.compile(rf"\W*\b{_NAME}\W*$", re.I)
-_ANYWHERE = re.compile(r"\br[ou]bb?(?:o|oh|ow)\b", re.I)  # "robo" is rare; "robot" only at an edge
+# How Parakeet writes the user's "robo" (measured on two recordings of their voice): Robo, Rubo,
+# Robbo, Roombo; at the start of a sentence also Robot and Rubble. "Robot"/"rubble" at the end, and
+# "robots", are just words ("bought a robot.", "Robots are interesting").
+_SOUND = r"r(?:o|u|oo|ou)m?bb?"
+_START_NAME = rf"{_SOUND}(?:o|oh|ow|ot|le)"
+_END_NAME = rf"{_SOUND}(?:o|oh|ow)"
+_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W+)?{_START_NAME}\b\W*", re.I)
+_TAIL = re.compile(rf"\W*\b{_END_NAME}\W*$", re.I)
+_ANYWHERE = re.compile(rf"\b{_END_NAME}\b", re.I)  # "robo"-like words are rare anywhere
 
 
 def addressed(text: str) -> str | None:

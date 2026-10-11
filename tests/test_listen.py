@@ -45,6 +45,12 @@ def frames(a: int, b: int, level: float = 0.0) -> list[np.ndarray]:
     ("Rubo.", ""),
     ("Robot draft an email my professor.", "draft an email my professor."),
     ("Rubo, what's weather? Thanks, Rubo.", "what's weather? Thanks"),
+    # second, held-out recording
+    ("Roombo search timer for 10 minutes.", "search timer for 10 minutes."),
+    ("Hi Robo read my latest.", "read my latest."),
+    ("Can you help me, Robo?", "Can you help me"),
+    ("Rubble play mode.", "play mode."),
+    ("Robbo play mode.", "play mode."),
 ])
 def test_sentences_that_call_robo(text, said):
     assert addressed(text) == said
@@ -56,6 +62,8 @@ def test_sentences_that_call_robo(text, said):
     # the user's own sentences without the name (Parakeet transcripts)
     "Robots are interesting.", "Let's go over notes.", "I need study calculus tonight.",
     "The letter was long today.", "Can you pass me water?", "Ruby on rails is fun",
+    "My friend bought a ro robot.", "Rob is coming over tonight. The robot.",
+    "Ralph is coming over tonight, the robots.", "The house was rubble", "Robert called.",
 ])
 def test_sentences_not_for_robo(text):
     assert addressed(text) is None
