@@ -1,13 +1,11 @@
-import io
 import queue
-import tarfile
 import time
 
 import numpy as np
 import pytest
 
 from robo import listen
-from robo.listen import FRAME, Endpointer, Listener, ensure_kws_model, speech_gate, strip_wake
+from robo.listen import FRAME, Endpointer, Listener, addressed, speech_gate
 
 SPEECH = 0.3
 
@@ -28,22 +26,29 @@ def frames(a: int, b: int, level: float = 0.0) -> list[np.ndarray]:
     return [frame(i, level) for i in range(a, b)]
 
 
-# --- strip_wake --------------------------------------------------------------------------------
+# --- addressed -----------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("text", "command"), [
+@pytest.mark.parametrize(("text", "said"), [
+    ("Robo, what time is it?", "what time is it?"),
     ("Hey Robo, what's on my calendar today?", "what's on my calendar today?"),
+    ("What's due this week, robo?", "What's due this week"),
+    ("Can robo open Moodle for me", "Can robo open Moodle for me"),
+    ("Robot, open Moodle.", "open Moodle."),
     ("Hi, robots.", ""),
     ("ok Robo.", ""),
-    ("Okay robo", ""),
-    (" Robot, open Moodle.", "open Moodle."),
     ("Yo robbo. What time is it?", "What time is it?"),
-    ("I'm studying linear algebra tonight.", "I'm studying linear algebra tonight."),
-    ("Robert called", "Robert called"),
-    ("", ""),
 ])
-def test_strip_wake(text, command):
-    assert strip_wake(text) == command
+def test_sentences_that_call_robo(text, said):
+    assert addressed(text) == said
+
+
+@pytest.mark.parametrize("text", [
+    "I'm studying linear algebra tonight.", "Robert called", "the robot vacuum is broken",
+    "I'm going to show you how to do this.", "", "you",
+])
+def test_sentences_not_for_robo(text):
+    assert addressed(text) is None
 
 
 # --- Endpointer / speech_gate -----------------------------------------------------------------
@@ -55,12 +60,12 @@ def ends_at(levels, frame_s=0.25, gate=0.1) -> int | None:
     return next((n for n, rms in enumerate(levels, 1) if ep.feed(rms)), None)
 
 
-def test_ends_after_one_second_of_silence_after_speech():
-    assert ends_at([SPEECH] * 2 + [0.0] * 10) == 2 + 4
+def test_ends_after_most_of_a_second_of_silence_after_speech():
+    assert ends_at([SPEECH] * 2 + [0.0] * 10) == 2 + 3  # 0.75 s >= END_SILENCE_S
 
 
 def test_short_pause_does_not_end():
-    assert ends_at([SPEECH, 0, 0, 0, SPEECH] + [0.0] * 10) == 5 + 4
+    assert ends_at([SPEECH, 0, 0, SPEECH] + [0.0] * 10) == 4 + 3  # a 0.5 s pause goes on
 
 
 def test_no_speech_gives_up_after_six_seconds():
@@ -77,7 +82,7 @@ def test_gate_tracks_noise_floor_with_minimum():
     assert speech_gate([]) == listen.MIN_GATE
 
 
-# --- Listener ---------------------------------------------------------------------------------
+# --- Listener ------------------------------------------------------------------------------------
 
 
 class FakeMic:
@@ -96,105 +101,147 @@ class FakeMic:
         self.closed = True
 
 
-class FakeSpotter:
-    """Fires on the frame tagged `at`; records what it was fed."""
-
-    def __init__(self, at=None):
-        self.at, self.fed, self.resets = at, [], 0
-
-    def hit(self, f):
-        self.fed.append(tags(f)[0])
-        return self.fed[-1] == self.at
-
-    def reset(self):
-        self.resets += 1
-
-
 class FakeStt:
     def __init__(self, *texts):
         self.texts, self.heard = list(texts), []
 
     def __call__(self, audio):
         self.heard.append(audio)
-        return self.texts.pop(0)
+        return self.texts.pop(0) if self.texts else ""
 
 
-def start(mic, spot, stt):
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def start(mic, stt, clock=None, quick=None):
     events = queue.Queue()
     lis = Listener(lambda: events.put("wake"), lambda t: events.put(("text", t)),
-                   lambda m: events.put(("error", m)),
-                   mic=lambda: mic, spotter=lambda: spot, transcriber=lambda: stt)
+                   lambda m: events.put(("error", m)), mic=lambda: mic,
+                   transcriber=lambda: stt, quick=lambda: quick or FakeStt(),
+                   clock=clock or time.monotonic)
     assert lis.start()
     return lis, events
 
 
-def until_text(events) -> list:
-    got = [events.get(timeout=5)]
-    while got[-1][0] != "text":
-        got.append(events.get(timeout=5))
-    return got
+def sentence(a: int, n: int = 5) -> list[np.ndarray]:
+    """Quiet, n frames of speech, then a second of quiet."""
+    return frames(a, a + 8) + frames(a + 8, a + 8 + n, SPEECH) + frames(a + 8 + n, a + 30)
 
 
-def test_wake_then_command_includes_pre_roll():
-    # idle 0-39 (wake fires on 39), speech 40-49, silence 50-69
-    mic = FakeMic(frames(0, 40) + frames(40, 50, SPEECH) + frames(50, 70))
-    spot, stt = FakeSpotter(at=39), FakeStt("Hey Robo, what's on my calendar today?")
-    lis, events = start(mic, spot, stt)
-    assert until_text(events) == ["wake", ("text", "what's on my calendar today?")]
+def drained(mic, timeout=3.0):
+    end = time.monotonic() + timeout
+    while not mic.q.empty() and time.monotonic() < end:
+        time.sleep(0.005)
+    time.sleep(0.05)
+
+
+def test_a_sentence_with_the_name_is_a_request():
+    mic = FakeMic(sentence(0))
+    stt = FakeStt("Robo, what time is it?")
+    lis, events = start(mic, stt)
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "what time is it?")]
     lis.stop()
     heard = tags(stt.heard[0])
-    assert heard == list(range(40 - listen.PRE_ROLL_FRAMES, heard[-1] + 1))  # contiguous
-    assert 50 < heard[-1] < 69  # ended on the silence, before the mic ran dry
-    assert not set(spot.fed) & set(heard[listen.PRE_ROLL_FRAMES:])  # KWS not fed while recording
-    assert spot.resets == 1 and mic.closed
+    assert heard[0] == 8 - listen.PRE_ROLL_FRAMES and heard == list(range(heard[0], heard[-1] + 1))
 
 
-def test_wake_word_alone_then_follow_up_utterance():
-    # wake on 9, "hi robots" 10-12, pause, then the command 33-37
-    mic = FakeMic(frames(0, 10) + frames(10, 13, SPEECH) + frames(13, 33)
-                  + frames(33, 38, SPEECH) + frames(38, 70))
-    spot, stt = FakeSpotter(at=9), FakeStt("Hi, robots.", "open Moodle")
-    lis, events = start(mic, spot, stt)
-    assert until_text(events) == ["wake", ("text", "open Moodle")]
+def test_other_speech_is_ignored():
+    mic = FakeMic(sentence(0) + sentence(30))
+    stt = FakeStt("I'm studying linear algebra tonight.", "the robot vacuum is broken")
+    lis, events = start(mic, stt)
+    drained(mic)
     lis.stop()
-    first, second = tags(stt.heard[0]), tags(stt.heard[1])
-    assert second[0] == first[-1] + 1 and 33 in second  # no pre-roll, no gap
+    assert events.empty() and len(stt.heard) == 2
 
 
-def test_wake_word_alone_then_silence_gives_empty_text():
-    mic = FakeMic(frames(0, 10) + frames(10, 12, SPEECH) + frames(12, 120))
-    spot, stt = FakeSpotter(at=9), FakeStt("Hey Robo.")
-    lis, events = start(mic, spot, stt)
-    assert until_text(events) == ["wake", ("text", "")]
+def test_a_knock_is_not_transcribed():
+    mic = FakeMic(frames(0, 8) + frames(8, 10, SPEECH) + frames(10, 30))
+    stt = FakeStt()
+    lis, events = start(mic, stt)
+    drained(mic)
     lis.stop()
-    assert len(stt.heard) == 1  # the silent follow-up is not transcribed
+    assert stt.heard == [] and events.empty()
 
 
-def test_listen_now_records_without_wake_or_pre_roll():
-    mic = FakeMic(frames(0, 30))
-    spot, stt = FakeSpotter(), FakeStt("What's due this week?")
-    lis, events = start(mic, spot, stt)
-    for _ in range(400):  # let the idle frames drain first
-        if mic.q.empty():
-            break
-        time.sleep(0.005)
-    lis.listen_now()
-    for f in frames(100, 105, SPEECH) + frames(105, 125):
-        mic.q.put(f)
-    assert until_text(events) == [("text", "What's due this week?")]
-    lis.stop()
-    assert min(tags(stt.heard[0])) >= 100
-
-
-def test_stop_ends_thread_and_closes_mic():
+def test_after_an_answer_a_reply_needs_no_name():
+    clock = Clock()
     mic = FakeMic()
-    lis, _ = start(mic, FakeSpotter(), FakeStt())
+    stt = FakeStt("and tomorrow?", "and next week?")
+    lis, events = start(mic, stt, clock)
+    lis.follow_up(10)
+    for f in sentence(0):
+        mic.q.put(f)
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "and tomorrow?")]
+    clock.t = 30  # the window closed (and it was used once anyway)
+    for f in sentence(100):
+        mic.q.put(f)
+    drained(mic)
     lis.stop()
-    assert not lis._thread.is_alive() and mic.closed
+    assert events.empty()
 
 
-def test_start_fails_without_mic_or_model():
-    errors, mic = [], FakeMic()
+def test_click_takes_the_next_sentence_or_gives_up():
+    clock = Clock()
+    mic = FakeMic()
+    lis, events = start(mic, FakeStt("what's due"), clock)
+    lis.listen_now()
+    for f in sentence(0):
+        mic.q.put(f)
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "what's due")]
+    lis.listen_now()
+    clock.t = listen.NO_SPEECH_S + 1
+    assert events.get(timeout=5) == ("text", "")
+    lis.stop()
+
+
+def test_bare_name_then_the_request():
+    mic = FakeMic(sentence(0) + sentence(30))
+    lis, events = start(mic, FakeStt("Hey robo.", "open Moodle"))
+    assert [events.get(timeout=5), events.get(timeout=5), events.get(timeout=5)] == [
+        "wake", "wake", ("text", "open Moodle")]
+    lis.stop()
+
+
+def test_a_mic_that_goes_quiet_still_ends_the_sentence():
+    mic = FakeMic(frames(0, 8) + frames(8, 14, SPEECH))  # then no frames at all
+    lis, events = start(mic, FakeStt("Robo, open Moodle"))
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "open Moodle")]
+    lis.stop()
+
+
+def test_an_error_is_reported_not_silent():
+    class Broken(FakeMic):
+        def read(self, timeout):
+            raise OSError("device unplugged")
+
+    lis, events = start(Broken(), FakeStt())
+    kind, message = events.get(timeout=5)
+    assert kind == "error" and "unplugged" in message
+    lis._thread.join(2)
+    assert not lis._thread.is_alive()
+
+
+def test_stop_returns_quickly_while_transcribing():
+    class Slow(FakeStt):
+        def __call__(self, audio):
+            time.sleep(3)
+            return "x"
+
+    mic = FakeMic(sentence(0))
+    lis, _ = start(mic, Slow())
+    drained(mic)
+    t = time.monotonic()
+    lis.stop(wait=0.2)
+    assert time.monotonic() - t < 1.0
+
+
+def test_start_fails_without_mic_or_speech_model():
+    errors = []
 
     def no_mic():
         raise OSError("no input device")
@@ -202,62 +249,93 @@ def test_start_fails_without_mic_or_model():
     def no_model():
         raise RuntimeError("model missing")
 
+    mic = FakeMic()
     assert not Listener(lambda: None, lambda t: None, errors.append, mic=no_mic).start()
-    assert not Listener(lambda: None, lambda t: None, errors.append,
-                        mic=lambda: mic, spotter=no_model).start()
+    assert not Listener(lambda: None, lambda t: None, errors.append, mic=lambda: mic,
+                        transcriber=no_model).start()
     assert len(errors) == 2 and "no input device" in errors[0] and mic.closed
 
 
-# --- ensure_kws_model -------------------------------------------------------------------------
+def test_robo_perks_up_while_you_are_still_talking():
+    order = []
+
+    class Quick(FakeStt):
+        def __call__(self, audio):
+            order.append(("quick", len(audio) // FRAME))
+            return "Robo, what is"
+
+    class Final(FakeStt):
+        def __call__(self, audio):
+            order.append(("final", len(audio) // FRAME))
+            return "Robo, what is the time in Tokyo right now?"
+
+    long = frames(0, 8) + frames(8, 48, SPEECH) + frames(48, 70)  # 3.2 s of speech
+    lis, events = start(FakeMic(long), Final(), quick=Quick())
+    assert events.get(timeout=5) == "wake"
+    assert order[0][0] == "quick" and order[0][1] < 30  # early, mid-sentence
+    assert events.get(timeout=5) == ("text", "what is the time in Tokyo right now?")
+    lis.stop()
+    assert order[-1][0] == "final" and order.count(("final", order[-1][1])) == 1
+    assert events.empty()  # one wake per sentence
 
 
-def test_kws_model_downloaded_once(tmp_path):
+def test_an_expected_sentence_wakes_robo_at_once():
+    order, mic, done = [], FakeMic(), queue.Queue()
+
+    def final(audio):
+        order.append("final")
+        return "and tomorrow?"
+
+    lis = Listener(lambda: order.append("wake"), done.put, lambda m: None, mic=lambda: mic,
+                   transcriber=lambda: final, quick=lambda: FakeStt())
+    assert lis.start()
+    lis.follow_up(10)
+    for f in sentence(0):
+        mic.q.put(f)
+    assert done.get(timeout=5) == "and tomorrow?"
+    lis.stop()
+    assert order == ["wake", "final"]  # robo showed it was listening before transcribing
+
+
+def test_other_speech_gets_only_the_quick_check():
     calls = []
 
-    def fetch(url, dest):
-        calls.append(url)
-        with tarfile.open(dest, "w:bz2") as tar:
-            info = tarfile.TarInfo(f"{listen.KWS_NAME}/tokens.txt")
-            info.size = 3
-            tar.addfile(info, io.BytesIO(b"abc"))
-
-    model = ensure_kws_model(tmp_path, fetch=fetch)
-    assert (model / "tokens.txt").read_text() == "abc"
-    assert ensure_kws_model(tmp_path, fetch=fetch) == model
-    assert calls == [listen.KWS_URL]
-    assert [p.name for p in tmp_path.iterdir()] == [listen.KWS_NAME]  # no .part / temp left
-
-
-def test_a_mic_that_goes_quiet_still_ends_the_recording():
-    mic = FakeMic(frames(0, 10) + frames(10, 13, SPEECH))  # then no frames at all
-    spot, stt = FakeSpotter(at=9), FakeStt("Hey Robo, open Moodle")
-    lis, events = start(mic, spot, stt)
-    assert until_text(events) == ["wake", ("text", "open Moodle")]
-    lis.stop()
-
-
-def test_an_idle_error_is_reported_not_silent():
-    class Broken(FakeMic):
-        def read(self, timeout):
-            raise OSError("device unplugged")
-
-    lis, events = start(Broken(), FakeSpotter(), FakeStt())
-    kind, message = events.get(timeout=5)
-    assert kind == "error" and "unplugged" in message
-    lis._thread.join(2)
-    assert not lis._thread.is_alive()
-
-
-def test_stop_can_return_quickly_while_busy():
-    class Slow(FakeStt):
+    class Quick(FakeStt):
         def __call__(self, audio):
-            time.sleep(3)
-            return "x"
+            calls.append("quick")
+            return "I'm going to show you"
 
-    mic = FakeMic(frames(0, 10) + frames(10, 13, SPEECH) + frames(13, 40))
-    lis, events = start(mic, FakeSpotter(at=9), Slow())
+    long = frames(0, 8) + frames(8, 48, SPEECH) + frames(48, 70)
+    mic = FakeMic(long)
+    lis, events = start(mic, FakeStt("I'm going to show you how to do this."), quick=Quick())
+    drained(mic)
+    time.sleep(0.2)
+    lis.stop()
+    assert events.empty() and calls == ["quick"]
+
+
+def test_saying_over_ends_the_command_even_while_the_tv_keeps_talking():
+    seen = []
+
+    class Quick(FakeStt):
+        def __call__(self, audio):
+            seen.append(len(audio) // FRAME)
+            return "Robo, what's the date" if len(seen) == 1 else "what's the date, over."
+
+    noisy = frames(0, 8) + frames(8, 208, SPEECH)  # 16 s of sound: the room never goes quiet
+    stt = FakeStt("Robo, what's the date, over.")
+    lis, events = start(FakeMic(noisy), stt, quick=Quick())
     assert events.get(timeout=5) == "wake"
-    time.sleep(0.6)  # transcribing now
-    t = time.monotonic()
-    lis.stop(wait=0.2)
-    assert time.monotonic() - t < 1.0
+    assert events.get(timeout=5) == ("text", "what's the date")
+    lis.stop()
+    assert len(stt.heard[0]) // FRAME < 60  # ended at "over", not at the 15 s limit
+
+
+@pytest.mark.parametrize(("text", "command"), [
+    ("Robo, what's the date, over.", "what's the date"),
+    ("what's the date over", "what's the date"),
+    ("Robo, flip the page over", "flip the page over"),  # not ended by the word: kept
+])
+def test_over_is_dropped_only_when_it_ended_the_command(text, command):
+    ended = text != "Robo, flip the page over"
+    assert listen.without_name(listen.without_over(text) if ended else text) == command

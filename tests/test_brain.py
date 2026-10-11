@@ -151,7 +151,7 @@ def test_connection_refused_says_not_running():
         client(boom).stop("r1")
 
 
-@pytest.mark.parametrize("choice", ["once", "deny"])
+@pytest.mark.parametrize("choice", ["once", "session", "deny"])
 def test_approve_and_stop_bodies(choice):
     seen = []
 
@@ -232,7 +232,7 @@ def test_ask_forgets_the_previous_run_before_starting():
 
 def test_approve_refuses_unknown_choices():
     with pytest.raises(ValueError):
-        client(lambda req: httpx.Response(200, json={})).approve("r1", "session")
+        client(lambda req: httpx.Response(200, json={})).approve("r1", "always")
 
 
 def test_approval_shows_the_command_not_just_the_category():
@@ -248,3 +248,12 @@ def test_guard_approvals_show_only_the_guards_own_sentence():
                        "description": "Robo wants to open https://x.example/.",
                        "command": "<browser_navigate> (plugin approval rule)"})
     assert ev == ApprovalNeeded("Robo wants to open https://x.example/.")
+
+
+def test_desktop_control_approvals_are_marked():
+    ev = brain._parse({"event": "approval.request",
+                       "description": "Allow computer_use to perform `click`?",
+                       "command": "computer_use: click (412, 300)"})
+    assert ev.desktop and "click" in ev.description
+    assert not brain._parse({"event": "approval.request", "description": "recursive delete",
+                             "command": "rm -rf x"}).desktop

@@ -1,6 +1,6 @@
 name: robo-guard
 version: 1.0.0
-description: "Asks the user before write-like browser actions; blocks raw browser control."
+description: "Asks the user before irreversible actions (delete, send, submit, sudo...); blocks raw browser control and changes to robo's own setup."
 author: robo
 kind: standalone
 provides_hooks:

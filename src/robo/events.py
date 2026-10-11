@@ -38,6 +38,7 @@ class ApprovalNeeded:
     """Hermes paused the run until the user approves or denies (`approval.request`)."""
 
     description: str
+    desktop: bool = False  # a computer_use step (click, type, key...) in the user's apps
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,7 @@ class Feeling:
 
 @dataclass(frozen=True)
 class Listening:
-    """Robo heard its wake word (or was clicked) and listens (`on`), or stopped (`on=False`)."""
+    """Robo was called by name (or clicked) and listens (`on`), or stopped (`on=False`)."""
 
     on: bool
 

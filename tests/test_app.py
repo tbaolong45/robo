@@ -34,6 +34,7 @@ class FakeClient:
         for ev in self.script:
             if ev == "WAIT":
                 self.gate.wait(5)
+                self.gate.clear()  # each WAIT needs its own set()
                 continue
             yield ev
 
@@ -224,13 +225,16 @@ def test_session_carries_the_persona_stamp(tmp_path):
 class FakeListener:
     def __init__(self, on_wake, on_text, on_error, ok=True):
         self.on_wake, self.on_text, self.on_error, self.ok = on_wake, on_text, on_error, ok
-        self.now, self.stopped = 0, False
+        self.now, self.stopped, self.follow = 0, False, 0
 
     def start(self):
         return self.ok
 
     def listen_now(self):
         self.now += 1
+
+    def follow_up(self, seconds):
+        self.follow = seconds
 
     def stop(self, wait=5.0):
         self.stopped = True
@@ -489,3 +493,35 @@ def test_a_face_press_ends_a_compositor_drag(tmp_path):
     QTest.mousePress(win.face, Qt.MouseButton.LeftButton)
     assert not win.moving
     QTest.mouseRelease(win.face, Qt.MouseButton.LeftButton)
+
+
+def test_desktop_control_needs_no_prompt_but_irreversible_steps_do(tmp_path):
+    gate = threading.Event()
+    client = FakeClient([ApprovalNeeded("Allow computer_use to perform `click`?", desktop=True),
+                         ApprovalNeeded("Allow computer_use to perform `type`?", desktop=True),
+                         ApprovalNeeded("recursive delete: rm -rf ~/x"), "WAIT",
+                         RunEnded("completed", "ok")], gate=gate)
+    win, _ = floating(tmp_path, client)
+    win.ask("open the calculator and compute 12*7")
+    assert pump(win, lambda: win.approval.isVisibleTo(win))  # only the delete asks
+    assert client.approved == [("run_1", "session"), ("run_1", "session")]
+    assert "rm -rf" in win.approval_text.text()
+    win.allow.click()
+    assert pump(win, lambda: client.approved[-1] == ("run_1", "once"))
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+
+
+def test_after_an_answer_robo_listens_for_a_reply_without_its_name(tmp_path):
+    client = FakeClient([RunEnded("completed", "It's 3 pm.")])
+    win, ear = floating(tmp_path, client)
+    win.ask("what time is it")
+    assert pump(win, lambda: not win.busy)
+    assert ear.follow == robo_app.FOLLOW_UP_S
+
+
+def test_a_failed_answer_opens_no_follow_up(tmp_path):
+    win, ear = floating(tmp_path, FakeClient([RunEnded("failed", error="offline")]))
+    win.ask("x")
+    assert pump(win, lambda: not win.busy)
+    assert ear.follow == 0

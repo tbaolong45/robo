@@ -47,9 +47,9 @@ class HermesClient:
         self._request("POST", f"/v1/runs/{run_id}/stop")
 
     def approve(self, run_id: str, choice: str) -> None:
-        """Answer a pending approval: "once" or "deny". Never "session" (it covers a whole category
-        of actions for the rest of the run) or "always" (every future session)."""
-        if choice not in ("once", "deny"):
+        """Answer a pending approval: "once", "deny", or "session" (that kind of action for the
+        rest of this run; robo uses it only for desktop control). Never "always"."""
+        if choice not in ("once", "session", "deny"):
             raise ValueError(f"unsupported approval choice {choice!r}")
         self._request("POST", f"/v1/runs/{run_id}/approval", {"choice": choice})
 
@@ -163,7 +163,8 @@ def _parse(d: dict) -> Event | None:
             what, command = d.get("description") or "", d.get("command") or ""
             if command.endswith("(plugin approval rule)"):  # robo-guard's sentence says it all
                 command = ""
-            return ApprovalNeeded(f"{what}: {command}" if what and command else what or command)
+            return ApprovalNeeded(f"{what}: {command}" if what and command else what or command,
+                                  desktop=what.startswith("Allow computer_use"))
         case _ if name in _TERMINAL:
             return RunEnded(name.removeprefix("run."), output=d.get("output") or "",
                             error=d.get("error") or "")

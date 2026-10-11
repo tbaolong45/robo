@@ -41,6 +41,7 @@ TEXT_MAX = 300  # px of reply text before the bubble scrolls
 HEARD_MAX = 140  # characters of your own question shown above the reply
 APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
 CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
+FOLLOW_UP_S = 10.0  # s after an answer when you can reply without saying "robo"
 DRAG = 6  # px of movement that turns a click on the face into a drag
 STYLE = """
 QWidget { color: #d8e6ff; font-size: 14px; }
@@ -250,7 +251,7 @@ class RoboWindow(QWidget):
     # --- voice ---------------------------------------------------------------------------
 
     def _wake(self) -> None:
-        """Listener thread: the wake word (or a click) - robo listens."""
+        """Listener thread: robo was called by name - it listens."""
         self.bridge.event.emit(Listening(True))
 
     def _on_heard(self, text: str) -> None:
@@ -286,6 +287,12 @@ class RoboWindow(QWidget):
                 self.reply += t
                 self.bubble.setMarkdown(self.reply)
                 self.bubble.moveCursor(self.bubble.textCursor().MoveOperation.End)
+            case ApprovalNeeded(desktop=True):
+                # The user lets robo drive the desktop freely ("all but irreversible"); "session"
+                # covers that kind of desktop step for the rest of this request only.
+                self._background(self.client.approve, self.run_id, "session")
+                self._show()
+                return
             case ApprovalNeeded(description=d):
                 d = d if len(d) <= APPROVAL_MAX else d[:APPROVAL_MAX - 1] + "…"
                 self.approval_text.setText(f"Allow? {d}")
@@ -302,6 +309,8 @@ class RoboWindow(QWidget):
                     self.bubble.setMarkdown(text)
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
+                if self.listener and status == "completed" and not self.pending:
+                    self.listener.follow_up(FOLLOW_UP_S)  # a reply needs no "robo"
                 self.digest_day = None
                 self._open(close_after=0.0 if self.listening else CLOSE_AFTER)
                 if self.pending:

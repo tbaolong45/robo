@@ -1,19 +1,16 @@
-"""Hands-free voice input: a wake word (sherpa-onnx KWS), then one utterance (faster-whisper)."""
+"""Hands-free voice input: robo hears every sentence (faster-whisper, on this laptop) and takes
+the ones that call it by name ("robo, what time is it?", "what's due, robo?"), plus anything said
+in the few seconds after it answers, or after a click on its face. Nothing leaves the laptop."""
 
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import re
-import shutil
-import tarfile
-import tempfile
 import threading
-import urllib.request
+import time
 from collections import deque
 from collections.abc import Callable, Iterable
-from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -23,29 +20,46 @@ log = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 FRAME = 1280  # 80 ms
 FRAME_S = FRAME / SAMPLE_RATE
-PRE_ROLL_FRAMES = 25  # ~2 s kept before the wake fires: people say the command without a pause
-NOISE_FRAMES = 62  # ~5 s of idle RMS for the noise floor
+PRE_ROLL_FRAMES = 6  # ~0.5 s kept from before the voice crossed the gate (soft first syllables)
+NOISE_FRAMES = 62  # ~5 s of quiet RMS for the noise floor
 NOISE_PERCENTILE = 20
 GATE_FACTOR = 2.5  # speech = RMS above 2.5x the room's noise floor...
 MIN_GATE = 0.02  # ...and above this (float RMS, -1..1)
-END_SILENCE_S = 1.0
+END_SILENCE_S = 0.7
 NO_SPEECH_S = 6.0
 MAX_UTTERANCE_S = 15.0
+MIN_SPEECH_FRAMES = 4  # ~0.3 s above the gate, or it was a knock, not a sentence
 READ_TIMEOUT = 0.5
+WHISPER_MODEL = "base.en"  # ~0.8 s per sentence on this CPU
+QUICK_MODEL = "tiny.en"  # ~0.4 s: only to notice "robo, ..." while the sentence is still going
+EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's name
+OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
+OVER_WINDOW = 25  # ~2 s of the latest audio for that check
 
-WAKE_PHRASES = ("robo", "robot", "hey robo", "hey robot", "okay robo")
-KWS_THRESHOLD = 0.15  # measured: 4/7 wakes, 0 false wakes on room/TV speech; no ":boost"
-KWS_NAME = "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
-KWS_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{KWS_NAME}.tar.bz2"
-CACHE = Path.home() / ".cache" / "robo"
-WHISPER_MODEL = "base.en"
-
-_WAKE = re.compile(r"^\W*(?:(?:hey|hi|ok|okay|yo)\W+)?rob(?:ots|ot|oh|ow|bo|o)\b\W*", re.I)
+_NAME = r"rob(?:ots?|o|oh|ow|bo)"
+_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|ok|okay|yo)\W+)?{_NAME}\b\W*", re.I)
+_TAIL = re.compile(rf"\W*\b{_NAME}\W*$", re.I)
+_ANYWHERE = re.compile(r"\brob(?:o|oh|ow|bo)\b", re.I)  # "robo" is rare; "robot" only at an edge
 
 
-def strip_wake(text: str) -> str:
-    """The command after a leading wake phrase ("Hey Robo, what's up?" -> "what's up?")."""
-    command = _WAKE.sub("", text, count=1).strip()
+def addressed(text: str) -> str | None:
+    """The request in `text` if it calls robo by name, else None ("" = just the name)."""
+    if not (_LEAD.match(text) or _TAIL.search(text) or _ANYWHERE.search(text)):
+        return None
+    return without_name(text)
+
+
+_OVER = re.compile(r"[\W_]*\bover(?:\s+and\s+out)?\W*$", re.I)
+
+
+def without_over(text: str) -> str:
+    """`text` without the closing "over" that ended it."""
+    return _OVER.sub("", text)
+
+
+def without_name(text: str) -> str:
+    """`text` without a leading or trailing "(hey) robo"."""
+    command = _TAIL.sub("", _LEAD.sub("", text, count=1)).strip()
     return command if re.search(r"\w", command) else ""
 
 
@@ -54,7 +68,7 @@ def rms(frame: np.ndarray) -> float:
 
 
 def speech_gate(idle_rms: Iterable[float]) -> float:
-    """RMS above which a frame counts as speech, from recent idle RMS (the room's noise)."""
+    """RMS above which a frame counts as speech, from recent quiet RMS (the room's noise)."""
     levels = list(idle_rms)
     floor = float(np.percentile(levels, NOISE_PERCENTILE)) if levels else 0.0
     return max(GATE_FACTOR * floor, MIN_GATE)
@@ -87,11 +101,6 @@ class Mic(Protocol):
     def close(self) -> None: ...
 
 
-class Spotter(Protocol):
-    def hit(self, frame: np.ndarray) -> bool: ...  # True when a wake phrase just ended
-    def reset(self) -> None: ...  # forget audio fed so far
-
-
 class SoundDeviceMic:
     """16 kHz mono int16 microphone; a PortAudio callback queues frames so none are dropped."""
 
@@ -116,110 +125,74 @@ class SoundDeviceMic:
         self._stream.close()
 
 
-class WakeSpotter:
-    """sherpa-onnx open-vocabulary keyword spotter for WAKE_PHRASES."""
-
-    def __init__(self, model: Path):
-        import sentencepiece
-        import sherpa_onnx
-
-        bpe = sentencepiece.SentencePieceProcessor(model_file=str(model / "bpe.model"))
-        keywords = model / "robo-keywords.txt"
-        keywords.write_text("".join(
-            f"{' '.join(bpe.encode(p.upper(), out_type=str))} @{p.upper().replace(' ', '_')}\n"
-            for p in WAKE_PHRASES))
-        onnx = {p: str(next(model.glob(f"{p}-*[!8].onnx"))) for p in ("encoder", "decoder",
-                                                                      "joiner")}  # not .int8
-        self._kws = sherpa_onnx.KeywordSpotter(
-            tokens=str(model / "tokens.txt"), **onnx, keywords_file=str(keywords),
-            num_threads=1, keywords_threshold=KWS_THRESHOLD)
-        self.reset()
-
-    def hit(self, frame: np.ndarray) -> bool:
-        self._stream.accept_waveform(SAMPLE_RATE, frame)
-        while self._kws.is_ready(self._stream):
-            self._kws.decode_stream(self._stream)
-        if not self._kws.get_result(self._stream):
-            return False
-        self._kws.reset_stream(self._stream)
-        return True
-
-    def reset(self) -> None:
-        self._stream = self._kws.create_stream()
-
-
 class Whisper:
-    """faster-whisper base.en on CPU (int8); construct it where it should load (~1 s)."""
+    """faster-whisper on CPU (int8); construct it where it should load (~1 s)."""
 
-    def __init__(self):
+    def __init__(self, model: str = WHISPER_MODEL):
         from faster_whisper import WhisperModel
 
-        self._model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        self._model = WhisperModel(model, device="cpu", compute_type="int8")
 
     def __call__(self, audio: np.ndarray) -> str:
         segments, _ = self._model.transcribe(audio, language="en", beam_size=1, vad_filter=True,
-                                             initial_prompt="Hey Robo,")
+                                             initial_prompt="Robo,")
         return " ".join(s.text.strip() for s in segments).strip()
 
 
-def ensure_kws_model(root: Path = CACHE,
-                     fetch: Callable[[str, Path], object] = urllib.request.urlretrieve) -> Path:
-    """The KWS model dir under `root`, downloaded (~13 MB) and unpacked on first use."""
-    model = root / KWS_NAME
-    if model.is_dir():
-        return model
-    root.mkdir(parents=True, exist_ok=True)
-    part = root / f"{KWS_NAME}.tar.bz2.part"
-    tmp = Path(tempfile.mkdtemp(dir=root, prefix=".kws-"))
-    try:
-        fetch(KWS_URL, part)
-        with tarfile.open(part) as tar:
-            tar.extractall(tmp, filter="data")
-        os.replace(tmp / KWS_NAME, model)  # appears complete or not at all
-    finally:
-        part.unlink(missing_ok=True)
-        shutil.rmtree(tmp, ignore_errors=True)
-    return model
-
-
 class Listener:
-    """Wake word -> one spoken command, on a daemon thread; callbacks run on that thread.
+    """Hears every sentence on a daemon thread; callbacks run on that thread.
 
-    `on_wake()` when the wake word is heard, then `on_text(command)` ("" when nothing
-    intelligible was said). `listen_now()` skips the wake word for the next utterance.
+    `on_wake()` when robo is called by name, then `on_text(request)`. Saying "over" ends a
+    request at once, even when the room never goes quiet (TV). A sentence also counts
+    without the name while robo expects one: after `listen_now()` (a click; `on_text("")` if
+    nothing is said within NO_SPEECH_S), after `follow_up(seconds)` (it just answered), or right
+    after a bare "robo".
     """
 
     def __init__(self, on_wake: Callable[[], None], on_text: Callable[[str], None],
                  on_error: Callable[[str], None], mic: Callable[[], Mic] = SoundDeviceMic,
-                 spotter: Callable[[], Spotter] = lambda: WakeSpotter(ensure_kws_model()),
-                 transcriber: Callable[[], Callable[[np.ndarray], str]] = Whisper):
+                 transcriber: Callable[[], Callable[[np.ndarray], str]] = Whisper,
+                 quick: Callable[[], Callable[[np.ndarray], str]] = lambda: Whisper(QUICK_MODEL),
+                 clock: Callable[[], float] = time.monotonic):
         self.on_wake, self.on_text, self.on_error = on_wake, on_text, on_error
-        self._mic, self._spotter, self._transcriber = mic, spotter, transcriber
-        self._stt: Callable[[np.ndarray], str] | None = None  # loaded on first use
-        self._now, self._stop = threading.Event(), threading.Event()
+        self._mic, self._transcriber, self._quick_factory = mic, transcriber, quick
+        self._clock = clock
+        self._stt: Callable[[np.ndarray], str] | None = None
+        self._quick: Callable[[np.ndarray], str] | None = None
+        self._stop = threading.Event()
+        self._open_until = 0.0  # a sentence without the name counts until then
+        self._asked = False  # the open window came from a click or a bare "robo": end it with ""
         self._thread: threading.Thread | None = None
 
     def start(self) -> bool:
-        """Open the mic and load the wake word model (downloaded the first time); False if not."""
+        """Open the mic and load Whisper; False (and on_error) if either fails."""
         try:
             mic = self._mic()
         except Exception as e:
             self.on_error(f"I can't open the microphone: {e}")
             return False
         try:
-            spotter = self._spotter()
+            self._stt, self._quick = self._transcriber(), self._quick_factory()
         except Exception as e:
             mic.close()
-            self.on_error(f"I can't load the wake word model: {e}")
+            self.on_error(f"I can't load speech recognition: {e}")
             return False
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, args=(mic, spotter), daemon=True,
+        self._thread = threading.Thread(target=self._run, args=(mic,), daemon=True,
                                         name="robo-listen")
         self._thread.start()
         return True
 
     def listen_now(self) -> None:
-        self._now.set()
+        """The next sentence is for robo (the face was clicked)."""
+        self._open(NO_SPEECH_S, asked=True)
+
+    def follow_up(self, seconds: float) -> None:
+        """Robo just answered: a reply in the next `seconds` needs no name."""
+        self._open(seconds, asked=False)
+
+    def _open(self, seconds: float, asked: bool) -> None:
+        self._open_until, self._asked = self._clock() + seconds, asked
 
     def stop(self, wait: float = READ_TIMEOUT + 5) -> None:
         """End the thread; waits up to `wait` s (a transcription in flight finishes on its own)."""
@@ -227,50 +200,58 @@ class Listener:
         if self._thread:
             self._thread.join(wait)
 
-    def _run(self, mic: Mic, spotter: Spotter) -> None:
+    def _run(self, mic: Mic) -> None:
         pre_roll: deque[np.ndarray] = deque(maxlen=PRE_ROLL_FRAMES)
-        idle_rms: deque[float] = deque(maxlen=NOISE_FRAMES)
+        quiet: deque[float] = deque(maxlen=NOISE_FRAMES)
         try:
             while not self._stop.is_set():
-                woke = False
-                if not self._now.is_set():
-                    frame = mic.read(READ_TIMEOUT)
-                    if frame is None:
-                        continue
+                if self._asked and self._clock() >= self._open_until:
+                    self._asked = False  # clicked (or said "robo"), then nothing: give up
+                    self.on_text("")
+                frame = mic.read(READ_TIMEOUT)
+                if frame is None:
+                    continue
+                gate = speech_gate(quiet)
+                if rms(frame) <= gate:
                     pre_roll.append(frame)
-                    idle_rms.append(rms(frame))
-                    if not spotter.hit(frame):
-                        continue
-                    woke = True
-                try:
-                    if woke:
-                        self.on_wake()
-                    self._command(mic, list(pre_roll) if woke else [], speech_gate(idle_rms))
-                except Exception as e:
-                    log.exception("voice command failed")
-                    self.on_error(f"I couldn't hear that: {e}")
-                self._now.clear()  # a click while already listening is not a second request
+                    quiet.append(rms(frame))
+                    continue
+                woke = self._clock() < self._open_until  # robo expects this sentence: show it now
+                if woke:
+                    self.on_wake()
+                frames, loud, woke, over = self._record(mic, [*pre_roll, frame], gate, woke)
                 pre_roll.clear()
-                spotter.reset()
-        except Exception as e:  # the mic or the wake word model failed: say so, stop listening
+                if loud >= MIN_SPEECH_FRAMES:
+                    text = self._stt(np.concatenate(frames)) if self._stt else ""
+                    self._heard(without_over(text) if over else text, woke)
+        except Exception as e:  # the mic or Whisper failed: say so, stop listening
             log.exception("listener stopped")
             self.on_error(f"Voice input stopped: {e}")
         finally:
             mic.close()
 
-    def _command(self, mic: Mic, pre_roll: list[np.ndarray], gate: float) -> None:
-        frames, heard = self._record(mic, gate)
-        text = self._transcribe(pre_roll + frames) if heard or pre_roll else ""
-        command = strip_wake(text)
-        if not command and heard and _WAKE.match(text):  # just the wake word, then a pause
-            frames, heard = self._record(mic, gate)
-            command = strip_wake(self._transcribe(frames)) if heard else ""
-        if not self._stop.is_set():
-            self.on_text(command)
+    def _heard(self, text: str, woke: bool) -> None:
+        """Decide whether a transcribed sentence was for robo (`woke`: robo already showed it)."""
+        if self._stop.is_set():
+            return
+        request = without_name(text) if woke else addressed(text)
+        if request is None:
+            return  # not for robo (TV, other people)
+        if not woke:
+            self.on_wake()
+        self._open_until, self._asked = 0.0, False
+        if request:
+            self.on_text(request)
+        else:  # just "robo" (or nothing intelligible): the request follows
+            self._open(NO_SPEECH_S, asked=True)
 
-    def _record(self, mic: Mic, gate: float) -> tuple[list[np.ndarray], bool]:
-        """Frames until the utterance ends (or stop()); and whether any speech was heard."""
-        ep, frames = Endpointer(gate), []
+    def _record(self, mic: Mic, frames: list[np.ndarray], gate: float, woke: bool
+                ) -> tuple[list[np.ndarray], int, bool, bool]:
+        """Frames until the sentence ends (or stop()), how many were above the gate, whether
+        robo woke up (a quick early check found its name at the start), and whether "over"
+        ended it."""
+        ep, loud, start = Endpointer(gate), 1, len(frames)
+        ep.feed(rms(frames[-1]))  # the frame that crossed the gate
         while not self._stop.is_set():
             frame = mic.read(READ_TIMEOUT)
             if frame is None:  # the mic went quiet: that time counts as silence
@@ -278,12 +259,18 @@ class Listener:
                     break
                 continue
             frames.append(frame)
-            if ep.feed(rms(frame)):
+            level = rms(frame)
+            loud += level > gate
+            if ep.feed(level):
                 break
-        return frames, ep.heard
-
-    def _transcribe(self, frames: list[np.ndarray]) -> str:
-        if not frames or self._stop.is_set():
-            return ""
-        self._stt = self._stt or self._transcriber()
-        return self._stt(np.concatenate(frames))
+            n = len(frames) - start
+            if not self._quick or n < min(EARLY_FRAMES, OVER_EVERY):
+                continue
+            if not woke and n == EARLY_FRAMES:
+                woke = addressed(self._quick(np.concatenate(frames))) is not None
+                if woke:
+                    self.on_wake()
+            elif woke and n % OVER_EVERY == 0:
+                if _OVER.search(self._quick(np.concatenate(frames[-OVER_WINDOW:]))):
+                    return frames, loud, woke, True
+        return frames, loud, woke, False
