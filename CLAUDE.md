@@ -12,6 +12,8 @@ lives on the screen but helps. Keep it alive (it reacts, roams, looks around) an
   shows whatever else the user has open.
 - Voice: `scripts/voice_eval.py` (macOS voices → real Parakeet → name matcher). Compare a change with
   the score before it. The "Rubble was…" false positive is deliberate (see `listen._START_NAME`).
+  Its `--record` / `--wavs` modes score the user's own voice (the only way to calibrate `MIN_GATE`);
+  don't record while a call is live, the mic would capture other people.
 - Run the real app without reaching the live agent: `ROBO_HERMES_URL=http://127.0.0.1:9 uv run robo`.
 - Hermes-backed features (digest, study plan, `robo-make`) can only be checked against the live
   gateway: `printf '<prompt>\n' | uv run robo chat` prints the tools it used. The digest takes

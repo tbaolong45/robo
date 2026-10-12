@@ -160,7 +160,9 @@ The old `pli` terminal agent is preserved at git tag `pli-final`.
 ```bash
 uv run pytest -q && uv run ruff check src tests scripts hermes
 QT_QPA_PLATFORM=offscreen uv run python scripts/face_snapshots.py /tmp/faces   # every expression as PNG
-uv run python scripts/voice_eval.py /tmp/voice   # macOS: 10 TTS voices through the real model and the name matcher (178/200 now)
+uv run python scripts/voice_eval.py /tmp/voice   # macOS: 10 TTS voices through the real model and the name matcher (179/200 now)
+uv run python scripts/voice_eval.py --record ~/robo-voice   # you read 10 prompts (about 3 min); clips stay in that folder
+uv run python scripts/voice_eval.py --wavs ~/robo-voice     # scores YOUR voice and says if the speech gate would let it through
 ```
 
 ## Limits (known)
