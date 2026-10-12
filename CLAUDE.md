@@ -3,6 +3,8 @@
 Read `README.md` first (features, setup, layout table, `dev` → PR → `master` workflow). This file
 holds only what the code and the README don't say. Product intent: a Desktop Goose-style pet that
 lives on the screen but helps. Keep it alive (it reacts, roams, looks around) and out of the way.
+Voice is input only: the user talks to it through the mic (local speech recognition) and it answers
+in text in the bubble. It never speaks, so don't add speech output.
 
 ## Verify
 - `uv run pytest -q && uv run ruff check src tests scripts hermes`. CI runs both on Ubuntu and
