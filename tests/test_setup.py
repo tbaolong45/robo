@@ -1,9 +1,10 @@
 import plistlib
+import re
 import stat
 
 import pytest
 
-from robo import setup
+from robo import setup, vault
 
 
 def test_set_env_appends_updates_and_keeps_private(tmp_path):
@@ -139,6 +140,34 @@ def test_project_path_is_filled_into_skills(tmp_path, monkeypatch):
     setup.setup(templates=templates, config={}, run=lambda cmd: None, wait=lambda: True)
     assert (robo / "skills/p/SKILL.md").read_text() == f"uv run --project {setup.PROJECT} robo"
     assert (setup.PROJECT / "pyproject.toml").is_file()
+
+
+def profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n")
+    robo = tmp_path / "profiles" / "robo"
+    robo.mkdir(parents=True)
+    (robo / ".env").write_text("API_SERVER_KEY=r\n")
+    return robo
+
+
+def test_vault_path_is_filled_into_skills(tmp_path, monkeypatch):
+    """Skills and the persona name the vault through {{VAULT}}; vault.VAULT is the only copy."""
+    robo = profile(tmp_path, monkeypatch)
+    templates = tmp_path / "templates"
+    (templates / "skills" / "v").mkdir(parents=True)
+    (templates / "skills" / "v" / "SKILL.md").write_text("write to {{VAULT}}/Drafts/<title>.md")
+
+    setup.setup(templates=templates, config={}, run=lambda cmd: None, wait=lambda: True)
+    assert (robo / "skills/v/SKILL.md").read_text() == f"write to {vault.VAULT}/Drafts/<title>.md"
+
+
+def test_every_placeholder_in_the_real_templates_gets_filled(tmp_path, monkeypatch):
+    robo = profile(tmp_path, monkeypatch)
+    setup.setup(templates=setup.TEMPLATES, config={}, run=lambda cmd: None, wait=lambda: True)
+    left = {f"{f.relative_to(robo)}: {m}" for f in robo.rglob("*") if f.suffix == ".md"
+            for m in re.findall(r"\{\{[A-Z_]+\}\}", f.read_text())}
+    assert not left
 
 
 @pytest.mark.parametrize("bad", ["moodle.uni.example", "http://moodle.uni.example", "https://"])

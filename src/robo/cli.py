@@ -11,7 +11,7 @@ from collections.abc import MutableMapping
 from datetime import date
 from pathlib import Path
 
-from robo import browser, setup
+from robo import browser, setup, vault
 from robo.brain import BrainError, HermesClient
 from robo.events import Delta, Feeling, RunEnded, ToolStarted
 
@@ -86,7 +86,8 @@ def window() -> int:
         print("robo: XWayland unavailable, so robo opens as a normal window "
               "(sudo apt install libxcb-cursor0 for the floating face).", file=sys.stderr)
     win = RoboWindow(_client(), DigestClock(STATE), persona=setup.persona_stamp(),
-                     floating=floating, listener=Listener, watcher=Watcher(ActivityStore()))
+                     floating=floating, listener=Listener, watcher=Watcher(ActivityStore()),
+                     health=setup.connection()[0])  # the header's Hermes light polls /health
     win.show()
     return app.exec()
 
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         if args.command == "setup":
-            done = setup.setup(moodle=args.moodle) + setup.desktop()
+            done = setup.setup(moodle=args.moodle) + setup.desktop() + vault.ensure_vault()
             for line in done or ["already set up, nothing changed"]:
                 print(f"- {line}")
             return 0

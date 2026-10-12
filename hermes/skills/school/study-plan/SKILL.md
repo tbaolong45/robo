@@ -7,7 +7,7 @@ metadata:
   hermes:
     tags: [School, Planning, Calendar]
     requires_toolsets: [browser, terminal, file]
-    related_skills: [school-timetable, school-moodle, study-ledger, school-digest]
+    related_skills: [school-timetable, school-moodle, study-ledger, school-digest, robo-notes]
 ---
 
 # Study plan (today's timed blocks)
@@ -44,17 +44,21 @@ digest has the classes and deadlines) instead of fetching again.
    re-pack by hand. If it errors, fix the JSON once and rerun.
 
 ## Output
-At most 8 bullets in time order, then one line on what did not fit, then the question:
+Write the blocks in time order as a Plans note with `robo-notes` (use its plan format; work that
+did not fit goes in its "Didn't fit" callout). Robo shows the note in Obsidian; do not paste the
+blocks into the reply. Reply with two sentences (the plan's size and the first block, and what
+did not fit), then the question. In the school digest, write the same note; the digest's one
+line about it replaces this reply.
 
 ```
 [[feel:calm]]
-- 10:45-12:15 MATH201 problem set 4
-- 14:00-14:45 PHYS101 midterm review
-Didn't fit: CS lab write-up (due Fri), try tomorrow morning.
+Your plan for today is in Obsidian: 2 blocks, MATH201 problem set 4 first. The CS lab write-up
+didn't fit, so try it tomorrow morning.
 Put these in your Robo Plan calendar?
 ```
 
-If today already has `[Robo]` events, show those instead and offer to re-plan.
+If today already has `[Robo]` events, put those in the note instead (`status: in calendar`) and
+offer to re-plan.
 
 ## Adding to the calendar
 Only after the user says yes (their next message), or asked for a block directly. For each
@@ -74,6 +78,9 @@ block:
 5. At the end, `browser_navigate(url="https://outlook.office.com/calendar/view/day")` (or the
    block's day) and check that every `[Robo]` block is there. Report what was added and
    anything that failed.
+6. If you wrote the plan note for these blocks in this conversation, `patch` its line
+   `status: proposed` to `status: in calendar` only if every block was added. Skip it if that
+   is not easy.
 
 ## Pitfalls
 - Never invent deadlines, exams or results; plan only from what you found or were told.

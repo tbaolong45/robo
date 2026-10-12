@@ -1,21 +1,22 @@
 ---
 name: robo-make
-description: "Make diagrams, web pages, docs, charts and slides."
+description: "Make diagrams, web pages, charts, slides, flashcards."
 version: 1.0.0
 author: robo
 metadata:
   hermes:
-    tags: [Create, Diagram, HTML, Document, Chart]
+    tags: [Create, Diagram, HTML, Chart]
     requires_toolsets: [file]
-    related_skills: [study-plan]
+    related_skills: [study-plan, robo-notes]
 ---
 
-# Make things (diagrams, web pages, documents, charts, slides)
+# Make things (diagrams, web pages, charts, slides)
 
 ## When to Use
-The user asks you to create, draw, design, write up or visualise something: a diagram or mind
-map, a web page or HTML design, notes or a summary sheet, a chart of their data or results,
-slides, flashcards, a quiz.
+The user asks you to create, draw, design or visualise something that needs a browser: a
+diagram or mind map, a web page or HTML design, a chart of their data or results, slides,
+flashcards, a quiz. Notes, summary sheets, study guides, essay drafts and plans are text, not
+this skill: follow `robo-notes`, which writes them into the user's Obsidian vault.
 
 ## Where
 Write ONE self-contained file in `~/Robo/` (create the folder if needed), named
@@ -33,8 +34,6 @@ older one unless the user asks to change it.
   do something). Clean, modern, readable; responsive.
 - Chart of numbers (grades, study time from `robo activity`): `.html` with Chart.js from
   `https://cdn.jsdelivr.net/npm/chart.js@4`.
-- Notes, summary sheet, study guide, essay draft: a styled `.html` (prints well) or `.md` if
-  the user asks for Markdown.
 - Slides: one `.html` where each `<section>` fills the screen and arrow keys move between them.
 - Flashcards / quiz: one `.html` with click-to-flip cards or a self-checking quiz.
 - Code the user asked for: the right extension (`.py`, ...), runnable as is.

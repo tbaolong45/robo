@@ -8,17 +8,18 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
   - Clicking the face also makes it listen.
   - Pause to think as long as you need: once called, robo waits for 1.6 s of silence (up to 2 min of speech). End a request with **"over"** to send it at once, which helps when the room never goes quiet, for example when the TV is on.
   - Everything runs locally (NVIDIA Parakeet TDT 0.6B v2, int8 via onnx-asr, on the CPU), and no audio leaves the laptop. The model loads in the background, so the face is up in about a second and robo hears you a second or two later.
-- **Speech bubble.** It shows what you said, in full (long requests scroll), then "listening…", Messenger-style typing dots while robo thinks (with "searching the web…" and the like beside them), then the streamed answer. It closes by itself 20 s after the reply, or press Esc.
+- **Speech bubble, a holo card.** A card above the face with a header (the bot's name, a HERMES light that follows the gateway's `/health`, a MIC light, the model), then what you said (in full, long requests scroll), then "listening…" and Messenger-style typing dots while robo thinks (with "searching the web…" and the like beside them), then the answer **typed out letter by letter** at about 55 characters a second, with a short pause at the end of a sentence. It never falls far behind Hermes, so a long reply is not still typing a minute after it arrived. Click the reply or press Esc once to show it all at once. The card's colour follows the face's mood. It closes by itself 20 s after the last letter, or press Esc again.
+- **Themes.** Right-click → 🎨 Theme: Cyan HUD (default), Matrix, Amber CRT, Violet Aurora or Daylight; the choice is remembered. To go further, edit `~/.config/robo/theme.json` (every key is optional, a bad value is skipped and the rest still applies): `{"theme": "matrix", "tokens": {"bot_name": "PIXEL", "hue": 300, "cps": 80, "caret": "bar"}}`. `tokens` overrides single values of the chosen theme: the fields of `Theme` in `src/robo/theme.py` (colours, `cps` typing speed with 0 = instant, `caret` block/bar/under, `shape` cut/round, `bot_name`, `model_chip`, ...). Changes show the next time you open the right-click menu.
 - **The face shows what Hermes is doing and how it feels.** States: listening, thinking, browsing, talking, idle, sleepy after 5 min, asleep after 15 min. Hermes starts each reply with a hidden `[[feel:x]]` tag, and the face changes expression before the first word appears.
-- **Floating pet.** Robo rests, then drifts to another spot near the bottom or a side of the screen, with its eyes leading the way it walks. Its eyes follow your mouse pointer while you move it (it forgets a pointer that has been still for 15 s), and now and then, while it idles, it shows a mood (curious, happy, playful or calm). It stays put while you're talking to it and naps in the bottom-right corner. Drag it anywhere and it stays there for 10 min. Right-click: 📚 Digest · 💬 Type · 📌 Stay/🧭 Wander · ⏸ Watch/▶ Watch · ✕ Quit.
+- **Floating pet.** Robo rests, then drifts to another spot near the bottom or a side of the screen, with its eyes leading the way it walks. Its eyes follow your mouse pointer while you move it (it forgets a pointer that has been still for 15 s), and now and then, while it idles, it shows a mood (curious, happy, playful or calm). It stays put while you're talking to it and naps in the bottom-right corner. Drag it anywhere and it stays there for 10 min. Right-click: 📚 Digest · 💬 Type · 📌 Stay/🧭 Wander · ⏸ Watch/▶ Watch · 🎨 Theme · ✕ Quit.
 - **All permissions.** At your request, robo uses everything without asking (`approvals.mode: off`): apps (Hermes `computer_use`), the terminal, files, code execution, its own browser (any site, raw browser control), web search and memory. Its persona tells it to do exactly what you asked: send, post, submit, delete or pay only when your request says so.
   - It still can't change its own Hermes setup or its installed school skills (`robo-guard` + an `approvals.deny` rule).
   - Switch `approvals.mode` back to `manual` (in `src/robo/setup.py`, then `robo setup`) and robo asks Allow/Deny before irreversible steps again: deleting, sending, sudo, Send/Submit-style clicks.
 - **Self-evolving memory.** Robo saves what you tell it about yourself (goals, exams, results, preferences). After each conversation Hermes reviews it and keeps what it learned (memory and new skills of its own).
-- **Makes things.** Ask for a diagram, a web page, notes, a chart, slides or flashcards. Robo writes one self-contained file into `~/Robo/` and opens it when it's done.
+- **Makes things.** A draft, a plan or longer text (an email, a study plan, notes, a summary) is written as a Markdown note into an Obsidian vault at `~/Documents/Robo` (folders `Drafts`, `Plans`, `Notes`) and opens in Obsidian, so the bubble holds only a sentence or two. The automatic daily digest opens its note behind your windows. Ask for a diagram, a web page, a chart, slides or flashcards and robo writes one self-contained file into `~/Robo/` and opens it when it's done.
 - **Goals, exams and results.** Tell robo ("I got 8/10 on the quiz", "my goal is an A in linear algebra"). It keeps them in a private study ledger (`~/.local/share/robo/study.md`, 0600) and in its memory. It answers "how am I doing in …" from the ledger, past conversations and your Moodle grades.
-- **Study plans and scheduling.** "Plan my day" builds timed blocks around your classes, deadlines and exams, using `robo plan` for packing: no overlaps, breaks, nothing after a deadline. Say "yes" and they go into a **Robo Plan** Outlook calendar. "Add a study block tomorrow 9–10" works the same way.
-- **Mail drafts.** "Draft an email to … about …" creates a draft in your university Outlook and checks it is in Drafts. Robo sends only when you say "send".
+- **Study plans and scheduling.** "Plan my day" builds timed blocks around your classes, deadlines and exams, using `robo plan` for packing: no overlaps, breaks, nothing after a deadline. The plan opens as a note in Obsidian (a task checkbox per block); the bubble only says how many blocks there are and what did not fit. Say "yes" and they go into a **Robo Plan** Outlook calendar. "Add a study block tomorrow 9–10" works the same way.
+- **Mail drafts.** "Draft an email to … about …" shows the draft as a formatted note in Obsidian, then creates it in your university Outlook and checks it is in Drafts. Robo sends only when you say "send".
 - **Activity watching.** While the laptop is on, robo records each minute, locally only:
   - the focused app and window (on Linux through its small GNOME extension, which loads after one log-out/in; on macOS from the system, with window titles once you allow Screen Recording);
   - idle and locked time;
@@ -30,7 +31,7 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
 
 ## Setup
 
-Robo needs a microphone, [uv](https://docs.astral.sh/uv/), Brave and Hermes Agent.
+Robo needs a microphone, [uv](https://docs.astral.sh/uv/), Brave and Hermes Agent. [Obsidian](https://obsidian.md) is optional: without it, notes open in your default Markdown app.
 
 ### Linux (GNOME)
 
@@ -103,6 +104,7 @@ Not yet: coming next.
    - background review on (self-evolving memory), curator off, so robo's installed skills stay as they are
 5. Starts robo at login: on Linux it installs robo's GNOME focus extension and `~/.config/autostart/robo.desktop`; on macOS it writes `~/Library/LaunchAgents/ai.robo.plist`.
 6. Restarts the gateway, but only if something changed.
+7. Creates the Obsidian vault `~/Documents/Robo` (with `Drafts`, `Plans` and `Notes`) and adds it to Obsidian's list of vaults. Obsidian rewrites that list when it quits, so robo edits it only while Obsidian is closed. If Obsidian is open or has never been run, `robo setup` prints what to do by hand (choose *Open folder as vault*).
 
 Robo's browser is a separate Brave profile in `~/.hermes/profiles/robo/brave` (mode 0700). It runs headless on `127.0.0.1:9333`, next to your everyday Brave, whose login databases are locked while it is open.
 
@@ -136,6 +138,8 @@ Then restart robo: ✕ Quit in the right-click menu, then `uv run robo`. Robo ru
 
 ## Layout
 
+How the pieces fit together, with diagrams (what runs where, one request start to finish, the face's moods, where files live): [docs/architecture.md](docs/architecture.md).
+
 | Path | What |
 |---|---|
 | `src/robo/brain.py` | `HermesClient`: `POST /v1/runs`, SSE events (resumed once on a dropped stream), approvals |
@@ -144,13 +148,18 @@ Then restart robo: ✕ Quit in the right-click menu, then `uv run robo`. Robo ru
 | `src/robo/face/` | Expression table, spring/blink/glance animator (eyes follow the pointer or the walk), QPainter widget that repaints at a rate following the activity (idle 25 fps, asleep 10 fps) |
 | `src/robo/roam.py` | Pure wander logic: rest, drift along the edges, present, held, sleep |
 | `src/robo/listen.py` | Always-on listening: endpointing → Parakeet (CPU, loaded on the listener thread); name check, follow-up window, "over"; reopens a lost mic and reports a silent one |
-| `src/robo/app.py` | The floating window: face, speech bubble, approvals, drag, in-bubble menu, pointer-following eyes |
+| `src/robo/app.py` | The floating window: face, speech bubble, approvals, drag, in-bubble menu, pointer-following eyes; drives the typewriter |
+| `src/robo/typewriter.py` | Qt-free letter-by-letter reveal: pacing, catch-up with the stream, Markdown prefix that never shows half a mark (`**`, a bullet) |
+| `src/robo/theme.py` | Qt-free: the five themes, `~/.config/robo/theme.json`, colour maths |
+| `src/robo/hud.py` | The holo card: painted frame, header with the HERMES/MIC lights, quote, caret, theme picker |
+| `src/robo/health.py` | Polls the gateway's `/health` for the HERMES light |
 | `src/robo/widgets.py` | The bubble's stylesheet, typing dots, Markdown styler and text sizing |
 | `src/robo/activity.py` | Local activity watcher (focus via `gnome/robo-focus@robo` on Linux, Quartz on macOS; idle, Brave domains, files) and `robo activity` |
 | `src/robo/plan.py` | `robo plan`: free slots + deterministic study-block packing (JSON in/out) |
 | `src/robo/wake.py` | Resume watcher (logind `PrepareForSleep` on Linux, a wall-vs-monotonic clock gap on macOS) + once-a-day digest clock (`data/robo_state.json`) |
 | `src/robo/browser.py` | Robo's own headless Brave and `robo signin` |
 | `src/robo/setup.py` | `robo setup` |
+| `src/robo/vault.py` | The Obsidian vault: creates it, adds it to Obsidian's vault list, opens a note (in front, or behind for the automatic digest) |
 | `hermes/` | Persona, school skills and the robo-guard plugin installed into the robo profile |
 
 The old `pli` terminal agent is preserved at git tag `pli-final`.

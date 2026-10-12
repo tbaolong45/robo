@@ -196,6 +196,11 @@ class Listener:
     def running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def ready(self) -> bool:
+        """Running and the speech model is loaded: what you say is understood from now on."""
+        return self.running and self._stt is not None
+
     def start(self) -> bool:
         """Open the mic (False and on_error if that fails); the thread loads speech recognition,
         so the window need not wait for it, and the audio spoken meanwhile is kept."""

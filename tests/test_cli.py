@@ -1,6 +1,6 @@
 from datetime import date
 
-from robo import activity, cli, plan
+from robo import activity, cli, plan, setup, vault
 
 
 def test_activity_prints_the_summary(monkeypatch, capsys):
@@ -38,3 +38,30 @@ def test_xwayland_only_on_linux():
 
 def test_robo_floats_on_xwayland_and_macos():
     assert set(cli.FLOATING) == {"xcb", "cocoa"}
+
+
+def fake_setup(monkeypatch, hermes, desktop, vault_msgs):
+    monkeypatch.setattr(setup, "setup", lambda **kw: hermes)
+    monkeypatch.setattr(setup, "desktop", lambda: desktop)
+    monkeypatch.setattr(vault, "ensure_vault", lambda: vault_msgs)
+
+
+def test_setup_also_makes_the_vault_and_prints_what_it_did(monkeypatch, capsys):
+    fake_setup(monkeypatch, ["installed the persona"], ["robo now starts at login"],
+               ["created your Obsidian vault at /v"])
+    assert cli.main(["setup"]) == 0
+    assert capsys.readouterr().out == ("- installed the persona\n- robo now starts at login\n"
+                                       "- created your Obsidian vault at /v\n")
+
+
+def test_setup_prints_the_vault_message_even_when_nothing_else_changed(monkeypatch, capsys):
+    fake_setup(monkeypatch, [], [], ["Obsidian is open, so I left its settings alone"])
+    assert cli.main(["setup"]) == 0
+    out = capsys.readouterr().out
+    assert "Obsidian is open" in out and "nothing changed" not in out
+
+
+def test_setup_with_nothing_to_do_says_so(monkeypatch, capsys):
+    fake_setup(monkeypatch, [], [], [])
+    assert cli.main(["setup"]) == 0
+    assert capsys.readouterr().out == "- already set up, nothing changed\n"

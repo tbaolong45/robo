@@ -1,13 +1,22 @@
-"""Robo's look: the stylesheet, the speech bubble's Markdown styling and sizing, the typing dots."""
+"""Robo's look: fonts, the speech bubble's Markdown styling and sizing, the typing dots.
+
+The card, header and stylesheet that colour all this per theme live in robo.hud; the colours come
+from robo.theme. Nothing here may touch a font before a QGuiApplication exists: QFontDatabase
+aborts the process then, and this module is imported before the app is built.
+"""
 
 from __future__ import annotations
 
+import functools
 import math
 import time
+from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
+    QFontDatabase,
+    QGuiApplication,
     QPainter,
     QTextBlock,
     QTextBlockFormat,
@@ -18,34 +27,54 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QTextBrowser, QWidget
 
-BUBBLE_W = 340  # px
-STYLE = """
-QWidget { color: #d8e6ff; font-size: 14px; }
-QFrame#panel { background: rgba(14, 20, 34, 238); border: 1px solid #2a3a5c; border-radius: 14px; }
-QTextBrowser, QLineEdit { background: transparent; border: none; }
-QLineEdit { background: #121a2b; border: 1px solid #1f2b44; border-radius: 8px; padding: 5px; }
-QPushButton { background: #1b2640; border: none; border-radius: 8px; padding: 5px 10px; }
-QPushButton:hover { background: #26355a; }
-QPushButton#allow { background: #2b62e8; color: #fff; }
-QPushButton#allow:hover { background: #3f78ff; }
-QPushButton#deny { background: transparent; border: 1px solid #2a3a5c; padding: 4px 9px; }
-QPushButton#deny:hover { background: #1b2640; }
-QLabel#status, QTextBrowser#heard { color: #7f93b8; font-size: 12px; }
-QScrollBar:vertical { background: transparent; width: 6px; }
-QScrollBar::handle:vertical { background: #2a3a5c; border-radius: 3px; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
-"""
+from robo.theme import CYAN, Theme, accent
 
-# Markdown in the bubble. Qt's importer leaves paragraphs and lists cramped, code in the text font
-# (macOS has no "monospace" family, so Qt falls back to the text font) and links dark blue.
-MONO = ["Menlo", "DejaVu Sans Mono", "monospace"]  # macOS, Ubuntu, then whatever fontconfig has
+BUBBLE_W = 340  # px
+TEXT_W = BUBBLE_W - 38  # px of reply text inside the card (19 px of glow and padding each side)
+
+# Fonts: the first one that is installed (SF Mono ships with Xcode's tools, Menlo with macOS,
+# DejaVu Sans Mono with most Linux desktops). macOS has no "monospace" family: Qt would fall back
+# to the text font. MONO (the list for setFontFamilies) is resolved on first use, see __getattr__.
+MONO_STACK = ("SF Mono", "Menlo", "DejaVu Sans Mono")
 GAP, LIST_GAP, HEADING_GAP = 8, 3, 4  # px below a paragraph / between list items / under a heading
 INDENT = 18  # px per list level (Qt's 40 px wastes a sixth of the bubble)
+HEAD_PX = {1: 17, 2: 16, 3: 15}  # heading sizes, 14 below (Qt's 2x / 1.5x is too big)
 
 
-def _mono(fg: str | None = None, bg: str | None = None) -> QTextCharFormat:
+@functools.cache
+def _installed_mono() -> str:
+    have = set(QFontDatabase.families())
+    return next((f for f in MONO_STACK if f in have), MONO_STACK[-1])
+
+
+def mono_family() -> str:
+    """The monospace family to use, looked up once. Until a QGuiApplication exists the font
+    database cannot be read, so this answers the Mac name without remembering it."""
+    return _installed_mono() if QGuiApplication.instance() else MONO_STACK[1]
+
+
+def __getattr__(name: str):
+    # Module attributes that need the font database, so they are built when first asked for
+    # (`from robo.widgets import STYLE` may run before the QApplication exists).
+    if name == "MONO":
+        return [mono_family(), "monospace"]
+    if name == "DEFAULT":
+        return default_look()
+    if name == "STYLE":  # the Cyan HUD style sheet; RoboWindow now builds its own per theme
+        from robo.hud import qss
+
+        return qss(CYAN)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def qcolor(c: tuple[int, int, int, int]) -> QColor:
+    """An (r, g, b, a) tuple from robo.theme as a QColor."""
+    return QColor(*c)
+
+
+def mono_format(fg: str | None = None, bg: str | None = None) -> QTextCharFormat:
     fmt = QTextCharFormat()
-    fmt.setFontFamilies(MONO)
+    fmt.setFontFamilies([mono_family(), "monospace"])
     fmt.setProperty(QTextFormat.Property.FontPixelSize, 12)
     if fg:
         fmt.setForeground(QColor(fg))
@@ -54,14 +83,35 @@ def _mono(fg: str | None = None, bg: str | None = None) -> QTextCharFormat:
     return fmt
 
 
-CODE, INLINE_CODE = _mono(fg="#bccbe8"), _mono(bg="#1b2640")
-LINK = QTextCharFormat()
-LINK.setForeground(QColor("#7fb2ff"))
-LINK.setFontUnderline(True)
-CODE_LINE = QTextBlockFormat()
-CODE_LINE.setBackground(QColor("#070b14"))  # a hair darker than the panel: the lines form a box
-CODE_LINE.setTextIndent(8)  # the box's left padding (a block format has no padding of its own)
-CODE_LINE.setNonBreakableLines(False)  # wrap: sideways scrolling in a 340 px bubble is worse
+@dataclass(frozen=True, eq=False)
+class Look:
+    """How `style_markdown` dresses a document. `DEFAULT` is the bubble as it always was;
+    robo.hud.md_look makes one per theme."""
+
+    code: QTextCharFormat  # the text of a code block
+    inline: QTextCharFormat  # `inline code`
+    link: QTextCharFormat
+    code_line: QTextBlockFormat  # one line of a code block: the lines together form a box
+    head: QTextCharFormat | None = None  # None leaves the headings as Qt's importer made them
+    line_h: int = 0  # percent of Qt's line spacing, 0 leaves Qt's own
+    indent: int = INDENT
+    margin: int | None = None  # QTextDocument margin around the text, None leaves Qt's 4 px
+
+
+def default_look() -> Look:
+    return _default_look(mono_family())
+
+
+@functools.lru_cache(maxsize=1)
+def _default_look(mono: str) -> Look:  # `mono` is the key: a look built before the app is stale
+    link = QTextCharFormat()
+    link.setForeground(QColor("#7fb2ff"))
+    link.setFontUnderline(True)
+    line = QTextBlockFormat()
+    line.setBackground(QColor("#070b14"))  # a hair darker than the panel: the lines form a box
+    line.setTextIndent(8)  # the box's left padding (a block format has no padding of its own)
+    line.setNonBreakableLines(False)  # wrap: sideways scrolling in a 340 px bubble is worse
+    return Look(mono_format(fg="#bccbe8"), mono_format(bg="#1b2640"), link, line)
 
 
 def _is_code(block: QTextBlock) -> bool:
@@ -70,28 +120,35 @@ def _is_code(block: QTextBlock) -> bool:
     return fmt.nonBreakableLines() or fmt.background().style() != Qt.BrushStyle.NoBrush
 
 
-def style_markdown(doc: QTextDocument) -> None:
-    """Spacing, code and link colours for a document `setMarkdown` just filled.
+def style_markdown(doc: QTextDocument, look: Look | None = None) -> None:
+    """Spacing, code, link and heading colours for a document `setMarkdown` just filled.
 
     `setDefaultStyleSheet` does not reach Markdown, so the blocks and fragments are edited.
     Every value is absolute: calling it again on a styled document changes nothing.
     """
+    look = look or default_look()
+    prop = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
     cursor = QTextCursor(doc)
     cursor.beginEditBlock()
-    doc.setIndentWidth(INDENT)
+    doc.setIndentWidth(look.indent)
+    if look.margin is not None:
+        doc.setDocumentMargin(look.margin)
     block = doc.begin()
     while block.isValid():
         after = block.next()
         first = block.position()
         if _is_code(block):
-            line = QTextBlockFormat(CODE_LINE)
+            line = QTextBlockFormat(look.code_line)
             line.setBottomMargin(0 if not after.isValid() or _is_code(after) else GAP)
+            if look.line_h:
+                line.setLineHeight(look.line_h - 12, prop)  # 12 px type: tighter than the text
             cursor.setPosition(first)
             cursor.setPosition(first + block.length() - 1, QTextCursor.MoveMode.KeepAnchor)
             cursor.mergeBlockFormat(line)
-            cursor.mergeCharFormat(CODE)
+            cursor.mergeCharFormat(look.code)
         elif doc.frameAt(first) is doc.rootFrame():  # not a table cell: those stay as they are
-            if block.blockFormat().headingLevel():
+            level = block.blockFormat().headingLevel()
+            if level:
                 gap = HEADING_GAP
             elif block.textList() is not None and after.isValid() and after.textList() is not None:
                 gap = LIST_GAP
@@ -100,20 +157,27 @@ def style_markdown(doc: QTextDocument) -> None:
             spacing = QTextBlockFormat()
             spacing.setTopMargin(0)
             spacing.setBottomMargin(gap if after.isValid() else 0)  # no band under the last block
+            if look.line_h:
+                spacing.setLineHeight(look.line_h, prop)
             cursor.setPosition(first)
             cursor.mergeBlockFormat(spacing)
             it, runs = block.begin(), []
             while not it.atEnd():  # collect first: changing a format splits the fragments
                 frag = it.fragment()
                 fmt = frag.charFormat()
-                if fmt.isAnchor() or fmt.fontFixedPitch():
-                    look = LINK if fmt.isAnchor() else INLINE_CODE
-                    runs.append((frag.position(), frag.length(), look))
+                if level and look.head:
+                    head = QTextCharFormat(look.head)
+                    head.setProperty(QTextFormat.Property.FontPixelSize, HEAD_PX.get(level, 14))
+                    head.setProperty(QTextFormat.Property.FontSizeAdjustment, 0)  # the importer's
+                    runs.append((frag.position(), frag.length(), head))
+                elif fmt.isAnchor() or fmt.fontFixedPitch():
+                    runs.append((frag.position(), frag.length(),
+                                 look.link if fmt.isAnchor() else look.inline))
                 it += 1
-            for pos, length, look in runs:
+            for pos, length, fmt in runs:
                 cursor.setPosition(pos)
                 cursor.setPosition(pos + length, QTextCursor.MoveMode.KeepAnchor)
-                cursor.mergeCharFormat(look)
+                cursor.mergeCharFormat(fmt)
         block = after
     cursor.endEditBlock()
 
@@ -123,19 +187,26 @@ def _text_height(box: QTextBrowser, cap: int) -> int:
     doc = box.document()
     if doc.isEmpty():
         return 0
-    doc.setTextWidth(box.viewport().width() or BUBBLE_W - 30)
+    doc.setTextWidth(box.viewport().width() or TEXT_W)
     return min(int(doc.size().height()) + 2, cap)  # the document margins are the padding
 
 
 class TypingDots(QWidget):
-    """Messenger-style "typing" bubble: three dots that hop in turn while robo thinks."""
+    """Messenger-style "typing" dots: three dots in the accent colour that hop in turn while
+    robo thinks. Painted straight on the card (no pill)."""
 
     HOP = 4.0  # px
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, theme: Theme = CYAN):
         super().__init__(parent)
-        self.setFixedSize(54, 26)
+        self.theme, self.hue = theme, theme.hue
+        self.setFixedSize(32, 16)
         self.timer = QTimer(self, interval=33, timeout=self.update)
+
+    def restyle(self, theme: Theme, hue: float) -> None:
+        """Called by the Card when the theme or the live hue changes."""
+        self.theme, self.hue = theme, hue
+        self.update()
 
     @staticmethod
     def offsets(t: float) -> list[float]:
@@ -153,9 +224,7 @@ class TypingDots(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(38, 52, 82))
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 13, 13)
         for i, dy in enumerate(self.offsets(time.monotonic())):
-            p.setBrush(QColor(170, 190, 225, 150 + int(105 * -dy / self.HOP)))
-            p.drawEllipse(QPointF(15 + 12 * i, 13 + dy), 3.5, 3.5)
+            p.setBrush(qcolor(accent(self.theme, self.hue, 0.55 + 0.45 * -dy / self.HOP)))
+            p.drawEllipse(QPointF(5 + 11 * i, 10 + dy), 2.8, 2.8)
         p.end()
