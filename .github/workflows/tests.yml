@@ -2,6 +2,8 @@ name: tests
 on:
   push:
     branches: [master]  # macOS minutes count 10x on a private repo
+  pull_request:
+    branches: [master]  # dev -> master: tested before the laptops get it
   workflow_dispatch:
 jobs:
   test:

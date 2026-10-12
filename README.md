@@ -106,6 +106,34 @@ Not yet: coming next.
 
 Robo's browser is a separate Brave profile in `~/.hermes/profiles/robo/brave` (mode 0700). It runs headless on `127.0.0.1:9333`, next to your everyday Brave, whose login databases are locked while it is open.
 
+## Developing and updating
+
+The repo has two branches:
+- **`master`** is what the laptops run. Work reaches it only after the tests pass on Ubuntu and macOS.
+- **`dev`** is where work in progress goes.
+
+**To develop** (on either laptop):
+
+```bash
+git switch dev && git pull
+# change things, then:
+uv run pytest -q && uv run ruff check src tests scripts hermes
+git commit -am "what changed" && git push
+gh pr create --base master --head dev --fill   # once; later pushes to dev update it
+gh pr checks --watch                           # GitHub tests it on Ubuntu and macOS
+gh pr merge --merge                            # when green: master gets the work, dev stays
+```
+
+**To update a laptop** to the newest `master`:
+
+```bash
+git switch master && git pull
+uv sync --extra dev
+uv run robo setup       # safe to re-run; keeps your Moodle address
+```
+
+Then restart robo: ✕ Quit in the right-click menu, then `uv run robo`. Robo runs from the folder you cloned, so whichever branch is checked out there is the robo you get after a restart.
+
 ## Layout
 
 | Path | What |
