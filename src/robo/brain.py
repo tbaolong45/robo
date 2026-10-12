@@ -114,7 +114,7 @@ class HermesClient:
 
 def _describe(e: Exception) -> str:
     if isinstance(e, httpx.ConnectError):
-        return "Hermes is not running (connection refused)"
+        return "Hermes is not running (connection refused); start it with `hermes gateway start`."
     if isinstance(e, httpx.TimeoutException):
         return "Hermes timed out"
     if isinstance(e, ValueError):
@@ -125,7 +125,7 @@ def _describe(e: Exception) -> str:
 def _check(r: httpx.Response) -> None:
     """Raise `BrainError` for an error response."""
     if r.status_code == 401:
-        raise BrainError("Hermes rejected the API key (401)")
+        raise BrainError("Hermes rejected the API key (401); run `robo setup` again.")
     if r.is_error:
         r.read()
         try:

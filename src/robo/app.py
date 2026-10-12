@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import random
 import socket
 import subprocess
 import sys
@@ -17,10 +18,11 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QShortcut
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -33,14 +35,15 @@ from PySide6.QtWidgets import (
 
 from robo import mind as minds
 from robo.brain import BrainError
-from robo.events import ApprovalNeeded, Delta, Event, Listening, RunEnded, UserSent
+from robo.events import ApprovalNeeded, Delta, Event, Feeling, Listening, RunEnded, UserSent
+from robo.face.animator import look_at
 from robo.face.widget import FaceWidget
 from robo.roam import Rect, Roamer
 from robo.wake import DigestClock, WakeWatcher, wait_for_network
+from robo.widgets import BUBBLE_W, STYLE, TypingDots, _text_height, style_markdown
 
 DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill)."
 FACE = (128, 96)  # px, the floating face
-BUBBLE_W = 340  # px
 TEXT_MAX = 300  # px of reply text before the bubble scrolls
 HEARD_PX = 90  # px of your own (possibly long) question above the reply; then it scrolls
 APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
@@ -50,18 +53,8 @@ OUTPUT_DIR = Path.home() / "Robo"  # what robo makes (diagrams, pages, documents
 OPEN_MAX = 3  # files opened after one request
 FOLLOW_UP_S = 10.0  # s after an answer when you can reply without saying "robo"
 DRAG = 6  # px of movement that turns a click on the face into a drag
-STYLE = """
-QWidget { color: #d8e6ff; font-size: 14px; }
-QFrame#panel { background: rgba(14, 20, 34, 238); border: 1px solid #2a3a5c; border-radius: 14px; }
-QTextBrowser, QLineEdit { background: transparent; border: none; }
-QLineEdit { background: #121a2b; border: 1px solid #1f2b44; border-radius: 8px; padding: 5px; }
-QPushButton { background: #1b2640; border: none; border-radius: 8px; padding: 5px 10px; }
-QPushButton:hover { background: #26355a; }
-QLabel#status, QTextBrowser#heard { color: #7f93b8; font-size: 12px; }
-QScrollBar:vertical { background: transparent; width: 6px; }
-QScrollBar::handle:vertical { background: #2a3a5c; border-radius: 3px; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
-"""
+FIDGETS = ("curious", "happy", "playful", "calm")  # what a bored robo shows now and then
+FIDGET_EVERY = (40.0, 120.0)  # s between those moods while it idles
 
 
 def open_file(path: Path) -> None:
@@ -87,49 +80,6 @@ def _online() -> bool:
         return True
     except OSError:
         return False
-
-
-def _text_height(box: QTextBrowser, cap: int) -> int:
-    """Height that shows all of `box`'s text, at most `cap` (0 when empty)."""
-    doc = box.document()
-    if doc.isEmpty():
-        return 0
-    doc.setTextWidth(box.viewport().width() or BUBBLE_W - 30)
-    return min(int(doc.size().height()) + 12, cap)
-
-
-class TypingDots(QWidget):
-    """Messenger-style "typing" bubble: three dots that hop in turn while robo thinks."""
-
-    HOP = 4.0  # px
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setFixedSize(54, 26)
-        self.timer = QTimer(self, interval=33, timeout=self.update)
-
-    @staticmethod
-    def offsets(t: float) -> list[float]:
-        """Vertical offset of each dot at time `t` (a wave running left to right, 1.2 s)."""
-        return [-TypingDots.HOP * max(0.0, math.sin((t / 1.2 - i * 0.15) * 2 * math.pi))
-                for i in range(3)]
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
-        self.timer.start()
-
-    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
-        self.timer.stop()
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(38, 52, 82))
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 13, 13)
-        for i, dy in enumerate(self.offsets(time.monotonic())):
-            p.setBrush(QColor(170, 190, 225, 150 + int(105 * -dy / self.HOP)))
-            p.drawEllipse(QPointF(15 + 12 * i, 13 + dy), 3.5, 3.5)
-        p.end()
 
 
 class _Bridge(QObject):
@@ -162,6 +112,8 @@ class RoboWindow(QWidget):
         self.close_at = 0.0  # when the finished reply's bubble closes (0 = not scheduled)
         self.press: QPoint | None = None  # global position of a mouse press on the face
         self.moving = False  # the compositor is dragging robo (startSystemMove)
+        self.cursor, self.cursor_moved = QPoint(), -math.inf  # the pointer, and when it last moved
+        self.fidget_at = time.monotonic() + random.uniform(*FIDGET_EVERY)
         self.drag_end = QTimer(self, singleShot=True, interval=600, timeout=self._drag_done)
         self.bridge = _Bridge()
         self.bridge.event.connect(self._on_event)
@@ -208,12 +160,13 @@ class RoboWindow(QWidget):
         self.heard.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.status = QLabel("", objectName="status")
         self.typing = TypingDots()
-        status_row = QWidget()
-        row_layout = QHBoxLayout(status_row)
+        self.status_row = QWidget()  # takes room only while the dots or the label show (_show)
+        row_layout = QHBoxLayout(self.status_row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(self.typing)
         row_layout.addWidget(self.status)
         row_layout.addStretch(1)  # the dots sit at the left, like a chat bubble
+        self.status_row.hide()
         self.bubble = QTextBrowser(openExternalLinks=True)
         self.bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         # Resize after the document finished laying out (resizing inside its signal re-enters
@@ -222,7 +175,8 @@ class RoboWindow(QWidget):
         self.bubble.document().contentsChanged.connect(self.sizer.start)
         self.heard.document().contentsChanged.connect(self.sizer.start)
         self.approval_text = QLabel(wordWrap=True)
-        self.allow, self.deny = QPushButton("Allow"), QPushButton("Deny")
+        self.allow = QPushButton("Allow", objectName="allow")  # the accent; Deny is the quiet one
+        self.deny = QPushButton("Deny", objectName="deny")
         self.allow.clicked.connect(lambda: self._approve("once"))
         self.deny.clicked.connect(lambda: self._approve("deny"))
         self.approval = QWidget()
@@ -235,20 +189,30 @@ class RoboWindow(QWidget):
         box.addLayout(row)
         self.approval.hide()
         self.menu = QWidget()  # right-click: robo's menu inside its bubble (a popup menu needs
-        menu_row = QHBoxLayout(self.menu)  # a pointer grab XWayland refuses a Tool window)
-        menu_row.setContentsMargins(0, 0, 0, 0)
-        for label, fn in (("📚 Digest", lambda: self.ask(DIGEST_PROMPT)), ("⌨ Type", self._type),
-                          ("📌 Stay", self._toggle_stay), ("⏸ Watch", self._toggle_watch),
-                          ("✕ Quit", self.close)):
+        menu = QGridLayout(self.menu)  # a pointer grab XWayland refuses a Tool window)
+        menu.setContentsMargins(0, 0, 0, 0)
+
+        def action(label: str, fn: Callable[[], None]) -> QPushButton:
             button = QPushButton(label)
-            button.clicked.connect(lambda _=False, fn=fn: (self._hide_menu(), fn()))
-            menu_row.addWidget(button)
+            button.clicked.connect(lambda: (self._hide_menu(), fn()))
+            return button
+
+        self.stay = action("📌 Stay", self._toggle_stay)  # both change with the state (_show_menu)
+        self.watch = action("⏸ Watch", self._toggle_watch)
+        # 3 + 2: five in a row don't fit 340 px. Six columns: three 2-wide buttons, two 3-wide.
+        for i, button in enumerate((action("📚 Digest", lambda: self.ask(DIGEST_PROMPT)),
+                                    action("💬 Type", self._type), self.stay)):
+            menu.addWidget(button, 0, 2 * i, 1, 2)
+        for i, button in enumerate((self.watch, action("✕ Quit", self.close))):
+            menu.addWidget(button, 1, 3 * i, 1, 3)
+        for column in range(6):
+            menu.setColumnStretch(column, 1)
         self.menu.hide()
         self.input = QLineEdit(placeholderText="Type and press Enter")
         self.input.returnPressed.connect(self.send)
         self.input.setVisible(not self.floating)  # floating: voice, or "Type a message…"
         inner = QVBoxLayout(self.panel)
-        for w in (self.menu, self.heard, status_row, self.bubble, self.approval, self.input):
+        for w in (self.menu, self.heard, self.status_row, self.bubble, self.approval, self.input):
             inner.addWidget(w)
         self.face = FaceWidget(self, radius=22 if self.floating else 0)
         self.face.setFixedSize(*FACE) if self.floating else self.face.setMinimumHeight(220)
@@ -259,6 +223,7 @@ class RoboWindow(QWidget):
         layout.addWidget(self.panel, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.face, 0, Qt.AlignmentFlag.AlignHCenter)
         if self.floating:
+            self._size_text()  # empty boxes take no room (else the menu opens two 192 px bands)
             self._fit(self.panel.hide)
         else:
             self.resize(380, 560)
@@ -351,8 +316,12 @@ class RoboWindow(QWidget):
     def _say(self, text: str) -> None:
         """Show a short local message (no model involved)."""
         self.heard.clear()
-        self.bubble.setMarkdown(text)
+        self._markdown(text)
         self._open(close_after=8.0)
+
+    def _markdown(self, text: str) -> None:
+        self.bubble.setMarkdown(text)
+        style_markdown(self.bubble.document())
 
     # --- UI thread -----------------------------------------------------------------------
 
@@ -368,7 +337,7 @@ class RoboWindow(QWidget):
                 self._open()
             case Delta(text=t):
                 self.reply += t
-                self.bubble.setMarkdown(self.reply)
+                self._markdown(self.reply)
                 self.bubble.moveCursor(self.bubble.textCursor().MoveOperation.End)
             case ApprovalNeeded(desktop=True):
                 # The user lets robo drive the desktop freely ("all but irreversible"); "session"
@@ -389,7 +358,7 @@ class RoboWindow(QWidget):
                 if self.listening:  # interrupted by the user speaking: keep listening
                     self.mind = minds.react(self.mind, Listening(True), time.monotonic())
                 elif not self.pending:
-                    self.bubble.setMarkdown(text)
+                    self._markdown(text)
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
                 if status == "completed" and not self.listening:
@@ -399,7 +368,7 @@ class RoboWindow(QWidget):
                             open_file(f)
                     if made:
                         names = ", ".join(f.name for f in made)
-                        self.bubble.setMarkdown(f"{text}\n\n📂 Opened {names}")
+                        self._markdown(f"{text}\n\n📂 Opened {names}")
                 if self.listener and status == "completed" and not self.pending:
                     self.listener.follow_up(FOLLOW_UP_S)  # a reply needs no "robo"
                 self.digest_day = None
@@ -418,19 +387,38 @@ class RoboWindow(QWidget):
                 self.close_at = now + 5
             else:
                 self._close_bubble()
+        self._alive(now)
         self._show()
+
+    def _alive(self, now: float) -> None:
+        """Pet behaviour: the eyes follow the pointer while it moves (else lead the walk), and
+        an idle robo now and then shows a mood."""
+        here = QCursor.pos()
+        if here != self.cursor:
+            self.cursor, self.cursor_moved = here, now
+        c = self.face.mapToGlobal(self.face.rect().center())
+        self.face.set_look(look_at((c.x(), c.y()), (here.x(), here.y()), now - self.cursor_moved,
+                                   self.roamer.heading if self.roamer else 0))
+        if now >= self.fidget_at:
+            self.fidget_at = now + random.uniform(*FIDGET_EVERY)
+            if self.mind.activity == "idle" and not self.busy and self.panel.isHidden():
+                self.mind = minds.react(self.mind, Feeling(random.choice(FIDGETS)), now)
 
     def _show(self) -> None:
         m = self.mind
         self.face.set_state(m.activity, m.emotion, m.talking)
         listening = m.activity == "listening"
         thinking = self.busy and not self.reply and not listening
-        if self.typing.isVisibleTo(self) != thinking:
-            self._fit(lambda: self.typing.setVisible(thinking))
         dots = "." * (1 + int(time.monotonic() * 3) % 3)
         label = "listening" if listening else m.label.rstrip("…") if thinking else ""
         self.status.setText(f"{label}{dots}" if label else "")  # e.g. "browsing..." by the dots
-        self.status.setVisible(bool(label))
+        shown = (thinking, bool(label))  # the typing dots, the label
+        if shown != (self.typing.isVisibleTo(self), self.status.isVisibleTo(self)):
+            def apply() -> None:
+                self.typing.setVisible(shown[0])
+                self.status.setVisible(shown[1])
+                self.status_row.setVisible(any(shown))
+            self._fit(apply)
 
     def _size_text(self) -> None:
         """Your question and the reply are as tall as their text, up to a cap, then scroll."""
@@ -439,11 +427,15 @@ class RoboWindow(QWidget):
         wanted = {box: _text_height(box, cap) for box, cap in ((self.heard, HEARD_PX),
                                                                 (self.bubble, TEXT_MAX))}
         if any(h != box.height() or box.isHidden() != (h == 0) for box, h in wanted.items()):
+            fresh = any(h and box.isHidden() for box, h in wanted.items())
+
             def resize() -> None:
                 for box, h in wanted.items():
                     box.setFixedHeight(h)
                     box.setVisible(h > 0)
             self._fit(resize)
+            if fresh:  # a hidden box had no real width when measured: measure again, laid out
+                self.sizer.start()
 
     def _open(self, close_after: float = 0.0) -> None:
         self.close_at = time.monotonic() + close_after if close_after else 0.0
@@ -525,12 +517,11 @@ class RoboWindow(QWidget):
         self.moving = False
 
     def _show_menu(self) -> None:
-        buttons = self.menu.findChildren(QPushButton)
-        buttons[2].setText(
-            "🚶 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
+        self.stay.setText(
+            "🧭 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
             else "📌 Stay")
-        buttons[3].setText("▶ Watch" if self.watcher_ and self.watcher_.paused else "⏸ Watch")
-        buttons[3].setVisible(bool(self.watcher_))
+        self.watch.setText("▶ Watch" if self.watcher_ and self.watcher_.paused else "⏸ Watch")
+        self.watch.setVisible(bool(self.watcher_))
         self._fit(self.menu.show)
         self._open(close_after=8.0)
 
@@ -541,7 +532,7 @@ class RoboWindow(QWidget):
     def _clicked(self) -> None:
         if not self.busy and not self.panel.isHidden() and self.close_at:
             self._close_bubble()
-        elif self.listener:
+        elif self.listener and self.listener.running:  # a dead one must not leave robo "listening"
             self.listener.listen_now()
             self._on_event(Listening(True))  # show it at once (and interrupt an answer)
         elif self.busy:
