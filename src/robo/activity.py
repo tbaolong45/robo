@@ -403,7 +403,11 @@ def summary(store: ActivityStore, day: date | None = None, days: int = 1) -> str
         files = con.execute(
             "SELECT path, max(ts) AS t FROM files WHERE ts >= ? AND ts < ? GROUP BY path "
             "ORDER BY t DESC LIMIT 12", (lo, hi)).fetchall()
-    if not (active or sites or files):
+        recorded = con.execute("SELECT count(*) FROM minutes WHERE ts >= ? AND ts < ?",
+                               (lo, hi)).fetchone()[0]
+    if not (active or sites or files):  # tell "watching but away" from "not watching"
+        if recorded:
+            return f"No active time for {span}: {recorded} min recorded, all idle or locked."
         return f"No activity recorded for {span}."
     fmt = "%H:%M" if days == 1 else "%m-%d %H:%M"
     apps = Counter(app or "(unknown)" for _, app, _ in active)

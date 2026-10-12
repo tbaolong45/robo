@@ -257,6 +257,15 @@ def test_summary_is_compact_and_handles_empty(tmp_path):
     assert len(summary(store, date(2026, 10, 11))) <= 2500
 
 
+def test_a_day_of_only_idle_minutes_says_so_instead_of_nothing_recorded(tmp_path):
+    store = ActivityStore(tmp_path / "a.db")
+    store.add(s(at(9, 0), "code", "away", idle=900))
+    store.add(s(at(9, 1), "code", "locked", locked=True))
+    out = summary(store, date(2026, 10, 11))
+    assert "No active time" in out and "2 min recorded" in out and "idle or locked" in out
+    assert "No activity recorded" in summary(store, date(2026, 10, 10))  # a day with no rows
+
+
 def test_the_study_ledger_is_created_private_and_tightened(tmp_path):
     from robo.activity import ensure_ledger
 
