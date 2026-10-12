@@ -36,6 +36,9 @@ STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"  # int8 ONNX: ~0.4 s for 3 s of speech o
 EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's name
 OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
 OVER_WINDOW = 25  # ~2 s of the latest audio for that check
+MIC_STALL_S = 5.0  # no frame for this long: the mic is gone (unplugged, or stuck after a sleep)
+MIC_RETRY_S = 5.0  # ...then it is reopened this often
+SILENT_FRAMES = 38  # ~3 s of exact zeros: that is what a microphone without permission delivers
 
 # How Parakeet writes the user's "robo" (measured on two recordings of their voice): Robo, Rubo,
 # Robbo, Roombo; at the start of a sentence also Robot and Rubble. "Robot"/"rubble" at the end, and
@@ -43,7 +46,9 @@ OVER_WINDOW = 25  # ~2 s of the latest audio for that check
 _SOUND = r"r(?:o|u|oo|ou)m?bb?"
 _START_NAME = rf"{_SOUND}(?:o|oh|ow|ot|le)"
 _END_NAME = rf"{_SOUND}(?:o|oh|ow)"
-_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W+)?{_START_NAME}\b\W*", re.I)
+# \W* after the greeting: Parakeet sometimes glues it to the name ("Yorobo"); the name must still
+# fit whole, so "Hirobumi" and "Hiring" do not match
+_LEAD = re.compile(rf"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W*)?{_START_NAME}\b\W*", re.I)
 _TAIL = re.compile(rf"\W*\b{_END_NAME}\W*$", re.I)
 _ANYWHERE = re.compile(rf"\b{_END_NAME}\b", re.I)  # "robo"-like words are rare anywhere
 
@@ -71,6 +76,18 @@ def without_name(text: str) -> str:
 
 def rms(frame: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(frame))))
+
+
+LEVEL_PEAK = 0.5  # Parakeet reads soft speech worse (TTS at 0.15x: 44 -> 48 of 50 names caught)
+LEVEL_MAX_GAIN = 20.0  # ...but near-silence must not become loud noise
+
+
+def leveled(audio: np.ndarray) -> np.ndarray:
+    """`audio` scaled so its peak (99.5th percentile, so one click doesn't count) is LEVEL_PEAK."""
+    peak = float(np.percentile(np.abs(audio), 99.5))
+    if not peak:
+        return audio
+    return (audio * min(LEVEL_MAX_GAIN, LEVEL_PEAK / peak)).astype(np.float32, copy=False)
 
 
 def speech_gate(idle_rms: Iterable[float]) -> float:
@@ -139,10 +156,12 @@ class Parakeet:
     def __init__(self):
         import onnx_asr
 
-        self._model = onnx_asr.load_model(STT_MODEL, quantization="int8")
+        # CPU only: CoreML (macOS default) loads 3x slower, runs 2x slower, hears differently
+        self._model = onnx_asr.load_model(STT_MODEL, quantization="int8",
+                                          providers=["CPUExecutionProvider"])
 
     def __call__(self, audio: np.ndarray) -> str:
-        return str(self._model.recognize(audio, sample_rate=SAMPLE_RATE)).strip()
+        return str(self._model.recognize(leveled(audio), sample_rate=SAMPLE_RATE)).strip()
 
 
 class Listener:
@@ -152,7 +171,8 @@ class Listener:
     request at once, even when the room never goes quiet (TV). A sentence also counts
     without the name while robo expects one: after `listen_now()` (a click; `on_text("")` if
     nothing is said within NO_SPEECH_S), after `follow_up(seconds)` (it just answered), or right
-    after a bare "robo".
+    after a bare "robo". A mic that stops delivering is reopened; one that only gives silence
+    is reported.
     """
 
     def __init__(self, on_wake: Callable[[], None], on_text: Callable[[str], None],
@@ -169,26 +189,38 @@ class Listener:
         self._open_until = 0.0  # a sentence without the name counts until then
         self._asked = False  # the open window came from a click or a bare "robo": end it with ""
         self._thread: threading.Thread | None = None
+        self._last_audio = 0.0  # when the mic last delivered a frame
+        self._zeros = 0  # consecutive all-zero frames
+
+    @property
+    def running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
 
     def start(self) -> bool:
-        """Open the mic and load speech recognition; False (and on_error) if either fails."""
+        """Open the mic (False and on_error if that fails); the thread loads speech recognition,
+        so the window need not wait for it, and the audio spoken meanwhile is kept."""
         try:
             mic = self._mic()
         except Exception as e:
             self.on_error(f"I can't open the microphone: {e}")
             return False
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._load_and_run, args=(mic,), daemon=True,
+                                        name="robo-listen")
+        self._thread.start()
+        return True
+
+    def _load_and_run(self, mic: Mic) -> None:
         try:
             self._stt = self._transcriber()
             self._quick = self._quick_factory() if self._quick_factory else self._stt
         except Exception as e:
+            log.exception("speech recognition failed to load")
             mic.close()
             self.on_error(f"I can't load speech recognition: {e}")
-            return False
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, args=(mic,), daemon=True,
-                                        name="robo-listen")
-        self._thread.start()
-        return True
+            return
+        self._last_audio = self._clock()
+        self._run(mic)
 
     def listen_now(self) -> None:
         """The next sentence is for robo (the face was clicked)."""
@@ -207,7 +239,7 @@ class Listener:
         if self._thread:
             self._thread.join(wait)
 
-    def _run(self, mic: Mic) -> None:
+    def _run(self, mic: Mic | None) -> None:
         pre_roll: deque[np.ndarray] = deque(maxlen=PRE_ROLL_FRAMES)
         quiet: deque[float] = deque(maxlen=NOISE_FRAMES)
         try:
@@ -215,8 +247,12 @@ class Listener:
                 if self._asked and self._clock() >= self._open_until:
                     self._asked = False  # clicked (or said "robo"), then nothing: give up
                     self.on_text("")
-                frame = mic.read(READ_TIMEOUT)
+                frame = self._read(mic)
                 if frame is None:
+                    if self._clock() - self._last_audio >= MIC_STALL_S:
+                        mic = self._reopen(mic)
+                        if mic is None:  # stop() came first
+                            return
                     continue
                 gate = speech_gate(quiet)
                 if rms(frame) <= gate:
@@ -235,7 +271,40 @@ class Listener:
             log.exception("listener stopped")
             self.on_error(f"Voice input stopped: {e}")
         finally:
-            mic.close()
+            if mic:
+                mic.close()
+
+    def _read(self, mic: Mic) -> np.ndarray | None:
+        """One frame (None on timeout), noting when audio last came and if it is only silence."""
+        frame = mic.read(READ_TIMEOUT)
+        if frame is None:
+            return None
+        self._last_audio = self._clock()
+        self._zeros = 0 if frame.any() else self._zeros + 1
+        if self._zeros == SILENT_FRAMES:  # once per run of zeros
+            self.on_error("The microphone only gives me silence. Check that it isn't muted and "
+                          "that robo may use it (on a Mac: System Settings -> Privacy & Security "
+                          "-> Microphone).")
+        return frame
+
+    def _reopen(self, dead: Mic) -> Mic | None:
+        """The mic delivered nothing for MIC_STALL_S: say so, close it, reopen it every
+        MIC_RETRY_S. None if stop() came first."""
+        self.on_error("I lost the microphone, reconnecting...")
+        try:
+            dead.close()
+        except Exception:
+            log.warning("closing the lost microphone failed", exc_info=True)
+        while True:
+            try:
+                mic = self._mic()
+            except Exception as e:
+                log.warning("microphone still unavailable: %s", e)
+            else:
+                self._last_audio = self._clock()
+                return mic
+            if self._stop.wait(MIC_RETRY_S):
+                return None
 
     def _heard(self, text: str, woke: bool) -> None:
         """Decide whether a transcribed sentence was for robo (`woke`: robo already showed it)."""
@@ -262,7 +331,7 @@ class Listener:
         if woke:
             ep.end_silence, ep.max_s = PATIENT_SILENCE_S, PATIENT_MAX_S
         while not self._stop.is_set():
-            frame = mic.read(READ_TIMEOUT)
+            frame = self._read(mic)
             if frame is None:  # the mic went quiet: that time counts as silence
                 if any(ep.feed(0.0) for _ in range(round(READ_TIMEOUT / FRAME_S))):
                     break
