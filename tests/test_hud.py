@@ -110,7 +110,10 @@ def test_the_aurora_border_ends_on_pink_for_every_mood_and_an_error_stays_red():
         hue = theme.hue_for(aurora, activity, emotion, target(activity, emotion).hue)
         img = hud.chrome(aurora, QSize(340, 200), 1.0, hue).toImage()
         edge = img.pixelColor(333, 130).hue()  # the right edge, past the sweep's 90 %
-        assert abs((edge - 330 + 180) % 360 - 180) < 60, (emotion, hue, edge)  # not yellow/green
+        # not yellow or green (the old fixed shift gave 54, 105 and 96, 84 to 135 away from pink); a
+        # sad Robo's blue-violet edge is 60 away, and Linux rasterises the gradient a degree or two
+        # differently from macOS, so the bound has room
+        assert abs((edge - 330 + 180) % 360 - 180) < 75, (emotion, hue, edge)
 
 
 # --- the cache -------------------------------------------------------------------------------
