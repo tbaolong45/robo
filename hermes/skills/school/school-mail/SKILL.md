@@ -7,7 +7,7 @@ metadata:
   hermes:
     tags: [School, Outlook, Mail]
     requires_toolsets: [browser]
-    related_skills: [school-digest]
+    related_skills: [school-digest, robo-notes]
 ---
 
 # School mail (Outlook inbox)
@@ -37,18 +37,22 @@ write or send an email.
 For "draft/write an email to X about Y":
 1. You need X's address. If you only have a name, find it in a mail from them (or ask); never
    guess. Write a short subject and body in the user's voice.
-2. `browser_navigate(url="https://outlook.office.com/mail/deeplink/compose?to=<addr>&subject=<subject>&body=<body>")`,
-   every value URL-encoded (spaces `%20`, new lines `%0A`). Sign-in pages: steps 2-3 above,
-   then open the compose link again.
-3. `browser_snapshot()` until the compose form shows (at most 3 times). Check To, Subject and
+2. Write the draft as a Drafts note with `robo-notes` (To, Subject, body), so the user can read
+   it formatted. Do this first; it sends nothing and saves nothing in Outlook.
+3. `browser_navigate(url="https://outlook.office.com/mail/deeplink/compose?to=<addr>&subject=<subject>&body=<body>")`,
+   every value URL-encoded (spaces `%20`, new lines `%0A`). Sign-in pages: Procedure steps
+   2-3 above, then open the compose link again.
+4. `browser_snapshot()` until the compose form shows (at most 3 times). Check To, Subject and
    body; fix any wrong or empty field with `browser_type`.
-4. Leave it as a DRAFT. A form that was only prefilled is NOT saved by Outlook: click into the
+5. Leave it as a DRAFT. A form that was only prefilled is NOT saved by Outlook: click into the
    body, type one space (`browser_type` appending " "), wait ~5 s for "Draft saved", then
    close the compose with `browser_press(key="Escape")`. Never click "Discard".
-5. Verify before you claim it: `browser_navigate(url="https://outlook.office.com/mail/drafts")`
+6. Verify before you claim it: `browser_navigate(url="https://outlook.office.com/mail/drafts")`
    and find a row "[Draft] <recipient> <subject>". If it is not there, say so and try once
-   more. Then tell the user it is in their university Outlook Drafts (not Gmail), with the
-   subject, and offer to send it.
+   more. Then tell the user the draft is shown in Obsidian and saved in their university
+   Outlook Drafts (not Gmail), with the subject, and offer to send it. `patch` the note's line
+   `status: unsent` to `status: saved in Outlook Drafts` only after the draft row is found (the
+   "Not sent" callout stays); if the row never shows up, leave the status and say so.
 
 NEVER click Send unless the user's request explicitly says "send" (then check the fields once
 more first). For a reply, open the message and use its Reply the same way: draft unless told

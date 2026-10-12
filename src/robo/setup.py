@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from robo import vault
 from robo.browser import CDP_URL
 
 PROFILE = "robo"
@@ -249,6 +250,7 @@ def setup(
         done.append(f"set your Moodle address to {moodle}")
     fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set",
             "ROBO_PROJECT": str(PROJECT),
+            "VAULT": str(vault.VAULT),  # where drafts, plans and notes go; see robo.vault
             "DESKTOP_APPS": DESKTOP_APPS["darwin" if sys.platform == "darwin" else "linux"]}
     if _copy_tree(templates, profile_dir(), fill):
         done.append("installed the persona, skills and guard")
