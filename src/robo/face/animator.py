@@ -14,6 +14,24 @@ BLINK = 0.15  # seconds, close + open
 # Eye/mouth shape: changing these half-way looks broken (half happy, half sad), so a new
 # expression swaps them in one step at the middle of a blink, like EMO-style robots do.
 SHAPE = ("eye_round", "lid_top", "lid_angle", "lid_bottom", "skew", "wink", "mouth_curve")
+LOOK_RANGE = 500.0  # px of cursor distance at which the eyes turn as far as they go
+LOOK_GAIN = 0.9  # how far that is (1 = the eye reaches its limit)
+LOOK_STALE = 15.0  # s without cursor movement before robo stops staring at it
+WALK_LOOK = 0.6  # how far the eyes lead while it walks
+
+
+def look_at(centre: tuple[float, float], cursor: tuple[float, float], still_s: float,
+            heading: int = 0) -> tuple[float, float] | None:
+    """Where the eyes point (x, y in -1..1): at the cursor while it moves, else along the walk,
+    else None (free glances). A far cursor pulls harder than a near one."""
+    if still_s < LOOK_STALE:
+        dx, dy = cursor[0] - centre[0], cursor[1] - centre[1]
+        d = math.hypot(dx, dy)
+        if d < 1:
+            return 0.0, 0.0
+        k = LOOK_GAIN * min(1.0, d / LOOK_RANGE) / d
+        return dx * k, dy * k
+    return (WALK_LOOK * heading, 0.0) if heading else None
 
 
 class Animator:
@@ -30,7 +48,10 @@ class Animator:
         self.phase = 0.0
         self.shape: dict[str, float] | None = None  # the expression shape the eyes show now
 
-    def step(self, target: FaceParams, dt: float, talking: bool, now: float) -> FaceParams:
+    def step(self, target: FaceParams, dt: float, talking: bool, now: float,
+             look: tuple[float, float] | None = None) -> FaceParams:
+        """`look` (see look_at) replaces the free glances; poses that keep their own gaze
+        (wander 0: thinking, working, asleep) ignore it."""
         if self.x is None:
             self.x = {n: getattr(target, n) for n in FLOATS}
         asleep = "zzz" in target.effects
@@ -50,8 +71,9 @@ class Animator:
         if now >= self.next_glance:  # micro-glance: pick a new small gaze offset
             self.next_glance = now + self.rng.uniform(1.2, 4.0)
             self.glance = (self.rng.uniform(-0.35, 0.35), self.rng.uniform(-0.2, 0.2))
-        goal["gaze_x"] += self.glance[0] * target.wander
-        goal["gaze_y"] += self.glance[1] * target.wander
+        gx, gy = self.glance if look is None else look
+        goal["gaze_x"] += gx * target.wander
+        goal["gaze_y"] += gy * target.wander
 
         for n in (n for n in FLOATS if n not in SHAPE):  # exact critically damped spring
             e, v = self.x[n] - goal[n], self.v[n]

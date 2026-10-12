@@ -6,10 +6,11 @@ from datetime import date
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from robo import app as robo_app  # noqa: E402
+from robo import widgets  # noqa: E402
 from robo.brain import BrainError  # noqa: E402
 from robo.events import ApprovalNeeded, Delta, Feeling, RunEnded, ToolStarted  # noqa: E402
 from robo.wake import DigestClock  # noqa: E402
@@ -226,6 +227,7 @@ class FakeListener:
     def __init__(self, on_wake, on_text, on_error, ok=True):
         self.on_wake, self.on_text, self.on_error, self.ok = on_wake, on_text, on_error, ok
         self.now, self.stopped, self.follow = 0, False, 0
+        self.running = True  # the real one: its thread is alive
 
     def start(self):
         return self.ok
@@ -581,6 +583,33 @@ def test_the_menu_pauses_and_resumes_watching_and_remembers_it(tmp_path, monkeyp
     assert again.paused  # still paused after a restart
 
 
+@pytest.mark.parametrize("held", [False, True])
+def test_every_menu_button_fits_whole_inside_the_bubble(tmp_path, monkeypatch, held):
+    monkeypatch.setattr(robo_app, "WATCH_PAUSED", tmp_path / "watch.paused")
+    watcher = FakeWatcher()
+    win, _ = floating(tmp_path, FakeClient([]), watcher=watcher)
+    if held:  # the longest labels: "Wander" and the resume glyph
+        watcher.pause(True)
+        win._toggle_stay()
+    win._show_menu()
+    pump(win, lambda: False, timeout=0.2)
+    buttons = win.menu.findChildren(robo_app.QPushButton)
+    assert len(buttons) == 5 and all(b.isVisibleTo(win) for b in buttons)
+    assert ("Wander" in win.stay.text()) == held and ("▶" in win.watch.text()) == held
+    for b in buttons:
+        assert win.menu.rect().contains(b.geometry()), b.text()  # not pushed out of the bubble
+        assert b.width() >= b.sizeHint().width(), b.text()  # and its label is not clipped
+    assert win.panel.rect().contains(win.menu.geometry())
+
+
+def test_the_menu_on_a_fresh_robo_is_just_the_menu(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._show_menu()  # before any text exists to size the two text boxes
+    pump(win, lambda: False, timeout=0.2)
+    assert not win.heard.isVisibleTo(win) and not win.bubble.isVisibleTo(win)  # no empty bands
+    assert win.panel.height() - win.menu.height() < 40  # the buttons and the panel's padding
+
+
 def test_thinking_shows_typing_dots_until_the_reply_starts(tmp_path):
     gate = threading.Event()
     client = FakeClient(["WAIT", Delta("Hello"), "WAIT", RunEnded("completed", "Hello")], gate=gate)
@@ -600,6 +629,78 @@ def test_typing_dots_bounce():
 
     a, b = TypingDots.offsets(0.0), TypingDots.offsets(0.2)
     assert len(a) == 3 and a != b and max(map(abs, a)) <= TypingDots.HOP
+
+
+def test_a_dead_listener_leaves_the_click_to_the_typing_dialog(tmp_path):
+    from PySide6.QtTest import QTest
+
+    win, ear = floating(tmp_path, FakeClient([]))
+    ear.running = False  # its thread died after it started
+    typed = []
+    win._type = lambda: typed.append(1)
+    QTest.mouseClick(win.face, Qt.MouseButton.LeftButton)
+    assert typed == [1] and ear.now == 0  # no "listening" nobody will end
+    assert win.mind.activity != "listening"
+
+
+def test_the_status_row_takes_no_room_unless_dots_or_a_label_show(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(["WAIT", Delta("Hello"), "WAIT", RunEnded("completed", "Hello")], gate=gate)
+    win, ear = floating(tmp_path, client)
+    win.ask("hi")
+    assert pump(win, lambda: win.typing.isVisibleTo(win))
+    assert win.status_row.isVisibleTo(win)  # the dots live here
+    gate.set()
+    assert pump(win, lambda: "Hello" in win.bubble.toPlainText())
+    assert pump(win, lambda: not win.status_row.isVisibleTo(win))
+    pump(win, lambda: False, timeout=0.2)
+    gap = win.bubble.geometry().top() - win.heard.geometry().bottom() - 1
+    assert gap == win.panel.layout().spacing()  # nothing but the panel's own spacing
+    gate.set()
+    assert pump(win, lambda: not win.busy)
+    ear.on_wake()
+    assert pump(win, lambda: win.mind.activity == "listening")
+    assert win.status_row.isVisibleTo(win) and not win.typing.isVisibleTo(win)  # the label alone
+
+
+def test_the_reply_is_styled_as_markdown_however_it_gets_into_the_bubble(tmp_path, monkeypatch):
+    # RunEnded without ask() leaves started_at at 0: every file in ~/Robo would count as made.
+    monkeypatch.setattr(robo_app, "OUTPUT_DIR", tmp_path / "Robo")
+    monkeypatch.setattr(robo_app, "open_file", lambda path: pytest.fail(f"opened {path}"))
+    win, _ = floating(tmp_path, FakeClient([]))
+    first = lambda: win.bubble.document().begin().blockFormat()  # noqa: E731
+    win._on_event(Delta("one\n\ntwo"))  # streamed
+    assert first().bottomMargin() == widgets.GAP
+    win.busy = True
+    win._on_event(RunEnded("completed", output="three\n\nfour `x`"))  # the final text
+    assert win.bubble.toPlainText().startswith("three") and first().bottomMargin() == widgets.GAP
+    win._say("five\n\nsix")  # a local message
+    assert win.bubble.toPlainText().startswith("five") and first().bottomMargin() == widgets.GAP
+
+
+def test_the_bubble_still_fits_a_styled_reply_exactly(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._say("## Plan\n\n- read `ch. 4`\n- do the set\n\n```\nx = 1\ny = 2\n```\n\nSee [notes](https://x.y).")
+    win.heard.setPlainText("You: plan my week")  # _say clears it
+    assert pump(win, lambda: win.bubble.height() > 0 and win.heard.height() > 0)
+    pump(win, lambda: False, timeout=0.2)
+    assert win.bubble.verticalScrollBar().maximum() == 0  # all of it shows, nothing scrolls
+    for box in (win.bubble, win.heard):  # and nothing but a rounding margin is left over
+        assert box.height() - box.document().size().height() <= 3
+
+
+def test_allow_is_the_accent_button_and_deny_the_quiet_one(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._on_event(ApprovalNeeded("rm x"))
+    assert pump(win, lambda: win.approval.isVisibleTo(win))
+    pump(win, lambda: False, timeout=0.2)
+
+    def fill(button):
+        return button.grab().toImage().pixelColor(8, button.height() // 2)
+
+    allow, deny = fill(win.allow), fill(win.deny)
+    assert allow.alpha() == 255 and allow.saturation() > 150  # a solid colour
+    assert deny.alpha() < 255 or deny.saturation() < 100  # no fill: it recedes into the panel
 
 
 def test_what_robo_made_opens_by_itself(tmp_path, monkeypatch):
@@ -654,3 +755,70 @@ def test_open_file_uses_the_os_opener(monkeypatch, tmp_path):
         monkeypatch.setattr(robo_app.sys, "platform", platform)
         robo_app.open_file(tmp_path / "a.html")
     assert calls == [["xdg-open", str(tmp_path / "a.html")], ["open", str(tmp_path / "a.html")]]
+
+
+# --- alive: the eyes follow the pointer, and a bored robo fidgets -----------------------------
+
+
+class FakeCursor:
+    """Stands in for QCursor: `pos()` is wherever the test put the pointer."""
+
+    at = QPoint(0, 0)
+
+    @classmethod
+    def pos(cls):
+        return cls.at
+
+
+def test_the_eyes_follow_a_moving_pointer_then_forget_a_still_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(robo_app, "QCursor", FakeCursor)
+    win, _ = floating(tmp_path, FakeClient([]))
+    face = win.face.mapToGlobal(win.face.rect().center())
+    FakeCursor.at = QPoint(face.x() + 600, face.y())  # far to the right
+    win._tick()
+    assert win.face.look and win.face.look[0] > 0.5  # it moved, so robo looks
+    win.cursor_moved -= 60  # ...but a pointer that stopped long ago is old news
+    win._tick()
+    assert win.face.look is None or win.face.look[1] == 0 and abs(win.face.look[0]) < 1
+
+
+def test_the_eyes_lead_the_way_while_it_walks(tmp_path, monkeypatch):
+    monkeypatch.setattr(robo_app, "QCursor", FakeCursor)
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._tick()
+    win.cursor_moved -= 60
+    win.roamer.mode, win.roamer.goal = "drift", (win.roamer.pos[0] - 500, win.roamer.pos[1])
+    win._tick()
+    assert win.face.look and win.face.look[0] < 0
+
+
+def test_a_bored_robo_now_and_then_shows_a_mood(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.fidget_at = 0.0
+    win._tick()
+    assert win.mind.emotion in robo_app.FIDGETS
+    assert win.fidget_at > time.monotonic() + 30  # and it is a while until the next one
+
+
+def test_a_busy_or_talked_to_robo_does_not_fidget(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.busy = True
+    win.fidget_at = 0.0
+    win._tick()
+    assert win.mind.emotion == "neutral"
+    win.busy = False
+    win.fidget_at = 0.0
+    win._open()  # the bubble is up: the user is reading
+    win._tick()
+    assert win.mind.emotion == "neutral"
+
+
+def test_the_first_message_into_a_fresh_robo_is_not_clipped(tmp_path):
+    """The boxes start hidden; their first text must be measured at the width they will have."""
+    win, _ = floating(tmp_path, FakeClient([]))
+    err = "Hermes is not running (connection refused); start it with `hermes gateway start`."
+    win._on_event(RunEnded("failed", error=err))
+    pump(win, lambda: False, 0.5)
+    assert not win.bubble.isHidden()
+    assert win.bubble.verticalScrollBar().maximum() == 0  # nothing hides behind a scrollbar
+    assert win.bubble.height() >= win.bubble.document().size().height()

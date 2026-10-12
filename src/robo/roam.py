@@ -63,6 +63,12 @@ class Roamer:
         self.origin = self.goal = self.pos
         self.trip = self.elapsed = 0.0
 
+    @property
+    def heading(self) -> int:
+        """-1 / 1 while drifting left / right, else 0: where its eyes should lead."""
+        dx = self.goal[0] - self.pos[0]
+        return ((dx > 8) - (dx < -8)) if self.mode == "drift" else 0
+
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
         self.pos = fit(self.pos, size, self.screen)

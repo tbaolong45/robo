@@ -1,5 +1,9 @@
+import itertools
 import queue
+import sys
+import threading
 import time
+import types
 
 import numpy as np
 import pytest
@@ -51,6 +55,10 @@ def frames(a: int, b: int, level: float = 0.0) -> list[np.ndarray]:
     ("Can you help me, Robo?", "Can you help me"),
     ("Rubble play mode.", "play mode."),
     ("Robbo play mode.", "play mode."),
+    # Parakeet glues a greeting to the name: "Yo robo, ..." came out as "Yorobo, ..."
+    ("Yorobo, open my calendar.", "open my calendar."),
+    ("Heyrobo what's due this week?", "what's due this week?"),
+    ("Okayrobo.", ""),
 ])
 def test_sentences_that_call_robo(text, said):
     assert addressed(text) == said
@@ -64,6 +72,9 @@ def test_sentences_that_call_robo(text, said):
     "The letter was long today.", "Can you pass me water?", "Ruby on rails is fun",
     "My friend bought a ro robot.", "Rob is coming over tonight. The robot.",
     "Ralph is coming over tonight, the robots.", "The house was rubble", "Robert called.",
+    # words that start like "greeting + name" once the space between them may be missing
+    "Hirobumi Ito was a statesman.", "Hiring robots is hard.", "Hiroshima is a city.",
+    "Okay so the robot vacuum is loud.", "Yoruba is a language.",
 ])
 def test_sentences_not_for_robo(text):
     assert addressed(text) is None
@@ -100,6 +111,56 @@ def test_gate_tracks_noise_floor_with_minimum():
     assert speech_gate([]) == listen.MIN_GATE
 
 
+# --- Parakeet ------------------------------------------------------------------------------------
+
+
+def test_parakeet_loads_on_the_cpu_only(monkeypatch):
+    loaded = {}
+
+    def load_model(name, **kwargs):
+        loaded.update(name=name, **kwargs)
+        return object()
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    listen.Parakeet()
+    assert loaded == {"name": listen.STT_MODEL, "quantization": "int8",
+                      "providers": ["CPUExecutionProvider"]}
+
+
+def test_parakeet_hears_every_utterance_at_the_same_level(monkeypatch):
+    heard = []
+
+    class Model:
+        def recognize(self, audio, sample_rate):
+            heard.append(audio)
+            return " ok "
+
+    fake = types.SimpleNamespace(load_model=lambda *a, **k: Model())
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake)
+    stt = listen.Parakeet()
+    soft = (np.sin(np.linspace(0, 400, 16000)) * 0.05).astype(np.float32)
+    assert stt(soft) == "ok"
+    assert np.abs(heard[0]).max() == pytest.approx(listen.LEVEL_PEAK, rel=0.05)
+    assert heard[0].dtype == np.float32
+
+
+@pytest.mark.parametrize(("peak", "want"), [
+    (0.05, listen.LEVEL_PEAK),  # soft speech is brought up
+    (0.9, listen.LEVEL_PEAK),  # loud speech is brought down to the level the model was checked at
+    (0.0001, 0.0001 * listen.LEVEL_MAX_GAIN),  # near-silence is not turned into loud noise
+])
+def test_leveled_scales_to_the_peak_but_caps_the_boost(peak, want):
+    audio = (np.sin(np.linspace(0, 400, 16000)) * peak).astype(np.float32)
+    assert np.abs(listen.leveled(audio)).max() == pytest.approx(want, rel=0.05)
+
+
+def test_leveled_leaves_silence_and_one_click_alone():
+    assert not listen.leveled(np.zeros(1600, np.float32)).any()
+    click = np.zeros(16000, np.float32)
+    click[100] = 1.0  # one sample is not the level of the utterance (99.5th percentile)
+    assert np.abs(listen.leveled(click)).max() <= 1.0 * listen.LEVEL_MAX_GAIN
+
+
 # --- Listener ------------------------------------------------------------------------------------
 
 
@@ -134,6 +195,12 @@ class Clock:
 
     def __call__(self):
         return self.t
+
+
+@pytest.fixture
+def no_stall(monkeypatch):
+    """For tests that jump a hand-driven clock while no frames arrive (looks like a dead mic)."""
+    monkeypatch.setattr(listen, "MIC_STALL_S", 1e9)
 
 
 def start(mic, stt, clock=None, quick=None):
@@ -186,7 +253,7 @@ def test_a_knock_is_not_transcribed():
     assert stt.heard == [] and events.empty()
 
 
-def test_after_an_answer_a_reply_needs_no_name():
+def test_after_an_answer_a_reply_needs_no_name(no_stall):
     clock = Clock()
     mic = FakeMic()
     stt = FakeStt("and tomorrow?", "and next week?")
@@ -203,7 +270,7 @@ def test_after_an_answer_a_reply_needs_no_name():
     assert events.empty()
 
 
-def test_click_takes_the_next_sentence_or_gives_up():
+def test_click_takes_the_next_sentence_or_gives_up(no_stall):
     clock = Clock()
     mic = FakeMic()
     lis, events = start(mic, FakeStt("what's due"), clock)
@@ -258,20 +325,49 @@ def test_stop_returns_quickly_while_transcribing():
     assert time.monotonic() - t < 1.0
 
 
-def test_start_fails_without_mic_or_speech_model():
+def test_start_fails_without_the_mic():
     errors = []
 
     def no_mic():
         raise OSError("no input device")
 
+    lis = Listener(lambda: None, lambda t: None, errors.append, mic=no_mic)
+    assert not lis.start() and not lis.running
+    assert errors == ["I can't open the microphone: no input device"]
+
+
+def test_a_speech_model_that_will_not_load_is_reported_later_and_frees_the_mic():
+    errors, mic = queue.Queue(), FakeMic()
+
     def no_model():
         raise RuntimeError("model missing")
 
-    mic = FakeMic()
-    assert not Listener(lambda: None, lambda t: None, errors.append, mic=no_mic).start()
-    assert not Listener(lambda: None, lambda t: None, errors.append, mic=lambda: mic,
-                        transcriber=no_model).start()
-    assert len(errors) == 2 and "no input device" in errors[0] and mic.closed
+    lis = Listener(lambda: None, lambda t: None, errors.put, mic=lambda: mic, transcriber=no_model)
+    assert lis.start()  # the model loads on the listener thread, so start() cannot know yet
+    assert errors.get(timeout=5) == "I can't load speech recognition: model missing"
+    lis._thread.join(2)
+    assert not lis.running and mic.closed
+
+
+def test_start_returns_before_the_model_has_loaded_and_the_audio_is_kept():
+    release, events = threading.Event(), queue.Queue()
+    stt, mic = FakeStt("Robo, what time is it?"), FakeMic(sentence(0))  # spoken while loading
+
+    def slow_model():
+        release.wait(5)
+        return stt
+
+    lis = Listener(lambda: events.put("wake"), lambda t: events.put(("text", t)),
+                   lambda m: events.put(("error", m)), mic=lambda: mic, transcriber=slow_model,
+                   quick=lambda: FakeStt())
+    assert not lis.running
+    t = time.monotonic()
+    assert lis.start() and lis.running
+    assert time.monotonic() - t < 1.0 and events.empty() and not mic.q.empty()
+    release.set()
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "what time is it?")]
+    lis.stop()
+    assert not lis.running
 
 
 def test_robo_perks_up_while_you_are_still_talking():
@@ -392,3 +488,94 @@ def test_a_long_request_is_not_cut_at_fifteen_seconds():
     assert events.get(timeout=10) == ("text", "a long question")
     lis.stop()
     assert len(stt.heard[0]) // FRAME > 375
+
+
+# --- a microphone that dies or only gives silence ----------------------------------------------
+
+
+class Ticking(FakeMic):
+    """A mic on a hand-driven clock: every empty read is a READ_TIMEOUT that passes."""
+
+    def __init__(self, clock, fs=()):
+        super().__init__(fs)
+        self.clock = clock
+
+    def read(self, timeout):
+        f = super().read(timeout)
+        if f is None:
+            self.clock.t += timeout
+        return f
+
+
+def test_a_mic_that_stops_delivering_is_reopened_and_the_next_outage_reported_again(monkeypatch):
+    monkeypatch.setattr(listen, "MIC_RETRY_S", 0.01)
+    clock, events = Clock(), queue.Queue()
+    dead, fresh, gone = Ticking(clock), Ticking(clock, sentence(0)), OSError("no device")
+    mics = itertools.chain([dead, gone, fresh], itertools.repeat(gone))  # reopening fails once
+
+    def factory():
+        mic = next(mics)
+        if isinstance(mic, Exception):
+            raise mic
+        return mic
+
+    lis = Listener(lambda: events.put("wake"), lambda t: events.put(("text", t)),
+                   lambda m: events.put(("error", m)), mic=factory,
+                   transcriber=lambda: FakeStt("Robo, what time is it?"), quick=lambda: FakeStt(),
+                   clock=clock)
+    assert lis.start()
+    assert events.get(timeout=5) == ("error", "I lost the microphone, reconnecting...")
+    assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "what time is it?")]
+    assert events.get(timeout=5)[0] == "error"  # the fresh mic died too: reported again
+    lis.stop()  # ...and stop() ends the retrying
+    assert dead.closed and fresh.closed and events.empty() and not lis.running
+
+
+class Scripted(FakeMic):
+    """Plays `script`: a frame, or None for a READ_TIMEOUT that passes on the hand-driven clock;
+    once it runs out, the mic just waits."""
+
+    def __init__(self, clock, script):
+        super().__init__()
+        self.clock, self.script = clock, list(script)
+
+    def read(self, timeout):
+        if not self.script:
+            time.sleep(0.005)
+            return None
+        item = self.script.pop(0)
+        if item is None:
+            self.clock.t += timeout
+        return item
+
+
+@pytest.mark.parametrize(("timeouts", "reported"), [(9, False), (10, True)])  # 4.5 s, 5 s
+def test_only_a_gap_of_mic_stall_seconds_is_an_outage(timeouts, reported):
+    clock, errors = Clock(), []
+    mic = Scripted(clock, frames(0, 4) + [None] * timeouts + frames(4, 6))
+    lis = Listener(lambda: None, lambda t: None, errors.append, mic=lambda: mic,
+                   transcriber=lambda: FakeStt(), clock=clock)
+    assert lis.start()
+    end = time.monotonic() + 5
+    while mic.script and time.monotonic() < end:
+        time.sleep(0.005)
+    time.sleep(0.05)
+    lis.stop()
+    assert bool(errors) == reported
+
+
+def test_a_mic_that_only_gives_silence_is_reported_once_until_sound_returns():
+    def zeros(n):
+        return [np.zeros(FRAME, np.float32) for _ in range(n)]
+
+    n = listen.SILENT_FRAMES
+    mic = FakeMic(zeros(n + 20) + frames(1, 4) + zeros(n + 5) + frames(5, 8) + zeros(n - 1)
+                  + frames(8, 10))
+    lis, events = start(mic, FakeStt())
+    drained(mic)
+    assert lis.running  # not fatal
+    lis.stop()
+    errors = [events.get_nowait() for _ in range(events.qsize())]
+    assert len(errors) == 2 and all(
+        kind == "error" and "only gives me silence" in m and "Microphone" in m
+        for kind, m in errors)

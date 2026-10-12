@@ -111,7 +111,7 @@ def test_connection_error_ends_failed():
 
     events = list(client(boom).events("r1"))
     assert len(events) == 1 and events[0].status == "failed"
-    assert "not running" in events[0].error
+    assert "not running" in events[0].error and "`hermes gateway start`" in events[0].error
 
 
 def test_http_error_on_stream_ends_failed():
@@ -141,13 +141,14 @@ def test_401_is_readable_and_hides_key():
     with pytest.raises(BrainError) as e:
         c.start_run("hi", "s1")
     assert "key" in str(e.value).lower() and KEY not in str(e.value)
+    assert "`robo setup`" in str(e.value)  # the fix for a key Hermes no longer knows
 
 
 def test_connection_refused_says_not_running():
     def boom(req):
         raise httpx.ConnectError("refused")
 
-    with pytest.raises(BrainError, match="not running"):
+    with pytest.raises(BrainError, match="not running.*`hermes gateway start`"):
         client(boom).stop("r1")
 
 
