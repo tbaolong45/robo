@@ -163,3 +163,88 @@ def test_expression_changes_happen_behind_a_blink():
     t, p = frames[-1]
     assert all(getattr(p, n) == pytest.approx(getattr(sad, n)) for n in SHAPE)
     assert frames[0][0] - 1.0 < 0.05 and min(q.eye_h for _, q in frames[:20]) < 0.4 * sad.eye_h
+
+
+@pytest.fixture
+def face():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from robo.face.widget import FaceWidget
+
+    app = QApplication.instance() or QApplication([])
+    w = FaceWidget(seed=1)
+    yield w
+    w.deleteLater()
+    assert app is not None
+
+
+# Frame interval (ms) the face repaints at: the pet sleeps most of the day, so a calm face is cheap.
+RATES = {"idle": 40, "sleepy": 66, "asleep": 100}
+
+
+@pytest.mark.parametrize("activity", ACTIVITIES)
+def test_frame_interval_follows_activity(face, activity):
+    face.set_state(activity, "neutral")
+    assert face.timer.interval() == RATES.get(activity, 33)
+
+
+def test_waking_returns_to_the_fast_rate_at_once(face):
+    face.set_state("asleep", "neutral")
+    assert face.timer.interval() == 100
+    face.set_state("listening", "neutral")
+    assert face.timer.interval() == 33
+    face.set_state("asleep", "neutral")
+    face.set_state("idle", "neutral")
+    assert face.timer.interval() == 40
+
+
+def test_set_state_leaves_the_timer_alone_when_the_rate_is_unchanged(face):
+    """setInterval restarts a running timer, and the app calls set_state all the time."""
+    calls, set_interval = [], face.timer.setInterval
+    face.timer.setInterval = lambda ms: (calls.append(ms), set_interval(ms))
+    for activity in ("idle", "idle", "talking", "talking", "listening", "talking"):
+        face.set_state(activity, "neutral", activity == "talking")
+    assert calls == [33]
+
+
+@pytest.mark.parametrize("activity", [a for a in ACTIVITIES if a != "asleep"])
+def test_blinks_survive_the_frame_rate(activity):
+    """At the frame rate its activity runs at, every blink still shows >= 2 visibly shut frames."""
+    dt, goal = RATES.get(activity, 33) / 1000, target(activity, "neutral")
+    a = Animator(seed=11)
+    shut = {}  # blink start -> eye heights of the frames that show it
+    for i in range(1, int(40 / dt)):
+        p = a.step(goal, dt, False, i * dt)
+        if p.eye_h < 0.9 * goal.eye_h:  # outside a blink eye_h sits at the goal
+            shut.setdefault(a.blink_at, []).append(p.eye_h)
+    complete = [v for k, v in shut.items() if k < 39]
+    assert len(complete) >= 5
+    assert all(len(v) >= 2 and min(v) < 0.5 * goal.eye_h for v in complete)
+
+
+def test_glow_layers_skip_antialiasing_but_the_solid_shapes_keep_it(face):
+    """The 5 %-alpha halo layers have no visible edge, so AA on them is pure cost (~4x at idle)."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter, QPainterPath
+
+    from robo.face.widget import _glow
+
+    aa = QPainter.RenderHint.Antialiasing
+
+    class Spy(QPainter):
+        seen: list[bool] = []
+
+        def drawPath(self, path):  # noqa: N802 - Qt override
+            self.seen.append(self.testRenderHint(aa))
+            super().drawPath(path)
+
+    img = QImage(64, 48, QImage.Format.Format_ARGB32_Premultiplied)
+    painter = Spy(img)
+    painter.setRenderHint(aa)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(10, 10, 30, 20), 5, 5)
+    _glow(painter, path, target("idle", "neutral"))
+    assert Spy.seen == [False] * 7
+    assert painter.testRenderHint(aa)
+    painter.end()

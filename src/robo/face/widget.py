@@ -64,9 +64,11 @@ def _pen(col: QColor, width: float) -> QPen:
 def _glow(painter: QPainter, path: QPainterPath, p: FaceParams, base: float = 0.0) -> None:
     """Soft halo: stacked faint strokes, widest first, so alpha builds toward the shape."""
     painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # ~5 % layers: edge unseen
     for i in range(7):
         painter.setPen(_pen(_colour(p, 0.045 * (0.3 + p.glow)), base + 30 - 4 * i))
         painter.drawPath(path)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
 
 def _glow_fill(painter: QPainter, path: QPainterPath, p: FaceParams) -> None:
@@ -197,8 +199,16 @@ def render_params(painter: QPainter, rect: QRectF, p: FaceParams, t: float = 0.0
     painter.restore()
 
 
+# Repaint interval (ms) per activity: the pet sleeps most of the day and a calm face needs few
+# frames. Everything else (talking mouth 6-9 Hz, listening pulse, ...) runs at FAST_MS. A blink
+# lasts 0.15 s, so 66 ms is the slowest rate that still shows it (2 shut frames); asleep never
+# blinks.
+FAST_MS = 33
+FRAME_MS = {"idle": 40, "sleepy": 66, "asleep": 100}
+
+
 class FaceWidget(QWidget):
-    """Animated robot face. Call `set_state`; it animates itself at ~60 fps."""
+    """Animated robot face. Call `set_state`; it repaints at a rate that follows the activity."""
 
     def __init__(self, parent: QWidget | None = None, seed: int | None = None,
                  radius: float = 0.0):
@@ -207,19 +217,27 @@ class FaceWidget(QWidget):
         self.anim = Animator(seed)
         self.goal = target("idle", "neutral")
         self.talking = False
+        self.look: tuple[float, float] | None = None
         self.t0 = self.last = time.monotonic()
         self.params = self.anim.step(self.goal, 0.0, False, 0.0)
-        self.timer = QTimer(self, interval=16, timeout=self._tick)
+        self.timer = QTimer(self, interval=FRAME_MS["idle"], timeout=self._tick)
         self.timer.start()
         self.setMinimumSize(160, 120)
 
     def set_state(self, activity: str, emotion: str, talking: bool = False) -> None:
         self.goal, self.talking = target(activity, emotion), talking
+        ms = FRAME_MS.get(activity, FAST_MS)
+        if ms != self.timer.interval():  # setInterval restarts the timer; this runs very often
+            self.timer.setInterval(ms)
+
+    def set_look(self, look: tuple[float, float] | None) -> None:
+        """Point the eyes (see animator.look_at); None = free glances."""
+        self.look = look
 
     def _tick(self) -> None:
         now = time.monotonic()
         dt, self.last = min(now - self.last, 0.1), now
-        self.params = self.anim.step(self.goal, dt, self.talking, now - self.t0)
+        self.params = self.anim.step(self.goal, dt, self.talking, now - self.t0, self.look)
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
