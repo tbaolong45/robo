@@ -2,7 +2,7 @@
 
 import math
 import os
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import pytest
 
@@ -248,3 +248,113 @@ def test_glow_layers_skip_antialiasing_but_the_solid_shapes_keep_it(face):
     assert Spy.seen == [False] * 7
     assert painter.testRenderHint(aa)
     painter.end()
+
+
+# --- the theme hooks: set_theme(hue_fn, bg) and render_params(..., bg=) -------------------------
+
+def paint(params, bg=None, size=(64, 48)):
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+
+    from robo.face.widget import render_params
+
+    img = QImage(*size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    painter = QPainter(img)
+    render_params(painter, QRectF(0, 0, *size), params, 0.5, *([] if bg is None else [bg]))
+    painter.end()
+    return img
+
+
+def test_the_default_screen_is_the_dark_blue_it_always_was():
+    from PySide6.QtGui import QColor
+
+    from robo.face.widget import BG, SCREEN
+
+    assert QColor(18, 26, 42) == SCREEN and QColor(9, 13, 22) == BG
+    for activity, emotion in (("idle", "neutral"), ("talking", "happy"), ("error", "sad")):
+        p = target(activity, emotion)
+        default = paint(p)
+        assert default == paint(p, (SCREEN, BG))  # pixel for pixel
+        assert default == paint(p, ("#121a2a", "#090d16"))  # the same colours as theme tokens
+
+
+def test_a_theme_screen_replaces_both_colours():
+    from PySide6.QtGui import QColor
+
+    p = target("idle", "neutral")
+    img = paint(p, ("#336699", "#336699"))
+    assert QColor(img.pixel(1, 1)) == QColor("#336699")  # a corner, clear of the face
+    assert paint(p, ("#336699", "#336699")) != paint(p)
+    corner = QColor(paint(p, ("#000000", "#ff0000")).pixel(1, 1))
+    assert corner.red() > corner.blue() + 100  # the edge colour is at the corners
+
+
+def test_without_a_theme_the_goal_is_the_expression_table(face):
+    for activity, emotion in (("idle", "neutral"), ("thinking", "curious"), ("error", "sad"),
+                              ("talking", "happy"), ("asleep", "proud")):
+        face.set_state(activity, emotion)
+        assert face.goal == target(activity, emotion)
+    assert face.hue_fn is None and face.bg is None
+
+
+def test_the_hue_function_gets_the_state_and_the_base_hue(face):
+    seen = []
+
+    def hue_fn(activity, emotion, hue):
+        seen.append((activity, emotion, hue))
+        return 99.0
+
+    face.set_theme(hue_fn)
+    face.set_state("working", "sad")
+    assert seen[-1] == ("working", "sad", 216.0)  # the table's hue, before the theme's
+    assert face.goal.hue == 99.0
+    assert replace(face.goal, hue=216.0) == target("working", "sad")  # nothing else changes
+    assert face.talking is False
+    face.set_state("idle", "neutral", True)
+    assert face.talking is True and seen[-1] == ("idle", "neutral", 188.0)
+
+
+def test_set_theme_applies_to_the_state_the_face_is_in(face):
+    face.set_state("idle", "happy", True)
+    face.set_theme(lambda a, e, h: 7.0)
+    assert face.goal.hue == 7.0 and face.talking is True
+    assert face.timer.interval() == 40  # idle's rate: set_state ran again
+    face.set_theme()  # back to the plain face
+    assert face.goal == target("idle", "happy") and face.hue_fn is None
+
+
+@pytest.mark.parametrize(("key", "neutral", "happy", "proud", "sad"),
+                         [("cyan", 188, 168, 44, 216), ("matrix", 128, 108, 44, 216),
+                          ("amber", 38, 18, 52, 216), ("aurora", 268, 248, 44, 216),
+                          ("daylight", 196, 176, 44, 216)])
+def test_the_face_takes_robo_themes_hues(face, key, neutral, happy, proud, sad):
+    from functools import partial
+
+    from robo.theme import THEMES, hue_for
+
+    face.set_theme(partial(hue_for, THEMES[key]), THEMES[key].face_bg)
+    for activity, emotion, hue in (("idle", "neutral", neutral), ("idle", "happy", happy),
+                                   ("idle", "proud", proud), ("idle", "sad", sad),
+                                   ("error", "sad", 356)):  # an error is red in every theme
+        face.set_state(activity, emotion)
+        assert face.goal.hue == pytest.approx(hue), (key, activity, emotion)
+
+
+def test_snap_skips_the_sweep_to_the_new_hue(face):
+    face.set_theme(lambda a, e, h: 128.0)
+    assert face.params.hue == 188.0  # the spring would take about 0.3 s
+    face.set_theme(lambda a, e, h: 128.0, snap=True)
+    assert face.params.hue == 128.0 and face.anim.x["hue"] == 128.0 and face.anim.v["hue"] == 0.0
+    face._tick()
+    assert face.params.hue == pytest.approx(128.0, abs=0.5)  # and it stays there
+
+
+def test_the_widget_paints_the_themes_screen(face):
+    from PySide6.QtGui import QColor
+
+    face.resize(160, 120)
+    face.set_theme(bg=("#336699", "#336699"))
+    assert QColor(face.grab().toImage().pixel(1, 1)) == QColor("#336699")
+    face.set_theme()
+    assert QColor(face.grab().toImage().pixel(1, 1)) != QColor("#336699")

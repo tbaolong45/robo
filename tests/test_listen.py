@@ -364,10 +364,12 @@ def test_start_returns_before_the_model_has_loaded_and_the_audio_is_kept():
     t = time.monotonic()
     assert lis.start() and lis.running
     assert time.monotonic() - t < 1.0 and events.empty() and not mic.q.empty()
+    assert not lis.ready  # alive, but the model has not loaded
     release.set()
     assert [events.get(timeout=5), events.get(timeout=5)] == ["wake", ("text", "what time is it?")]
+    assert lis.ready
     lis.stop()
-    assert not lis.running
+    assert not lis.running and not lis.ready
 
 
 def test_robo_perks_up_while_you_are_still_talking():

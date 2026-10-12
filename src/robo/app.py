@@ -7,6 +7,7 @@ the screen edges (robo.roam). Otherwise the same widgets live in an ordinary win
 from __future__ import annotations
 
 import contextlib
+import functools
 import math
 import random
 import socket
@@ -14,14 +15,22 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -33,24 +42,33 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from robo import hud
 from robo import mind as minds
+from robo import theme as themes
 from robo.brain import BrainError
 from robo.events import ApprovalNeeded, Delta, Event, Feeling, Listening, RunEnded, UserSent
 from robo.face.animator import look_at
 from robo.face.widget import FaceWidget
+from robo.health import HealthPoller
 from robo.roam import Rect, Roamer
+from robo.typewriter import Pace, Typewriter
+from robo.vault import FOLDERS, VAULT, open_note
 from robo.wake import DigestClock, WakeWatcher, wait_for_network
-from robo.widgets import BUBBLE_W, STYLE, TypingDots, _text_height, style_markdown
+from robo.widgets import TypingDots, _text_height, style_markdown
 
 DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill)."
 FACE = (128, 96)  # px, the floating face
 TEXT_MAX = 300  # px of reply text before the bubble scrolls
 HEARD_PX = 90  # px of your own (possibly long) question above the reply; then it scrolls
 APPROVAL_MAX = 300  # characters of an approval request (a long command) shown
-CLOSE_AFTER = 20.0  # s a finished reply stays up (longer while the mouse is over it)
+CLOSE_AFTER = 20.0  # s a reply stays up after its last letter (longer while the mouse is over it)
+TYPE_S = 0.033  # s between typing steps (30 Hz; 0.030 if a slow machine struggles)
+SOLID_S = 0.5  # s the caret stays solid after a letter, then it blinks
+CARET_S = 1.6  # s the caret keeps blinking once the reply is all there
+SKIP_PX = 4  # px a press and release on the reply may be apart and still be a click to skip
 WATCH_PAUSED = Path.home() / ".local/share/robo/watch.paused"  # exists = watching paused
 OUTPUT_DIR = Path.home() / "Robo"  # what robo makes (diagrams, pages, documents); see SOUL.md
-OPEN_MAX = 3  # files opened after one request
+OPEN_MAX = 3  # notes and files opened after one request, together
 FOLLOW_UP_S = 10.0  # s after an answer when you can reply without saying "robo"
 DRAG = 6  # px of movement that turns a click on the face into a drag
 FIDGETS = ("curious", "happy", "playful", "calm")  # what a bored robo shows now and then
@@ -64,13 +82,23 @@ def open_file(path: Path) -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def _made_since(started: float) -> list[Path]:
-    """Files in OUTPUT_DIR written during this request, newest first."""
+def _newest(found: Iterable[Path], started: float) -> list[Path]:
+    """The files among `found` written since `started`, newest first, at most OPEN_MAX."""
     try:
-        files = [f for f in OUTPUT_DIR.rglob("*") if f.is_file() and f.stat().st_mtime >= started]
+        files = [f for f in found if f.is_file() and f.stat().st_mtime >= started]
+        return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:OPEN_MAX]
     except OSError:
         return []
-    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:OPEN_MAX]
+
+
+def _made_since(started: float) -> list[Path]:
+    """Files in OUTPUT_DIR written during this request, newest first."""
+    return _newest(OUTPUT_DIR.rglob("*"), started)
+
+
+def _notes_since(started: float) -> list[Path]:
+    """Obsidian notes (.md in the vault's Drafts, Plans, Notes) written during this request."""
+    return _newest((n for folder in FOLDERS for n in (VAULT / folder).rglob("*.md")), started)
 
 
 def _online() -> bool:
@@ -86,6 +114,7 @@ class _Bridge(QObject):
     event = Signal(object)  # Hermes events, from the worker thread
     heard = Signal(str)  # a transcribed voice command, from the listener thread
     note = Signal(str)  # a listener problem worth showing once
+    link = Signal(str)  # the Hermes gateway's health: "ok", "warn" or "bad" (robo.health)
 
 
 class RoboWindow(QWidget):
@@ -93,15 +122,20 @@ class RoboWindow(QWidget):
 
     def __init__(self, client, clock: DigestClock, *, today: Callable[[], date] = date.today,
                  network: Callable[[], bool] | None = None, watch_wake: bool = True,
-                 persona: str = "", floating: bool = False, listener=None, watcher=None):
+                 persona: str = "", floating: bool = False, listener=None, watcher=None,
+                 health: str = ""):
         super().__init__()
         self.client, self.clock, self.today, self.persona = client, clock, today, persona
         self.network = network or _online
         self.floating = floating
+        self.watcher_ = watcher  # activity watching (robo.activity.Watcher)
+        self.theme = themes.load()
+        self.theme_stamp = themes.stamp()  # theme.json as read (a hand edit shows at the menu)
         self.session_id = ""
         self.mind = minds.initial(time.monotonic())
         self.busy = False
         self.digest_day: date | None = None  # the day a running digest counts for
+        self.auto_digest = False  # that digest started by itself (start-up, wake), not from 📚
         self.reply = ""
         self.lock = threading.Lock()  # run_id/cancel are shared with the worker thread
         self.run_id: str | None = None
@@ -110,6 +144,14 @@ class RoboWindow(QWidget):
         self.started_at = 0.0  # when the current request began (files made since then open)
         self.listening = False
         self.close_at = 0.0  # when the finished reply's bubble closes (0 = not scheduled)
+        self.close_after = 0.0  # s the bubble stays once the reply is typed (0 = until closed)
+        self.tw = Typewriter(Pace(cps=self.theme.cps))  # how much of the reply is on screen
+        self.typed = False  # the reply is all on screen (the footer showed, the close timer ran)
+        self.last_tick = self.last_char = self.typed_at = -math.inf  # when the typing last ran,
+        self.mouth = False  # a letter showed, finished; the mouth moves (tw.revealing, last seen)
+        self.skip_at: QPoint | None = None  # a press on the reply, until its release
+        self.answered_at = -math.inf  # when the last answer ended (the next question follows up)
+        self.link, self.noted = "unknown", False  # Hermes LED; the listener reported a problem
         self.press: QPoint | None = None  # global position of a mouse press on the face
         self.moving = False  # the compositor is dragging robo (startSystemMove)
         self.cursor, self.cursor_moved = QPoint(), -math.inf  # the pointer, and when it last moved
@@ -119,7 +161,9 @@ class RoboWindow(QWidget):
         self.bridge.event.connect(self._on_event)
         self.bridge.heard.connect(self._on_heard)
         self.bridge.note.connect(self._on_note)
+        self.bridge.link.connect(self._on_link)
         self.resumed.connect(self._maybe_digest)
+        self.poller = HealthPoller(health, self.bridge.link.emit) if health else None
         self.roamer: Roamer | None = None
         self._build()
         if floating:
@@ -135,7 +179,6 @@ class RoboWindow(QWidget):
         self.watcher = WakeWatcher(self.resumed.emit) if watch_wake else None
         if self.watcher:
             self.watcher.start()
-        self.watcher_ = watcher  # activity watching (robo.activity.Watcher)
         if watcher:
             watcher.pause(WATCH_PAUSED.exists())
             watcher.start()
@@ -143,38 +186,51 @@ class RoboWindow(QWidget):
             if listener else None
         if self.listener and not self.listener.start():
             self.listener = None
+        if self.poller:
+            self.poller.start()
         QTimer.singleShot(0, self._maybe_digest)
 
     def _build(self) -> None:
+        t = self.theme
         self.setWindowTitle("Robo")
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(hud.qss(t))
+        self.look = hud.md_look(t)
         if self.floating:
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                                 | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             # macOS hides Tool windows whenever robo is not the active app; a pet stays out.
             self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
-        self.panel = QFrame(objectName="panel")
-        self.panel.setFixedWidth(BUBBLE_W)
-        self.heard = QTextBrowser(objectName="heard")  # what you said, in full
-        self.heard.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.status = QLabel("", objectName="status")
-        self.typing = TypingDots()
+        self.panel = hud.Card(t)  # paints its own frame; everything lays out in panel.inner
+        self.quote = hud.Quote(t)  # what you said, in full: label, bar, "↳ FOLLOW-UP", the text
+        self.heard = self.quote.text
+        self.status = hud.MicroLabel("", t, px=11, spacing=0.2, bold=False)
+        self.typing = TypingDots(theme=t)
         self.status_row = QWidget()  # takes room only while the dots or the label show (_show)
         row_layout = QHBoxLayout(self.status_row)
         row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
         row_layout.addWidget(self.typing)
         row_layout.addWidget(self.status)
         row_layout.addStretch(1)  # the dots sit at the left, like a chat bubble
         self.status_row.hide()
-        self.bubble = QTextBrowser(openExternalLinks=True)
+        self.bubble = QTextBrowser(objectName="reply", openExternalLinks=True)
         self.bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.bubble.document().setDocumentMargin(0)
+        self.bubble.viewport().installEventFilter(self)  # a click on the reply skips the typing
+        self.caret = hud.Caret(self.bubble.viewport(), t)  # at the end of the letters shown
         # Resize after the document finished laying out (resizing inside its signal re-enters
         # the text layout and aborts); one timer also coalesces a burst of streamed deltas.
         self.sizer = QTimer(self, singleShot=True, interval=0, timeout=self._size_text)
         self.bubble.document().contentsChanged.connect(self.sizer.start)
         self.heard.document().contentsChanged.connect(self.sizer.start)
-        self.approval_text = QLabel(wordWrap=True)
+        self.revealer = QTimer(self, interval=round(TYPE_S * 1000), timeout=self._reveal)
+        self.footer = QLabel("", objectName="footer", wordWrap=True)  # notes and files opened
+        self.footer.setTextFormat(Qt.TextFormat.PlainText)
+        self.footer.hide()
+        self.approval_label = hud.MicroLabel("APPROVAL ▸", t, tone="warn")
+        self.approval_text = QLabel(wordWrap=True, objectName="well")
+        self.approval_text.setTextFormat(Qt.TextFormat.PlainText)  # a command is not markup
         self.allow = QPushButton("Allow", objectName="allow")  # the accent; Deny is the quiet one
         self.deny = QPushButton("Deny", objectName="deny")
         self.allow.clicked.connect(lambda: self._approve("once"))
@@ -182,8 +238,11 @@ class RoboWindow(QWidget):
         self.approval = QWidget()
         box = QVBoxLayout(self.approval)
         box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        box.addWidget(self.approval_label)
         box.addWidget(self.approval_text)
         row = QHBoxLayout()
+        row.setSpacing(8)
         for button in (self.allow, self.deny):
             row.addWidget(button)
         box.addLayout(row)
@@ -191,6 +250,7 @@ class RoboWindow(QWidget):
         self.menu = QWidget()  # right-click: robo's menu inside its bubble (a popup menu needs
         menu = QGridLayout(self.menu)  # a pointer grab XWayland refuses a Tool window)
         menu.setContentsMargins(0, 0, 0, 0)
+        menu.setSpacing(6)
 
         def action(label: str, fn: Callable[[], None]) -> QPushButton:
             button = QPushButton(label)
@@ -199,27 +259,39 @@ class RoboWindow(QWidget):
 
         self.stay = action("📌 Stay", self._toggle_stay)  # both change with the state (_show_menu)
         self.watch = action("⏸ Watch", self._toggle_watch)
-        # 3 + 2: five in a row don't fit 340 px. Six columns: three 2-wide buttons, two 3-wide.
-        for i, button in enumerate((action("📚 Digest", lambda: self.ask(DIGEST_PROMPT)),
-                                    action("💬 Type", self._type), self.stay)):
+        self.themer = QPushButton("🎨 Theme")  # opens the swatches; the menu stays up
+        self.themer.clicked.connect(self._toggle_picker)
+        # Six columns: 3 + 3 chips, each 2 wide; without a watcher Theme and Quit take 3 each.
+        top = (action("📚 Digest", lambda: self.ask(DIGEST_PROMPT)), action("💬 Type", self._type),
+               self.stay)
+        low = (self.watch, self.themer, action("✕ Quit", self.close))
+        if not self.watcher_:
+            self.watch.setParent(self.menu)  # never shown (_show_menu), so not in the grid
+            low = low[1:]
+        for i, button in enumerate(top):
             menu.addWidget(button, 0, 2 * i, 1, 2)
-        for i, button in enumerate((self.watch, action("✕ Quit", self.close))):
-            menu.addWidget(button, 1, 3 * i, 1, 3)
+        for i, button in enumerate(low):
+            menu.addWidget(button, 1, 6 // len(low) * i, 1, 6 // len(low))
         for column in range(6):
             menu.setColumnStretch(column, 1)
         self.menu.hide()
-        self.input = QLineEdit(placeholderText="Type and press Enter")
+        self.picker = hud.Picker(t.key, t)  # a sibling of the menu: its own grid of swatches
+        self.picker.picked.connect(self._pick_theme)
+        self.picker.hide()
+        self.input = QLineEdit(placeholderText="▸ Type and press Enter")
         self.input.returnPressed.connect(self.send)
         self.input.setVisible(not self.floating)  # floating: voice, or "Type a message…"
-        inner = QVBoxLayout(self.panel)
-        for w in (self.menu, self.heard, self.status_row, self.bubble, self.approval, self.input):
-            inner.addWidget(w)
+        for w in (self.menu, self.picker, self.quote, self.status_row, self.bubble, self.footer,
+                  self.approval, self.input):
+            self.panel.inner.addWidget(w)
         self.face = FaceWidget(self, radius=22 if self.floating else 0)
         self.face.setFixedSize(*FACE) if self.floating else self.face.setMinimumHeight(220)
+        self.face.set_theme(functools.partial(themes.hue_for, t), t.face_bg, snap=True)
         self.face.installEventFilter(self)
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self._escape)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*(4,) * 4 if self.floating else (9,) * 4)
+        layout.setSpacing(3)
         layout.addWidget(self.panel, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.face, 0, Qt.AlignmentFlag.AlignHCenter)
         if self.floating:
@@ -247,9 +319,12 @@ class RoboWindow(QWidget):
         # One Hermes session per day and persona version (see setup.persona_stamp).
         self.session_id = "-".join(filter(None, ("robo", day.isoformat(), self.persona)))
         self.digest_day = day if text == DIGEST_PROMPT else None
+        self.auto_digest = wait_network and self.digest_day is not None
         self.started_at = time.time()  # files robo makes from now on are opened when it's done
-        self.heard.setPlainText("" if self.digest_day else f"You: {text}")
-        self.bubble.clear()
+        shown = bool(self.tw.text) and not self.panel.isHidden()  # an answer is still up, or just
+        follow = shown or time.monotonic() - self.answered_at < FOLLOW_UP_S  # was: follows it up
+        self._set_heard("" if self.digest_day else text, follow)
+        self._clear_reply()
         self._on_event(UserSent(text))
         threading.Thread(target=self._work, args=(text, wait_network), daemon=True).start()
 
@@ -265,6 +340,8 @@ class RoboWindow(QWidget):
             for ev in self.client.ask(text, self.session_id, started=self._started):
                 emit(ev)
         except BrainError as e:
+            if self.poller:
+                self.poller.poke()  # is the gateway down? the LED says so within a second
             emit(RunEnded("failed", error=str(e)))
         except Exception as e:  # never leave the window stuck "busy"
             emit(RunEnded("failed", error=f"Something went wrong: {e}"))
@@ -310,18 +387,21 @@ class RoboWindow(QWidget):
             self._say("Sorry, I didn't catch that.")
 
     def _on_note(self, text: str) -> None:
+        self.noted = True  # the MIC light shows it until robo listens again
         self._on_event(Listening(False))
         self._say(text)
 
-    def _say(self, text: str) -> None:
-        """Show a short local message (no model involved)."""
-        self.heard.clear()
-        self._markdown(text)
-        self._open(close_after=8.0)
+    def _on_link(self, state: str) -> None:
+        self.link = state
+        self._show()
 
-    def _markdown(self, text: str) -> None:
-        self.bubble.setMarkdown(text)
-        style_markdown(self.bubble.document())
+    def _say(self, text: str) -> None:
+        """Show a short local message (no model involved), typed like an answer. During a run
+        it is not the end of the reply: Hermes goes on and RunEnded finishes it."""
+        self._set_heard("")
+        self._clear_reply()
+        self._feed(text, end=not self.busy)
+        self._open(close_after=8.0)
 
     # --- UI thread -----------------------------------------------------------------------
 
@@ -330,15 +410,15 @@ class RoboWindow(QWidget):
         match ev:
             case Listening(on=True):
                 self.stop()  # speaking over robo interrupts its answer
-                self.heard.clear()
-                self.bubble.clear()
+                self.noted = False
+                self._set_heard("")
+                self._clear_reply()
                 self._open()
             case UserSent():
                 self._open()
             case Delta(text=t):
                 self.reply += t
-                self._markdown(self.reply)
-                self.bubble.moveCursor(self.bubble.textCursor().MoveOperation.End)
+                self._feed(self.reply)
             case ApprovalNeeded(desktop=True):
                 # The user lets robo drive the desktop freely ("all but irreversible"); "session"
                 # covers that kind of desktop step for the rest of this request only.
@@ -347,7 +427,7 @@ class RoboWindow(QWidget):
                 return
             case ApprovalNeeded(description=d):
                 d = d if len(d) <= APPROVAL_MAX else d[:APPROVAL_MAX - 1] + "…"
-                self.approval_text.setText(f"Allow? {d}")
+                self.approval_text.setText(d)
                 self._fit(self.approval.show)  # room for the buttons: the window grows
                 self._open()
             case RunEnded(status=status, output=out, error=err):
@@ -357,18 +437,27 @@ class RoboWindow(QWidget):
                 text = out or self.reply if status == "completed" else err or f"Run {status}."
                 if self.listening:  # interrupted by the user speaking: keep listening
                     self.mind = minds.react(self.mind, Listening(True), time.monotonic())
-                elif not self.pending:
-                    self._markdown(text)
                 if self.digest_day and status == "completed":
                     self.clock.mark(self.digest_day)
+                if status == "completed":
+                    self.answered_at = time.monotonic()
+                lines = []
                 if status == "completed" and not self.listening:
-                    made = _made_since(self.started_at)
-                    for f in made:
+                    notes = _notes_since(self.started_at)
+                    files = _made_since(self.started_at)[:OPEN_MAX - len(notes)]
+                    for n in notes:  # the automatic digest opens behind what you are doing
+                        with contextlib.suppress(OSError):
+                            open_note(n, front=not self.auto_digest)
+                    for f in files:
                         with contextlib.suppress(OSError):
                             open_file(f)
-                    if made:
-                        names = ", ".join(f.name for f in made)
-                        self._markdown(f"{text}\n\n📂 Opened {names}")
+                    if notes:
+                        lines.append(f"📓 In Obsidian: {', '.join(n.stem for n in notes)}")
+                    if files:
+                        lines.append(f"📂 Opened {', '.join(f.name for f in files)}")
+                if not self.listening and not self.pending:
+                    self.footer.setText("\n".join(lines))  # shown when the typing is done
+                    self._feed(text, end=True)
                 if self.listener and status == "completed" and not self.pending:
                     self.listener.follow_up(FOLLOW_UP_S)  # a reply needs no "robo"
                 self.digest_day = None
@@ -405,13 +494,21 @@ class RoboWindow(QWidget):
                 self.mind = minds.react(self.mind, Feeling(random.choice(FIDGETS)), now)
 
     def _show(self) -> None:
-        m = self.mind
-        self.face.set_state(m.activity, m.emotion, m.talking)
+        m, tw, now = self.mind, self.tw, time.monotonic()
+        # The mouth follows the letters appearing, not the stream: while some are still due the
+        # face keeps talking (the mind goes idle at RunEnded), but an error keeps its sad face.
+        typing = tw.pending
+        activity = "talking" if typing and m.activity in ("idle", "talking") else m.activity
+        self.face.set_state(activity, m.emotion, tw.revealing if typing else m.talking)
+        self.panel.set_hue(themes.live_hue(self.theme, self.face.params.hue, m.activity))
+        mic = hud.mic_state(self.listener, m.activity, self.noted)
+        self.panel.header.set_status(self.link, mic)
+        self.panel.header.set_phase(now)
+        self._caret(now)
         listening = m.activity == "listening"
         thinking = self.busy and not self.reply and not listening
-        dots = "." * (1 + int(time.monotonic() * 3) % 3)
-        label = "listening" if listening else m.label.rstrip("…") if thinking else ""
-        self.status.setText(f"{label}{dots}" if label else "")  # e.g. "browsing..." by the dots
+        label = "listening" if listening else m.label if thinking else ""
+        self.status.setText(label)  # e.g. "searching the web…" beside the dots
         shown = (thinking, bool(label))  # the typing dots, the label
         if shown != (self.typing.isVisibleTo(self), self.status.isVisibleTo(self)):
             def apply() -> None:
@@ -420,31 +517,144 @@ class RoboWindow(QWidget):
                 self.status_row.setVisible(any(shown))
             self._fit(apply)
 
+    def _caret(self, now: float) -> None:
+        """Shown while the reply types and for CARET_S after: solid just after a letter, else
+        blinking (waiting for Hermes, or in a pause)."""
+        tw = self.tw
+        show = bool(tw.text) and not tw.instant and (not tw.done or now < self.typed_at + CARET_S)
+        if self.caret.isHidden() == show:
+            self.caret.setVisible(show)
+        if show:
+            blink = int(now * 1000 / self.theme.caret_ms) % 2 == 0
+            self.caret.set_on(now - self.last_char < SOLID_S or blink)
+
+    # --- the reply: typed letter by letter ------------------------------------------------
+
+    def _set_heard(self, text: str, follow_up: bool = False) -> None:
+        """What you said, above the answer (hidden when there is none, as for the digest)."""
+        self.heard.setPlainText(text)
+        self.quote.tag.setVisible(follow_up and bool(text))
+        if not self.floating:  # floating: _size_text shows it together with its height
+            self.quote.setVisible(bool(text))
+
+    def _clear_reply(self) -> None:
+        """A new exchange: nothing of the last reply stays (text, typing, caret, footer, timer)."""
+        self.tw.reset()
+        self.revealer.stop()
+        self.typed, self.mouth, self.close_at = False, False, 0.0
+        self.bubble.clear()
+        self.caret.hide()
+        self.footer.setText("")
+        if not self.footer.isHidden():
+            self._fit(self.footer.hide)
+
+    def _feed(self, text: str, end: bool = False) -> None:
+        """Hand the typewriter the reply so far (`end`: that is all of it, as Hermes finished)."""
+        self.tw.end(text) if end else self.tw.feed(text)
+        self._resume()
+
+    def _resume(self) -> None:
+        """Start typing if letters are due; else everything is there: show it and finish."""
+        tw = self.tw
+        if tw.pending:
+            self.close_at = 0.0  # a reply is never closed under the reader
+            if not self.revealer.isActive():
+                self.last_tick = time.monotonic() - TYPE_S
+                self.revealer.start()
+                self._reveal()  # the first letters now, not a step later
+        else:
+            self._render()
+            self._settle()
+
+    def _reveal(self) -> None:
+        """One typing step: the letters due, the mouth, and the end."""
+        now, tw = time.monotonic(), self.tw
+        dt, self.last_tick = min(now - self.last_tick, 0.1), now
+        if tw.advance(dt):
+            self.last_char = now
+            self._render()
+        if tw.revealing != self.mouth:
+            self.mouth = tw.revealing
+            self._show()
+        self._settle()
+
+    def _settle(self) -> None:
+        """Nothing is due any more: stop the steps; when Hermes is done too, the reply is typed."""
+        if not self.tw.pending:
+            self.revealer.stop()
+            if self.tw.done and not self.typed:
+                self._typed()
+
+    def _typed(self) -> None:
+        """The reply is all on screen: show the footer and let the bubble close in a while."""
+        self.typed, self.typed_at = True, time.monotonic()
+        if self.footer.text() and self.footer.isHidden():
+            self._fit(self.footer.show)
+        if self.close_after and not self.busy:
+            self.close_at = self.typed_at + self.close_after
+        self._show()
+
+    def _render(self) -> None:
+        """Put the typewriter's view into the bubble: the Markdown of the prefix, its last word
+        laid out but invisible (so a word that will not fit the line wraps before it appears),
+        the box sized, scrolled to the end if it was, and the caret at the last letter."""
+        bar, doc = self.bubble.verticalScrollBar(), self.bubble.document()
+        md, hidden = self.tw.view()
+        keep = bar.value()
+        at_end = keep >= bar.maximum() - 4  # not scrolled up by the reader
+        self.bubble.setMarkdown(md)  # which resets the bar to the top
+        style_markdown(doc, self.look)
+        end = doc.characterCount() - 1
+        if hidden:
+            clear = QTextCharFormat()
+            clear.setForeground(QColor(0, 0, 0, 0))
+            clear.setBackground(QColor(0, 0, 0, 0))
+            cursor = QTextCursor(doc)
+            cursor.setPosition(max(0, end - hidden))
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            cursor.mergeCharFormat(clear)
+        self._size_text()
+        bar.setValue(bar.maximum() if at_end else keep)
+        cursor = QTextCursor(doc)
+        cursor.setPosition(max(0, end - hidden))
+        self.caret.place(self.bubble.cursorRect(cursor))
+
+    def _skip(self) -> None:
+        """Show the whole reply now, and whatever still arrives (click on the reply, Esc)."""
+        if self.tw.text and not self.tw.done and not self.tw.skipped:
+            self.tw.skip()
+            self._resume()
+
     def _size_text(self) -> None:
         """Your question and the reply are as tall as their text, up to a cap, then scroll."""
         if not self.floating:
             return
+        shell = {self.heard: self.quote, self.bubble: self.bubble}  # what shows or hides with it
         wanted = {box: _text_height(box, cap) for box, cap in ((self.heard, HEARD_PX),
                                                                 (self.bubble, TEXT_MAX))}
-        if any(h != box.height() or box.isHidden() != (h == 0) for box, h in wanted.items()):
-            fresh = any(h and box.isHidden() for box, h in wanted.items())
+        if any(h != box.height() or shell[box].isHidden() != (h == 0) for box, h in wanted.items()):
+            fresh = any(h and shell[box].isHidden() for box, h in wanted.items())
 
             def resize() -> None:
                 for box, h in wanted.items():
                     box.setFixedHeight(h)
-                    box.setVisible(h > 0)
+                    shell[box].setVisible(h > 0)
             self._fit(resize)
             if fresh:  # a hidden box had no real width when measured: measure again, laid out
                 self.sizer.start()
 
     def _open(self, close_after: float = 0.0) -> None:
-        self.close_at = time.monotonic() + close_after if close_after else 0.0
+        """Show the bubble; it closes `close_after` s after the reply is typed (0: stays)."""
+        self.close_after = close_after
+        armed = close_after and not self.tw.pending  # while it types, _typed arms the timer
+        self.close_at = time.monotonic() + close_after if armed else 0.0
         if self.panel.isHidden():
             self._fit(self.panel.show)
 
     def _close_bubble(self) -> None:
         self.close_at = 0.0
         self.menu.hide()
+        self.picker.hide()
         if self.floating and not self.panel.isHidden():
             self._fit(self.panel.hide)
 
@@ -471,7 +681,10 @@ class RoboWindow(QWidget):
             self.move(x, y)
 
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802 - Qt override
-        """Face: click = listen (or open the bubble), drag = move robo and leave it there."""
+        """Face: click = listen (or open the bubble), drag = move robo and leave it there.
+        Reply: click = show the rest of the typing now."""
+        if obj is self.bubble.viewport():
+            return self._skip_click(ev)
         if obj is not self.face:
             return False
         kind = ev.type()
@@ -502,6 +715,19 @@ class RoboWindow(QWidget):
             return False
         return True
 
+    def _skip_click(self, ev) -> bool:
+        """A click (press and release close together) on the reply, not on a link, skips the
+        typing. Never takes the event: links and selecting text work as always."""
+        kind, left = ev.type(), getattr(ev, "button", lambda: None)() == Qt.MouseButton.LeftButton
+        if kind == ev.Type.MouseButtonPress and left:
+            self.skip_at = ev.position().toPoint()
+        elif kind == ev.Type.MouseButtonRelease and left and self.skip_at is not None:
+            here, start, self.skip_at = ev.position().toPoint(), self.skip_at, None
+            if ((here - start).manhattanLength() < SKIP_PX and not self.bubble.anchorAt(here)
+                    and not self.bubble.textCursor().hasSelection()):
+                self._skip()
+        return False
+
     def _system_move(self) -> bool:
         """Let the compositor drag the window (XWayland ignores client moves mid-drag)."""
         handle = self.windowHandle()
@@ -517,6 +743,9 @@ class RoboWindow(QWidget):
         self.moving = False
 
     def _show_menu(self) -> None:
+        if themes.stamp() != self.theme_stamp:  # theme.json was edited by hand: show it now
+            self.theme_stamp = themes.stamp()
+            self.apply_theme(themes.load())
         self.stay.setText(
             "🧭 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
             else "📌 Stay")
@@ -527,7 +756,34 @@ class RoboWindow(QWidget):
 
     def _hide_menu(self) -> None:
         if not self.menu.isHidden():
-            self._fit(self.menu.hide)
+            self._fit(lambda: (self.menu.hide(), self.picker.hide()))
+
+    def _toggle_picker(self) -> None:
+        self._fit(lambda: self.picker.setVisible(self.picker.isHidden()))
+        self._open(close_after=8.0)
+
+    def _pick_theme(self, key: str) -> None:
+        """A swatch was clicked: switch now, and remember it (a file we cannot write still
+        leaves the new look on for this run)."""
+        self.apply_theme(themes.load(choice=key))
+        themes.save_choice(key)
+        self.theme_stamp = themes.stamp()
+        self._open(close_after=8.0)
+
+    def apply_theme(self, t: themes.Theme) -> None:
+        """Switch the look live, nothing restarts: style sheet, Markdown look, face colours,
+        card, typing speed, sizes."""
+        self.theme = t
+        self.setStyleSheet(hud.qss(t))
+        self.look = hud.md_look(t)
+        self.face.set_theme(functools.partial(themes.hue_for, t), t.face_bg)
+        self.panel.set_theme(t)  # restyles the header, quote, labels, dots and caret too
+        self.panel.set_hue(themes.live_hue(t, self.face.params.hue, self.mind.activity))
+        self.picker.set_current(t.key)
+        self.tw.set_pace(replace(self.tw.pace, cps=t.cps))
+        self._render()  # the reply in the new look
+        self._resume()  # a faster speed may be done, a slower one starts again
+        self._fit(lambda: None)  # fonts and gaps changed every height
 
     def _clicked(self) -> None:
         if not self.busy and not self.panel.isHidden() and self.close_at:
@@ -545,7 +801,8 @@ class RoboWindow(QWidget):
         self.typer = QInputDialog(None, Qt.WindowType.WindowStaysOnTopHint)
         self.typer.setWindowTitle("Ask robo")
         self.typer.setLabelText("Ask robo:")
-        self.typer.setStyleSheet("QWidget { background: #0e1422; color: #d8e6ff; }")
+        self.typer.setStyleSheet(f"QWidget {{ background: {self.theme.bg_top}; "
+                                 f"color: {self.theme.text}; }}")
         self.typer.textValueSelected.connect(lambda text: text.strip() and self.ask(text.strip()))
         self.typer.show()
         self.typer.raise_()
@@ -570,6 +827,8 @@ class RoboWindow(QWidget):
     def _escape(self) -> None:
         if self.busy:
             self.stop()
+        elif self.tw.pending:
+            self._skip()  # first Esc shows the rest, the next one closes
         else:
             self._close_bubble()
 
@@ -589,6 +848,8 @@ class RoboWindow(QWidget):
                     self.client.stop(run_id)
                 break
             time.sleep(0.1)
+        if self.poller:
+            self.poller.stop()
         if self.watcher:
             self.watcher.stop()
         if self.listener:

@@ -19,8 +19,9 @@ in text in the bubble. It never speaks, so don't add speech output.
 - Run the real app without reaching the live agent: `ROBO_HERMES_URL=http://127.0.0.1:9 uv run robo`.
 - Hermes-backed features (digest, study plan, `robo-make`) can only be checked against the live
   gateway: `printf '<prompt>\n' | uv run robo chat` prints the tools it used. The digest takes
-  about 2 min, reads mail, Teams, Moodle and the calendar, and writes nothing until a "yes";
-  `robo-make` writes into `~/Robo/`. Activity, plan and autostart can be run for real in a throwaway
+  about 2 min, reads mail, Teams, Moodle and the calendar, and changes nothing there until a "yes",
+  but a live digest now writes a Plans note into the Obsidian vault (`~/Documents/Robo`) and opens
+  Obsidian in the background; `robo-make` writes into `~/Robo/`. Activity, plan and autostart can be run for real in a throwaway
   `HOME` (`HOME=<dir> .venv/bin/robo activity`, `setup.desktop(platform="darwin")` + `plutil -lint`).
 - To look at a page `robo-make` wrote, serve a copy over loopback (browser tools block `file:`) and
   delete the `.playwright-mcp/` folder they leave in the repo.
@@ -52,5 +53,27 @@ the checkout it is run from, which may not be the one that runs at login. Don't 
 - **Face cost**: the repaint interval follows the activity (`FRAME_MS` in `face/widget.py`), and
   the glow strokes are drawn without antialiasing on purpose (mean pixel difference 0.1/255).
   Idle robo costs about 5 % of one core. 66 ms is the slowest interval that still shows a blink.
-- **Tests that send `RunEnded` straight to `RoboWindow`** must patch `OUTPUT_DIR` and `open_file`;
-  otherwise `_made_since(0.0)` opens real files from `~/Robo`.
+- **Tests can't open real files, notes or the gateway**: `tests/conftest.py` guards `OUTPUT_DIR`,
+  `VAULT`, `open_file`, `open_note`, the vault spawner and `app.HealthPoller` for every test, so a
+  test must patch them itself to open anything (otherwise `_made_since(0.0)` would open real files
+  from `~/Robo` or the vault). It also points `theme.CONFIG` at a temp `theme.json` with `cps: 0`
+  (instant typing, the old bubble); a test of the typing writes its own speed there. Other code
+  must say `theme.CONFIG`, never `from robo.theme import CONFIG`, or the patch misses it.
+- **The reply is typed, not printed** (`typewriter.py`, Qt-free, no clock of its own: `app` calls
+  `advance(dt)` at 30 Hz, `TYPE_S`, only while letters are pending). Each tick re-renders the
+  Markdown *prefix* with its open marks closed and the last word painted transparent, because
+  `setMarkdown` resets the scroll bar (`_render` puts it back) and a half-typed `**` or `-` would
+  flash. A tick costs about 3 ms (`setMarkdown`), so typing is ~10 % of a core for a few seconds;
+  raise `TYPE_S` before anything else if a machine struggles. `cps: 0` shows replies at once.
+  The pace follows Hermes (it never lags more than ~2-6 s), so don't slow it down for looks.
+- **Themes**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
+  follows the face's live hue in all five themes (the user chose this over one fixed colour);
+  `hud.chrome` is cached on `Theme.rev` plus the quantised hue. Label contrast is tested at all
+  360 hues (`tests/test_theme.py`), because the face's hue sweeps through every colour.
+- **Header lights**: HERMES polls `<gateway>/health` (no key needed, `health.HealthPoller`, amber
+  on the first miss, red on the second); MIC is `listen.Listener.ready` (thread alive *and* model
+  loaded; `running` alone is true while it still loads).
+- **Notes**: drafts, plans and text are Obsidian-flavoured Markdown in
+  `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
+  (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
+  `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.

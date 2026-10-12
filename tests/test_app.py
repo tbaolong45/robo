@@ -2,6 +2,7 @@ import os
 import threading
 import time
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,12 +11,13 @@ from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from robo import app as robo_app  # noqa: E402
-from robo import widgets  # noqa: E402
+from robo import hud, widgets  # noqa: E402
 from robo.brain import BrainError  # noqa: E402
 from robo.events import ApprovalNeeded, Delta, Feeling, RunEnded, ToolStarted  # noqa: E402
 from robo.wake import DigestClock  # noqa: E402
 
 QAPP = QApplication.instance() or QApplication([])
+REAL_OPEN_FILE = robo_app.open_file  # conftest swaps robo.app.open_file for a refusal per test
 
 
 class FakeClient:
@@ -96,6 +98,10 @@ def test_tool_label_shows_while_working(tmp_path):
     gate.set()
     assert pump(win, lambda: not win.busy)
     assert [a[0] for a in client.asked] == ["news?"]
+    # The question it queued runs next and would wait 5 s for the gate: that stale run's end
+    # would land in a later test (and open its notes). Let it finish here.
+    gate.set()
+    assert pump(win, lambda: len(client.asked) == 2 and not win.busy)
 
 
 def test_escape_stops_the_run(tmp_path):
@@ -227,7 +233,7 @@ class FakeListener:
     def __init__(self, on_wake, on_text, on_error, ok=True):
         self.on_wake, self.on_text, self.on_error, self.ok = on_wake, on_text, on_error, ok
         self.now, self.stopped, self.follow = 0, False, 0
-        self.running = True  # the real one: its thread is alive
+        self.running = self.ready = True  # the real one: its thread is alive, its model loaded
 
     def start(self):
         return self.ok
@@ -267,7 +273,7 @@ def test_floating_starts_as_just_a_face_and_the_bubble_opens_for_a_reply(tmp_pat
     win.ask("hello")
     assert pump(win, lambda: not win.busy)
     assert not win.panel.isHidden() and win.height() > face_only.height()
-    assert win.heard.toPlainText() == "You: hello" and "Hi!" in win.bubble.toPlainText()
+    assert win.heard.toPlainText() == "hello" and "Hi!" in win.bubble.toPlainText()
     assert win.close_at > time.monotonic() + robo_app.CLOSE_AFTER - 5  # closes by itself later
     win.close_at = 1  # the reply's time is up
     assert pump(win, lambda: win.panel.isHidden())
@@ -451,7 +457,7 @@ def test_a_long_question_is_shown_in_full_and_scrolls(tmp_path):
     win, _ = floating(tmp_path, FakeClient([RunEnded("completed", "ok")]))
     question = " ".join(f"word{i}" for i in range(400))
     win.ask(question)
-    assert win.heard.toPlainText() == f"You: {question}"  # nothing cut
+    assert win.heard.toPlainText() == question  # nothing cut
     assert pump(win, lambda: not win.busy)
     pump(win, lambda: False, timeout=0.2)
     assert win.heard.height() <= robo_app.HEARD_PX  # it scrolls instead of growing forever
@@ -594,7 +600,7 @@ def test_every_menu_button_fits_whole_inside_the_bubble(tmp_path, monkeypatch, h
     win._show_menu()
     pump(win, lambda: False, timeout=0.2)
     buttons = win.menu.findChildren(robo_app.QPushButton)
-    assert len(buttons) == 5 and all(b.isVisibleTo(win) for b in buttons)
+    assert len(buttons) == 6 and all(b.isVisibleTo(win) for b in buttons)
     assert ("Wander" in win.stay.text()) == held and ("▶" in win.watch.text()) == held
     for b in buttons:
         assert win.menu.rect().contains(b.geometry()), b.text()  # not pushed out of the bubble
@@ -607,7 +613,8 @@ def test_the_menu_on_a_fresh_robo_is_just_the_menu(tmp_path):
     win._show_menu()  # before any text exists to size the two text boxes
     pump(win, lambda: False, timeout=0.2)
     assert not win.heard.isVisibleTo(win) and not win.bubble.isVisibleTo(win)  # no empty bands
-    assert win.panel.height() - win.menu.height() < 40  # the buttons and the panel's padding
+    frame = sum(hud.MARGINS[1::2])  # the card's glow, header and tail around its content
+    assert win.panel.height() - win.menu.height() < frame + 12  # the buttons and a little padding
 
 
 def test_thinking_shows_typing_dots_until_the_reply_starts(tmp_path):
@@ -654,7 +661,7 @@ def test_the_status_row_takes_no_room_unless_dots_or_a_label_show(tmp_path):
     assert pump(win, lambda: "Hello" in win.bubble.toPlainText())
     assert pump(win, lambda: not win.status_row.isVisibleTo(win))
     pump(win, lambda: False, timeout=0.2)
-    gap = win.bubble.geometry().top() - win.heard.geometry().bottom() - 1
+    gap = win.bubble.geometry().top() - win.quote.geometry().bottom() - 1
     assert gap == win.panel.layout().spacing()  # nothing but the panel's own spacing
     gate.set()
     assert pump(win, lambda: not win.busy)
@@ -681,7 +688,7 @@ def test_the_reply_is_styled_as_markdown_however_it_gets_into_the_bubble(tmp_pat
 def test_the_bubble_still_fits_a_styled_reply_exactly(tmp_path):
     win, _ = floating(tmp_path, FakeClient([]))
     win._say("## Plan\n\n- read `ch. 4`\n- do the set\n\n```\nx = 1\ny = 2\n```\n\nSee [notes](https://x.y).")
-    win.heard.setPlainText("You: plan my week")  # _say clears it
+    win.heard.setPlainText("plan my week")  # _say clears it
     assert pump(win, lambda: win.bubble.height() > 0 and win.heard.height() > 0)
     pump(win, lambda: False, timeout=0.2)
     assert win.bubble.verticalScrollBar().maximum() == 0  # all of it shows, nothing scrolls
@@ -722,7 +729,7 @@ def test_what_robo_made_opens_by_itself(tmp_path, monkeypatch):
     win.ask("draw a diagram of the water cycle")
     assert pump(win, lambda: not win.busy)
     assert opened == [out / "diagram.html"]
-    assert "diagram.html" in win.bubble.toPlainText()
+    assert "diagram.html" in win.footer.text()
 
 
 def test_a_failed_request_opens_nothing(tmp_path, monkeypatch):
@@ -743,6 +750,119 @@ def test_a_failed_request_opens_nothing(tmp_path, monkeypatch):
     assert opened == []
 
 
+class Writer(FakeClient):
+    """Writes files (path -> text) while it works, like Hermes does; later ones are newer."""
+
+    def __init__(self, files, script):
+        super().__init__(script)
+        self.files = files
+
+    def ask(self, text, session_id, started=None):
+        now = time.time()
+        for i, (path, body) in enumerate(self.files.items()):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+            os.utime(path, (now + i, now + i))
+        yield from super().ask(text, session_id, started)
+
+
+@pytest.fixture
+def opened(tmp_path, monkeypatch):
+    """robo's folders under tmp_path, and what got opened: `.files` and `.notes` (path, front)."""
+    box = SimpleNamespace(out=tmp_path / "Robo", vault=tmp_path / "Vault", files=[], notes=[])
+    monkeypatch.setattr(robo_app, "OUTPUT_DIR", box.out)
+    monkeypatch.setattr(robo_app, "VAULT", box.vault)
+    monkeypatch.setattr(robo_app, "open_file", box.files.append)
+    monkeypatch.setattr(robo_app, "open_note",
+                        lambda path, front=True: box.notes.append((path, front)))
+    return box
+
+
+def request(tmp_path, client, text="write me an email"):
+    win, _ = floating(tmp_path, client)
+    win.ask(text)
+    assert pump(win, lambda: not win.busy)
+    return win
+
+
+def test_a_note_robo_wrote_opens_in_obsidian_and_the_bubble_says_so(tmp_path, opened):
+    old = opened.vault / "Notes" / "old.md"  # made before this request: not reopened
+    old.parent.mkdir(parents=True)
+    old.write_text("old")
+    os.utime(old, (1, 1))
+    note = opened.vault / "Drafts" / "Email to Prof Lee.md"
+    win = request(tmp_path, Writer({note: "Hi"}, [RunEnded("completed", "It is in Obsidian.")]))
+    assert opened.notes == [(note, True)] and opened.files == []
+    shown, footer = win.bubble.toPlainText(), win.footer.text()
+    assert "It is in Obsidian." in shown and "📓 In Obsidian: Email to Prof Lee" in footer
+    assert "📂" not in footer and "📓" not in shown and not win.footer.isHidden()
+
+
+def test_the_automatic_digests_note_opens_behind_what_you_are_doing(tmp_path, opened):
+    note = opened.vault / "Notes" / "School digest.md"
+    win, _ = floating(tmp_path, Writer({note: "x"}, [RunEnded("completed", "Digest ready.")]))
+    win.clock = DigestClock(tmp_path / "fresh.json")  # nothing yet today: the digest is due
+    win._maybe_digest()  # what start-up and a wake from sleep run
+    assert pump(win, lambda: not win.busy)
+    assert opened.notes == [(note, False)]
+    win.ask("and the plan?")  # a request of your own opens in front again
+    assert pump(win, lambda: not win.busy)
+    assert opened.notes == [(note, False), (note, True)]
+
+
+def test_a_digest_you_ask_for_opens_in_front(tmp_path, opened):
+    note = opened.vault / "Notes" / "School digest.md"
+    win, _ = floating(tmp_path, Writer({note: "x"}, [RunEnded("completed", "Digest ready.")]))
+    win.ask(robo_app.DIGEST_PROMPT)  # the right-click 📚 Digest button
+    assert pump(win, lambda: not win.busy)
+    assert opened.notes == [(note, True)]
+
+
+def test_notes_and_pages_share_the_open_limit_notes_first(tmp_path, opened):
+    names = [opened.out / "a.html", opened.out / "b.html", opened.out / "c.html",
+             opened.vault / "Notes" / "n1.md", opened.vault / "Plans" / "n2.md"]
+    win = request(tmp_path, Writer(dict.fromkeys(names, "x"), [RunEnded("completed", "Made.")]))
+    n1, n2 = names[3:]
+    assert robo_app.OPEN_MAX == 3
+    assert opened.notes == [(n2, True), (n1, True)]  # newest first
+    assert opened.files == [names[2]]  # what is left of the limit
+    assert "📓 In Obsidian: n2, n1" in win.footer.text() and "📂 Opened c.html" in win.footer.text()
+
+
+def test_a_full_limit_of_notes_leaves_no_room_for_a_page(tmp_path, opened):
+    notes = [opened.vault / "Notes" / f"n{i}.md" for i in range(4)]
+    page = opened.out / "page.html"
+    win = request(tmp_path, Writer(dict.fromkeys([page, *notes], "x"),
+                                   [RunEnded("completed", "Made.")]))
+    assert robo_app.OPEN_MAX == 3
+    assert [path for path, _ in opened.notes] == [notes[3], notes[2], notes[1]]  # newest three
+    assert opened.files == []
+    assert "📂" not in win.footer.text()
+
+
+def test_a_page_in_the_output_folder_still_opens_as_a_file(tmp_path, opened):
+    page = opened.out / "diagram.html"
+    win = request(tmp_path, Writer({page: "<svg/>"}, [RunEnded("completed", "Here you go.")]))
+    assert opened.files == [page] and opened.notes == []
+    assert "📂 Opened diagram.html" in win.footer.text()
+    assert "Obsidian" not in win.footer.text()
+
+
+def test_only_notes_in_the_three_folders_open(tmp_path, opened):
+    stray = [opened.vault / ".obsidian" / "plugins" / "readme.md",  # Obsidian's own folder
+             opened.vault / "loose.md",  # not in Drafts, Plans or Notes
+             opened.vault / "Notes" / "data.json"]  # not a note
+    win = request(tmp_path, Writer(dict.fromkeys(stray, "x"), [RunEnded("completed", "Done.")]))
+    assert opened.notes == [] and opened.files == []
+    assert "Obsidian" not in win.footer.text() and win.footer.isHidden()
+
+
+def test_a_failed_request_opens_no_note(tmp_path, opened):
+    note = opened.vault / "Notes" / "half.md"
+    request(tmp_path, Writer({note: "x"}, [RunEnded("failed", error="boom")]))
+    assert opened.notes == []
+
+
 def test_floating_face_stays_shown_while_another_app_is_active(tmp_path):
     win, _ = floating(tmp_path, FakeClient([]))
     assert win.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
@@ -753,7 +873,7 @@ def test_open_file_uses_the_os_opener(monkeypatch, tmp_path):
     monkeypatch.setattr(robo_app.subprocess, "Popen", lambda argv, **kw: calls.append(argv))
     for platform in ("linux", "darwin"):
         monkeypatch.setattr(robo_app.sys, "platform", platform)
-        robo_app.open_file(tmp_path / "a.html")
+        REAL_OPEN_FILE(tmp_path / "a.html")
     assert calls == [["xdg-open", str(tmp_path / "a.html")], ["open", str(tmp_path / "a.html")]]
 
 

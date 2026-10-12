@@ -1,12 +1,17 @@
 import os
+import subprocess
+import sys
 import time
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtGui import QColor, QTextDocument  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+import pytest
 
-from robo import widgets  # noqa: E402
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QImage, QRegion, QTextCharFormat, QTextDocument  # noqa: E402
+from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
+
+from robo import hud, widgets  # noqa: E402
+from robo.theme import CYAN, THEMES, accent  # noqa: E402
 
 QAPP = QApplication.instance() or QApplication([])
 
@@ -111,3 +116,156 @@ def test_a_reply_is_styled_in_a_couple_of_milliseconds():
         widgets.style_markdown(doc)
         best = min(best, time.perf_counter() - t)
     assert best < 0.02  # about 0.4 ms on an M-series Mac; the slack is for a busy CI box
+
+
+# --- themed looks, fonts and the typing dots ---------------------------------------------------
+
+ALL = list(THEMES.values())
+KEYS = list(THEMES)
+SAMPLE = ("# Title\n\npara `code` [link](https://x.y) **bold**\n\n- a\n  - b\n- c\n\n"
+          "```python\nx = 1\ny = 2\n```\n\nend")
+
+
+def themed(md: str, t) -> QTextDocument:
+    doc = QTextDocument()
+    doc.setMarkdown(md)
+    widgets.style_markdown(doc, hud.md_look(t))
+    return doc
+
+
+def test_the_default_look_is_what_the_bubble_always_had():
+    doc = styled("# T\n\npara\n\n```\nx\n```")
+    assert doc.documentMargin() == 4  # Qt's own: the default look does not touch it
+    head, para, code = list(blocks(doc))
+    for block in (head, para, code):
+        assert block.blockFormat().lineHeight() == 0
+    assert next(fragments(head)).charFormat().foreground().style() == Qt.BrushStyle.NoBrush
+    assert widgets.DEFAULT is widgets.default_look()
+
+
+@pytest.mark.parametrize("t", ALL, ids=KEYS)
+def test_a_themed_look_dresses_headings_code_and_links_in_the_themes_colours(t):
+    doc = themed(SAMPLE, t)
+    head, para, a, b, c, one, two, end = list(blocks(doc))
+    h = next(fragments(head)).charFormat()
+    assert h.foreground().color() == QColor(t.head) and h.fontWeight() == 700
+    assert h.property(h.Property.FontPixelSize) == widgets.HEAD_PX[1]
+    frags = {f.text(): f.charFormat() for f in fragments(para)}
+    assert frags["code"].background().color() == QColor(t.inline_bg)
+    assert frags["code"].fontFamilies() == widgets.MONO
+    assert frags["link"].foreground().color() == QColor(t.link) and frags["link"].fontUnderline()
+    for line in (one, two):
+        fmt, char = line.blockFormat(), next(fragments(line)).charFormat()
+        assert fmt.background().color() == QColor(t.code_bg)
+        assert char.foreground().color() == QColor(t.code_fg)
+    assert doc.documentMargin() == 0
+    assert doc.indentWidth() == widgets.INDENT + (6 if t.body_mono else 0)
+    fmt = para.blockFormat()
+    assert fmt.lineHeight() == t.line_h
+    assert fmt.lineHeightType() == fmt.LineHeightTypes.ProportionalHeight.value
+    assert one.blockFormat().lineHeight() == t.line_h - 12  # 12 px code in a tighter line
+
+
+def test_headings_get_a_size_per_level_and_stay_below_qts_own():
+    doc = themed("# one\n\n## two\n\n### three\n\n#### four", CYAN)
+    sizes = [next(fragments(b)).charFormat().property(QTextCharFormat.Property.FontPixelSize)
+             for b in blocks(doc)]
+    assert sizes == [17, 16, 15, 14]
+
+
+@pytest.mark.parametrize("t", ALL, ids=KEYS)
+def test_styling_a_themed_document_twice_changes_nothing(t):
+    doc = themed(SAMPLE, t)
+    once = doc.toHtml()
+    widgets.style_markdown(doc, hud.md_look(t))
+    assert doc.toHtml() == once
+
+
+def test_a_document_restyled_for_another_theme_equals_one_styled_for_it_from_scratch():
+    for src, dst in (("cyan", "matrix"), ("aurora", "daylight"), ("matrix", "cyan")):
+        doc = themed(SAMPLE, THEMES[src])
+        widgets.style_markdown(doc, hud.md_look(THEMES[dst]))
+        assert doc.toHtml() == themed(SAMPLE, THEMES[dst]).toHtml(), (src, dst)
+
+
+def test_a_themed_look_leaves_table_cells_alone_too():
+    doc = themed("| a | b |\n|---|---|\n| 1 | 2 |\n\nafter", CYAN)
+    cells = [b for b in blocks(doc) if b.text() in ("a", "b", "1", "2")]
+    assert len(cells) == 4 and all(b.blockFormat().lineHeight() == 0 for b in cells)
+
+
+def test_a_themed_reply_is_still_styled_in_a_couple_of_milliseconds():
+    reply = ("## This week\n\n- *Linear Algebra* set - due Thursday\n- Physics lab report\n\n"
+             "The chain rule: `d/dx f(g(x))`.\n\n```python\ndef chain(f, g, x):\n"
+             "    return f(g(x))\n```\n\nSee [the notes](https://example.com/notes).\n\n") * 7
+    look, doc, best = hud.md_look(THEMES["matrix"]), QTextDocument(), 1.0
+    for _ in range(10):
+        doc.setMarkdown(reply)
+        t = time.perf_counter()
+        widgets.style_markdown(doc, look)
+        best = min(best, time.perf_counter() - t)
+    assert best < 0.02
+
+
+def test_the_monospace_family_is_the_first_installed_one_and_is_resolved_once():
+    from PySide6.QtGui import QFontDatabase
+
+    have = set(QFontDatabase.families())
+    first = next((f for f in widgets.MONO_STACK if f in have), widgets.MONO_STACK[-1])
+    assert widgets.mono_family() == first
+    assert [first, "monospace"] == widgets.MONO
+    assert widgets.MONO_STACK[0] == "SF Mono"  # preferred where it exists
+    assert widgets._installed_mono.cache_info().misses == 1  # the database is read once
+
+
+def test_importing_the_module_and_asking_for_its_fonts_needs_no_application():
+    # QFontDatabase aborts the process before a QGuiApplication exists, and robo.app imports
+    # `STYLE` from here at import time.
+    code = ("from robo.widgets import STYLE, MONO, DEFAULT, mono_family\n"
+            "assert STYLE and MONO[-1] == 'monospace' and DEFAULT.code\n"
+            "print(mono_family())")
+    run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() == "Menlo"  # the stand-in until the font database can be read
+
+
+def test_the_old_module_attributes_are_still_there():
+    assert hud.qss(CYAN) == widgets.STYLE
+    assert widgets.BUBBLE_W == 340 and widgets.TEXT_W == 302
+    with pytest.raises(AttributeError):
+        widgets.NOPE  # noqa: B018
+
+
+def shot(w: QWidget) -> QImage:
+    """What `w` paints on a transparent ground (no window colour behind it)."""
+    img = QImage(w.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    w.render(img, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+    return img
+
+
+def test_the_typing_dots_hop_in_the_accent_colour_without_a_pill():
+    dots = widgets.TypingDots()
+    assert (dots.width(), dots.height()) == (32, 16)
+    img = shot(dots)
+    assert img.pixelColor(31, 8).alpha() == 0 and img.pixelColor(0, 15).alpha() == 0  # no pill
+    first = img.pixelColor(5, 8)  # the first dot's column: always inside its dot
+    want = accent(CYAN, CYAN.hue)
+    assert first.alpha() > 100 and first.blue() > first.red()
+    assert abs(first.green() - want[1]) < 40
+
+
+@pytest.mark.parametrize("t", ALL, ids=KEYS)
+def test_the_dots_take_the_theme_and_the_live_hue(t):
+    dots = widgets.TypingDots(theme=t)
+    dots.restyle(t, 356.0)  # an error: red whatever the theme
+    px = shot(dots).pixelColor(5, 8)
+    assert px.red() > px.green() and px.red() > px.blue()
+    dots.restyle(t, t.hue)
+    assert dots.theme is t and dots.hue == t.hue
+
+
+def test_the_dots_keep_their_wave():
+    a, b = widgets.TypingDots.offsets(0.0), widgets.TypingDots.offsets(0.2)
+    assert len(a) == 3 and a != b and max(map(abs, a + b)) <= widgets.TypingDots.HOP

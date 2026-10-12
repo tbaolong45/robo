@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
+from dataclasses import replace
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRadialGradient
@@ -16,6 +18,7 @@ W, H = 320.0, 240.0  # logical canvas; scaled to fit the widget
 EYE_X, EYE_Y, EYE_W, EYE_H = 64.0, 102.0, 66.0, 78.0
 MOUTH_Y, MOUTH_W = 176.0, 46.0
 BG = QColor(9, 13, 22)
+SCREEN = QColor(18, 26, 42)  # the face screen: centre colour (BG is the edge)
 
 
 def _colour(p: FaceParams, alpha: float = 1.0, value: float = 1.0) -> QColor:
@@ -178,14 +181,17 @@ def _effects(painter: QPainter, p: FaceParams, t: float, oy: float) -> None:
             painter.drawPath(star)
 
 
-def render_params(painter: QPainter, rect: QRectF, p: FaceParams, t: float = 0.0) -> None:
-    """Paint face `p` into `rect` (aspect kept, centred). `t` drives effect animation."""
+def render_params(painter: QPainter, rect: QRectF, p: FaceParams, t: float = 0.0,
+                  bg: tuple[QColor | str, QColor | str] | None = None) -> None:
+    """Paint face `p` into `rect` (aspect kept, centred). `t` drives effect animation. `bg` is
+    the screen's (centre, edge) colours, default the dark blue the face always had."""
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     rect = QRectF(rect)
+    centre, edge = (SCREEN, BG) if bg is None else map(QColor, bg)
     g = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.7)
-    g.setColorAt(0, QColor(18, 26, 42))
-    g.setColorAt(1, BG)
+    g.setColorAt(0, centre)
+    g.setColorAt(1, edge)
     painter.fillRect(rect, g)
     k = min(rect.width() / W, rect.height() / H)
     painter.translate(rect.center().x() - W * k / 2, rect.center().y() - H * k / 2)
@@ -216,7 +222,9 @@ class FaceWidget(QWidget):
         self.radius = radius  # > 0: a rounded screen, transparent outside (floating mode)
         self.anim = Animator(seed)
         self.goal = target("idle", "neutral")
-        self.talking = False
+        self.activity, self.emotion, self.talking = "idle", "neutral", False
+        self.hue_fn: Callable[[str, str, float], float] | None = None  # see set_theme
+        self.bg: tuple[QColor, QColor] | None = None
         self.look: tuple[float, float] | None = None
         self.t0 = self.last = time.monotonic()
         self.params = self.anim.step(self.goal, 0.0, False, 0.0)
@@ -224,8 +232,24 @@ class FaceWidget(QWidget):
         self.timer.start()
         self.setMinimumSize(160, 120)
 
+    def set_theme(self, hue_fn: Callable[[str, str, float], float] | None = None,
+                  bg: tuple[QColor | str, QColor | str] | None = None, snap: bool = False) -> None:
+        """Dress the face for a theme: `hue_fn(activity, emotion, hue)` gives the hue this state
+        has in the theme (robo.theme.hue_for), `bg` the screen's (centre, edge) colours. None, None
+        is the face as it always was. `snap` skips the 0.3 s sweep to the new hue (at start-up)."""
+        self.hue_fn = hue_fn
+        self.bg = None if bg is None else tuple(map(QColor, bg))
+        self.set_state(self.activity, self.emotion, self.talking)
+        if snap:
+            self.anim.x["hue"], self.anim.v["hue"] = self.goal.hue, 0.0
+            self.params = replace(self.params, hue=self.goal.hue)
+        self.update()
+
     def set_state(self, activity: str, emotion: str, talking: bool = False) -> None:
-        self.goal, self.talking = target(activity, emotion), talking
+        self.activity, self.emotion, self.talking = activity, emotion, talking
+        goal = target(activity, emotion)
+        self.goal = replace(goal, hue=self.hue_fn(activity, emotion, goal.hue)) \
+            if self.hue_fn else goal
         ms = FRAME_MS.get(activity, FAST_MS)
         if ms != self.timer.interval():  # setInterval restarts the timer; this runs very often
             self.timer.setInterval(ms)
@@ -247,5 +271,5 @@ class FaceWidget(QWidget):
             clip = QPainterPath()
             clip.addRoundedRect(QRectF(self.rect()), self.radius, self.radius)
             painter.setClipPath(clip)
-        render_params(painter, QRectF(self.rect()), self.params, self.last - self.t0)
+        render_params(painter, QRectF(self.rect()), self.params, self.last - self.t0, self.bg)
         painter.end()
