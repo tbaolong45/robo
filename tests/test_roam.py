@@ -6,6 +6,10 @@ import pytest
 from robo.roam import EDGE, HOLD, MARGIN, MAX_DT, REST, SPEED, Rect, Roamer, fit, pick_target
 
 SCREEN = Rect(0, 0, 1920, 1080)
+SCREENS = (SCREEN,)
+RIGHT = Rect(1920, 0, 2560, 1440)  # an external monitor to the right of SCREEN, and taller
+LEFT = Rect(-2560, -180, 2560, 1440)  # or to its left, so x goes negative
+BOTH = (SCREEN, RIGHT)
 FACE = (120, 120)
 BUBBLE = (400, 300)
 FPS = 30
@@ -41,19 +45,19 @@ def inside(pos, size, screen=SCREEN):
     ((300, 400), (300, 400)),
 ])
 def test_fit_keeps_the_window_inside(pos, want):
-    assert fit(pos, FACE, SCREEN) == want
+    assert fit(pos, FACE, SCREENS) == want
 
 
 @pytest.mark.parametrize("activity", ["idle", "asleep"])
 def test_window_bigger_than_screen_is_pinned_top_left(activity):
     tiny = Rect(10, 20, 100, 80)
-    r = Roamer(tiny, FACE, seed=0)
+    r = Roamer((tiny,), FACE, seed=0)
     assert {p for _, p in run(r, 0.0, 200, activity)} == {(10, 20)}
 
 
 @pytest.mark.parametrize("activity", ["idle", "asleep"])
 def test_present_freezes_mid_drift(activity):
-    r = Roamer(SCREEN, FACE, seed=2, start=TOP)
+    r = Roamer(SCREENS, FACE, seed=2, start=TOP)
     t = until(r, 0.0, "drift") + 1
     run(r, t - 1, 1)
     assert r.mode == "drift"
@@ -63,20 +67,20 @@ def test_present_freezes_mid_drift(activity):
 
 
 def test_present_slides_the_bubble_on_screen():
-    r = Roamer(SCREEN, FACE, seed=3, start=(1800, 960))
+    r = Roamer(SCREENS, FACE, seed=3, start=(1800, 960))
     r.step(0.0, "idle", True)
     r.resize(BUBBLE)
     pos = r.step(0.1, "idle", True)
     assert pos == (1520, 780)
     assert {p for _, p in run(r, 0.1, 10, engaged=True)} == {pos}
 
-    r = Roamer(SCREEN, FACE, seed=3, start=(300, 200))
+    r = Roamer(SCREENS, FACE, seed=3, start=(300, 200))
     r.resize(BUBBLE)
     assert r.step(0.0, "idle", True) == (300, 200)
 
 
 def test_sleep_glides_to_the_bottom_right_corner_and_stays():
-    r = Roamer(SCREEN, FACE, seed=4, start=(0, 0))
+    r = Roamer(SCREENS, FACE, seed=4, start=(0, 0))
     path = run(r, 0.0, 120, "asleep")
     bed = (1920 - 120 - EDGE, 1080 - 120 - EDGE)
     assert path[-1][1] == bed and r.mode == "sleep"
@@ -84,7 +88,7 @@ def test_sleep_glides_to_the_bottom_right_corner_and_stays():
 
 
 def test_hold_stays_put_then_wanders_from_there():
-    r = Roamer(SCREEN, FACE, seed=5)
+    r = Roamer(SCREENS, FACE, seed=5)
     r.step(0.0, "idle", False)
     r.hold(0.0, (500, 300))
     assert {p for _, p in run(r, 0.0, HOLD - 1, fps=4)} == {(500, 300)}
@@ -96,13 +100,13 @@ def test_hold_stays_put_then_wanders_from_there():
 
 
 def test_hold_is_clamped():
-    r = Roamer(SCREEN, FACE, seed=5)
+    r = Roamer(SCREENS, FACE, seed=5)
     r.hold(0.0, (5000, -40))
     assert r.step(0.0, "idle", False) == (1800, 0)
 
 
 def test_drift_reaches_its_target_then_rests():
-    r = Roamer(SCREEN, FACE, seed=1)
+    r = Roamer(SCREENS, FACE, seed=1)
     t = until(r, 0.0, "drift")
     goal = r.goal
     t = until(r, t, "rest")
@@ -128,7 +132,7 @@ def test_targets_lie_in_the_margin_band(screen):
 
 
 def test_never_faster_than_the_speed_limit():
-    r = Roamer(SCREEN, FACE, seed=6)
+    r = Roamer(SCREENS, FACE, seed=6)
     path = [(0.0, r.step(0.0, "idle", False))] + run(r, 0.0, 600)
     for (t0, a), (t1, b) in zip(path, path[1:], strict=False):
         assert math.dist(a, b) <= PEAK * (t1 - t0) + ROUNDING
@@ -136,7 +140,7 @@ def test_never_faster_than_the_speed_limit():
 
 
 def test_a_long_gap_moves_at_most_one_capped_frame():
-    r = Roamer(SCREEN, FACE, seed=7, start=TOP)
+    r = Roamer(SCREENS, FACE, seed=7, start=TOP)
     t = until(r, 0.0, "drift") + 0.5
     a = r.step(t, "idle", False)
     assert r.mode == "drift"
@@ -145,22 +149,22 @@ def test_a_long_gap_moves_at_most_one_capped_frame():
 
 
 def test_same_seed_same_path():
-    a, b, c = (run(Roamer(SCREEN, FACE, seed=s), 0.0, 300) for s in (9, 9, 10))
+    a, b, c = (run(Roamer(SCREENS, FACE, seed=s), 0.0, 300) for s in (9, 9, 10))
     assert a == b != c
 
 
 def test_resize_and_a_new_screen_keep_it_on_screen():
-    r = Roamer(SCREEN, FACE, seed=11, start=(1800, 960))
+    r = Roamer(SCREENS, FACE, seed=11, start=(1800, 960))
     r.resize(BUBBLE)
     assert r.step(0.0, "idle", False) == (1520, 780)
-    r.set_screen(Rect(0, 0, 1280, 720))
+    r.set_screens((Rect(0, 0, 1280, 720),))
     assert r.step(0.1, "idle", False) == (880, 420)
 
 
 def test_an_hour_of_jittery_frames_never_leaves_the_screen():
     rng = random.Random(0)
     screens = [SCREEN, Rect(-1280, 200, 1280, 1024), Rect(0, 0, 200, 150)]
-    r, t = Roamer(SCREEN, FACE, seed=12), 0.0
+    r, t = Roamer(SCREENS, FACE, seed=12), 0.0
     while t < 3600:
         t += rng.choice([1 / FPS] * 30 + [0.0, 0.5, 5.0])
         engaged = (t // 90) % 5 == 0
@@ -168,8 +172,8 @@ def test_an_hour_of_jittery_frames_never_leaves_the_screen():
         if size != r.size:
             r.resize(size)
         screen = screens[min(int(t // 1200), 2)]
-        if screen != r.screen:
-            r.set_screen(screen)
+        if (screen,) != r.screens:
+            r.set_screens((screen,))
         if rng.random() < 0.0005:
             r.hold(t, (rng.uniform(-500, 3000), rng.uniform(-500, 3000)), seconds=60)
         activity = "asleep" if (t // 300) % 4 == 3 else "idle"
@@ -177,3 +181,51 @@ def test_an_hour_of_jittery_frames_never_leaves_the_screen():
         assert all(type(v) is int for v in pos)
         assert all(math.isfinite(v) for v in r.pos)
         assert inside(pos, size, screen)
+
+
+def covered(pos, size, screens, n=8):
+    """Every point of an n x n grid over the window (corners included) lies on some screen.
+    Checked by sampling, so it does not share fit()'s area arithmetic."""
+    points = [(pos[0] + size[0] * i / n, pos[1] + size[1] * j / n)
+              for i in range(n + 1) for j in range(n + 1)]
+    return all(any(s.x <= x <= s.x + s.w and s.y <= y <= s.y + s.h for s in screens)
+               for x, y in points)
+
+
+@pytest.mark.parametrize("screens, pos, want", [
+    (BOTH, (2500, 300), (2500, 300)),  # on the second screen
+    (BOTH, (1860, 300), (1860, 300)),  # straddling the border with both halves on screen
+    (BOTH, (9000, 300), (4360, 300)),  # past the far edge: onto the nearest screen
+    ((LEFT, SCREEN), (-3000, 100), (-2560, 100)),  # a monitor on the left, negative x
+    ((SCREEN, Rect(1920, 400, 2560, 1440)), (1860, 100), (1800, 100)),  # half over a dead corner
+])
+def test_fit_across_screens(screens, pos, want):
+    got = fit(pos, FACE, screens)
+    assert got == want and covered(got, FACE, screens)
+
+
+def test_a_drop_on_the_second_screen_stays():
+    r = Roamer(BOTH, FACE, seed=5)
+    r.hold(0.0, (3000, 500))
+    assert r.step(0.0, "idle", False) == (3000, 500)
+
+
+def test_it_sleeps_in_the_corner_of_the_screen_it_is_on():
+    r = Roamer(BOTH, FACE, seed=4, start=(3000, 500))
+    path = run(r, 0.0, 200, "asleep")
+    assert path[-1][1] == (RIGHT.x + RIGHT.w - 120 - EDGE, RIGHT.y + RIGHT.h - 120 - EDGE)
+
+
+def test_it_wanders_onto_every_screen_and_never_off_them():
+    r, seen = Roamer(BOTH, FACE, seed=1), set()
+    for _, pos in run(r, 0.0, 3600):
+        assert covered(pos, FACE, BOTH)
+        cx, cy = pos[0] + FACE[0] / 2, pos[1] + FACE[1] / 2
+        seen |= {i for i, s in enumerate(BOTH) if s.x <= cx < s.x + s.w and s.y <= cy < s.y + s.h}
+    assert seen == {0, 1}
+
+
+def test_unplugging_its_screen_brings_it_back_to_the_one_left():
+    r = Roamer(BOTH, FACE, seed=6, start=(3000, 500))
+    r.set_screens((SCREEN,))
+    assert r.step(0.0, "idle", False) == (1800, 500)

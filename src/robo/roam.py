@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 SPEED = 40.0  # px/s average travel speed (ease-in-out peaks at 1.5x)
@@ -22,11 +23,29 @@ class Rect:
     h: int
 
 
-def fit(pos: tuple[float, float], size: tuple[int, int], screen: Rect) -> tuple[float, float]:
-    """Clamp a top-left so the window is fully on screen; pinned top-left if it cannot fit."""
+def _clamp(pos: tuple[float, float], size: tuple[int, int], screen: Rect) -> tuple[float, float]:
+    """Clamp a top-left so the window is fully inside one screen; pinned top-left if it cannot."""
     x = max(screen.x, min(pos[0], screen.x + screen.w - size[0]))
     y = max(screen.y, min(pos[1], screen.y + screen.h - size[1]))
     return x, y
+
+
+def _overlap(pos: tuple[float, float], size: tuple[int, int], screen: Rect) -> float:
+    w = min(pos[0] + size[0], screen.x + screen.w) - max(pos[0], screen.x)
+    h = min(pos[1] + size[1], screen.y + screen.h) - max(pos[1], screen.y)
+    return max(w, 0) * max(h, 0)
+
+
+def fit(pos: tuple[float, float], size: tuple[int, int],
+        screens: Sequence[Rect]) -> tuple[float, float]:
+    """Keep the window fully inside the screens, where it may straddle two that touch.
+
+    Screens never overlap, so the window is inside their union exactly when its overlaps add up
+    to its whole area. Otherwise (a dead corner between unequal monitors, or past the edge) it
+    moves to the nearest spot inside a single screen; pinned top-left if it fits on none."""
+    if sum(_overlap(pos, size, s) for s in screens) >= size[0] * size[1] - 1e-3:
+        return pos
+    return min((_clamp(pos, size, s) for s in screens), key=lambda p: math.dist(p, pos))
 
 
 def pick_target(rng: random.Random, screen: Rect, size: tuple[int, int]) -> tuple[float, float]:
@@ -41,7 +60,7 @@ def pick_target(rng: random.Random, screen: Rect, size: tuple[int, int]) -> tupl
         x = rng.uniform(screen.x, screen.x + MARGIN)
     else:
         x = rng.uniform(right - MARGIN, right)
-    return fit((x, y), size, screen)
+    return _clamp((x, y), size, screen)
 
 
 def _ease(p: float) -> float:
@@ -51,11 +70,12 @@ def _ease(p: float) -> float:
 class Roamer:
     """Moves the window like a pet: rest, drift, sleep in the corner, stay when needed."""
 
-    def __init__(self, screen: Rect, size: tuple[int, int], seed: int | None = None,
+    def __init__(self, screens: Sequence[Rect], size: tuple[int, int], seed: int | None = None,
                  start: tuple[float, float] | None = None):
         self.rng = random.Random(seed)
-        self.screen, self.size = screen, size
-        self.pos = fit(start or self._bed(), size, screen)
+        self.screens, self.size = tuple(screens), size
+        self.pos = start or (0.0, 0.0)  # `_bed` needs it: the corner of the screen it is on
+        self.pos = fit(start or self._bed(), size, self.screens)
         self.mode = ""
         self.last: float | None = None
         self.held_until = -math.inf
@@ -71,15 +91,15 @@ class Roamer:
 
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
-        self.pos = fit(self.pos, size, self.screen)
+        self.pos = fit(self.pos, size, self.screens)
 
-    def set_screen(self, screen: Rect) -> None:
-        self.screen = screen
-        self.pos = fit(self.pos, self.size, screen)
+    def set_screens(self, screens: Sequence[Rect]) -> None:
+        self.screens = tuple(screens)
+        self.pos = fit(self.pos, self.size, self.screens)
 
     def hold(self, now: float, pos: tuple[float, float], seconds: float = HOLD) -> None:
         """The user dropped it at `pos`: stay there for `seconds`."""
-        self.pos = fit(pos, self.size, self.screen)
+        self.pos = fit(pos, self.size, self.screens)
         self.held_until = now + seconds
 
     def step(self, now: float, activity: str, engaged: bool) -> tuple[int, int]:
@@ -97,14 +117,14 @@ class Roamer:
             self._travel(dt)
         else:
             self._wander(now, dt)
-        self.pos = fit(self.pos, self.size, self.screen)
+        self.pos = fit(self.pos, self.size, self.screens)
         return round(self.pos[0]), round(self.pos[1])
 
     def _wander(self, now: float, dt: float) -> None:
         if self.mode not in ("rest", "drift"):
             self._rest(now)
         if self.mode == "rest" and now >= self.rest_until:
-            self._go(pick_target(self.rng, self.screen, self.size))
+            self._go(pick_target(self.rng, self._any_screen(), self.size))
             self.mode = "drift"
         if self.mode == "drift" and self._travel(dt):
             self._rest(now)
@@ -113,10 +133,15 @@ class Roamer:
         self.mode = "rest"
         self.rest_until = now + self.rng.uniform(*REST)
 
+    def _any_screen(self) -> Rect:
+        """A random screen to drift to (the only one without drawing, so a seed keeps its path)."""
+        return self.screens[0] if len(self.screens) == 1 else self.rng.choice(self.screens)
+
     def _bed(self) -> tuple[float, float]:
-        s = self.screen
-        return fit((s.x + s.w - self.size[0] - EDGE, s.y + s.h - self.size[1] - EDGE),
-                   self.size, s)
+        """The bottom-right corner of the screen it is on, so a nap never needs a long walk."""
+        s = max(self.screens, key=lambda s: _overlap(self.pos, self.size, s))
+        return _clamp((s.x + s.w - self.size[0] - EDGE, s.y + s.h - self.size[1] - EDGE),
+                      self.size, s)
 
     def _go(self, goal: tuple[float, float]) -> None:
         self.origin, self.goal, self.elapsed = self.pos, goal, 0.0

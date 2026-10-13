@@ -69,7 +69,7 @@ def test_no_look_changes_nothing():
 @pytest.mark.parametrize(("start", "goal", "want"),
                          [((100, 900), (900, 900), 1), ((900, 900), (100, 900), -1)])
 def test_heading_follows_a_drift_and_is_zero_at_rest(start, goal, want):
-    r = Roamer(Rect(0, 0, 1920, 1080), (120, 120), seed=1, start=start)
+    r = Roamer((Rect(0, 0, 1920, 1080),), (120, 120), seed=1, start=start)
     assert r.heading == 0  # resting before the first drift
     r.pos = r.origin = start
     r._go(goal)
