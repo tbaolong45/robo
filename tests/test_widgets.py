@@ -166,6 +166,15 @@ def test_a_themed_look_dresses_headings_code_and_links_in_the_themes_colours(t):
     assert one.blockFormat().lineHeight() == t.line_h - 12  # 12 px code in a tighter line
 
 
+def test_headings_come_out_larger_than_the_body():
+    """The importer gives a heading FontSizeAdjustment, which overrides any pixel size while the
+    property exists, and a merge cannot remove it: only replacing the format sets the size."""
+    doc = themed("# One\n\n## Two\n\n### Three\n\nbody", CYAN)
+    sizes = [next(fragments(block)).charFormat().font().pixelSize() for block in blocks(doc)]
+    assert sizes[:3] == [widgets.HEAD_PX[1], widgets.HEAD_PX[2], widgets.HEAD_PX[3]]
+    assert sizes[3] != sizes[0]  # and the body keeps its own size
+
+
 def test_headings_get_a_size_per_level_and_stay_below_qts_own():
     doc = themed("# one\n\n## two\n\n### three\n\n#### four", CYAN)
     sizes = [next(fragments(b)).charFormat().property(QTextCharFormat.Property.FontPixelSize)

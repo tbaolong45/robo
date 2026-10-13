@@ -166,18 +166,21 @@ def style_markdown(doc: QTextDocument, look: Look | None = None) -> None:
                 frag = it.fragment()
                 fmt = frag.charFormat()
                 if level and look.head:
-                    head = QTextCharFormat(look.head)
+                    # A merge cannot remove the importer's FontSizeAdjustment, and while that
+                    # property exists (even as 0) it overrides any pixel size: replace the format.
+                    head = QTextCharFormat(fmt)
+                    head.clearProperty(QTextFormat.Property.FontSizeAdjustment)
+                    head.merge(look.head)
                     head.setProperty(QTextFormat.Property.FontPixelSize, HEAD_PX.get(level, 14))
-                    head.setProperty(QTextFormat.Property.FontSizeAdjustment, 0)  # the importer's
-                    runs.append((frag.position(), frag.length(), head))
+                    runs.append((frag.position(), frag.length(), head, True))
                 elif fmt.isAnchor() or fmt.fontFixedPitch():
                     runs.append((frag.position(), frag.length(),
-                                 look.link if fmt.isAnchor() else look.inline))
+                                 look.link if fmt.isAnchor() else look.inline, False))
                 it += 1
-            for pos, length, fmt in runs:
+            for pos, length, fmt, whole in runs:
                 cursor.setPosition(pos)
                 cursor.setPosition(pos + length, QTextCursor.MoveMode.KeepAnchor)
-                cursor.mergeCharFormat(fmt)
+                cursor.setCharFormat(fmt) if whole else cursor.mergeCharFormat(fmt)
         block = after
     cursor.endEditBlock()
 
