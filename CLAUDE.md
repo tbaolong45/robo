@@ -27,9 +27,11 @@ in text in the bubble. It never speaks, so don't add speech output.
   delete the `.playwright-mcp/` folder they leave in the repo.
 
 ## The machine is a live deployment
-Hermes runs robo with approvals off. `robo setup` rewrites the `ai.robo` LaunchAgent to point at
-the checkout it is run from, which may not be the one that runs at login. Don't run `setup` or
+Hermes runs robo with approvals off. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
+skills' command) to point at the build it is run from: the Python checkout, or the Swift app
+(`~/Applications/Robo.app` is the one that runs at login since 2026-10-13). Don't run `setup` or
 `signin` while testing, and send Hermes nothing but a harmless prompt if a live check is needed.
+Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `ROBO_HERMES_URL`.
 
 ## Constraints (checked 2026-10-12; recheck if Qt, onnx-asr or Parakeet change)
 - **Speech model on the CPU only** (`listen.Parakeet`, `providers=["CPUExecutionProvider"]`). On a
@@ -47,7 +49,10 @@ the checkout it is run from, which may not be the one that runs at login. Don't 
   `widgets.style_markdown` post-processes the document. Block backgrounds cannot pad. macOS has no
   `monospace` family (`widgets.MONO` names Menlo first). A hidden `QTextBrowser` has no real width,
   so `RoboWindow._size_text` measures again once a box becomes visible (otherwise the first message
-  is clipped to one line).
+  is clipped to one line). A heading's size only takes effect if the importer's
+  `FontSizeAdjustment` is *cleared* (a merge cannot remove it, and while it exists it overrides any
+  pixel size): `style_markdown` replaces the fragment's format. Fixed 2026-10-13; before that every
+  heading rendered at body size, and the test only looked at the property, so check what renders.
 - **Right-click menu**: one `QGridLayout`. Nested per-row layouts gave an intermittent
   "QObject: shared QObject was deleted directly" message at exit.
 - **Face cost**: the repaint interval follows the activity (`FRAME_MS` in `face/widget.py`), and
@@ -77,3 +82,47 @@ the checkout it is run from, which may not be the one that runs at login. Don't 
   `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
   (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
   `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
+- **Several monitors** (`roam.fit`): the window must lie inside the *union* of the screens and may
+  straddle two that touch; a spot half over a dead corner between unequal monitors goes to the nearest
+  single-screen clamp. Both drag paths must call `roamer.hold` on every move, or the 33 ms roam tick
+  pulls the window back (`tests/test_app.py` pins it). Screens are re-read after
+  `screenAdded/Removed/primaryScreenChanged` (`QTimer.singleShot(0)`: a removed screen is still
+  listed while its signal runs); an empty list keeps the last layout. Dragged live across a 2560×1440
+  main and a built-in display at x = -1800 (2026-10-13), both ways, no snap-back.
+
+## Native Swift port (`native/`, checked 2026-10-13)
+A SwiftPM package that ports everything above (RoboCore, RoboVoice, RoboSystem, RoboUI) and **has
+been the running app since 2026-10-13**: the `ai.robo` LaunchAgent starts `~/Applications/Robo.app`.
+The Python tree stays as the spec (the ported tests carry golden values generated from it) and as
+the fallback: `~/robo-cutover-backup-20261013/ROLLBACK.md` restores the old login item and profile.
+- **Test with `native/test.sh`**, not `swift test` (the Command Line Tools ship the Testing macros
+  but the default build system does not pass their folder). **Install a new build with
+  `ROBO_SIGN_IDENTITY="Robo Local Signing" native/bundle.sh ~/Applications/Robo.app` (the path must
+  end in `.app`), then `launchctl kickstart -k gui/$(id -u)/ai.robo`.** That identity is a
+  self-signed certificate in `~/Library/Keychains/robo-signing.keychain-db` (empty password, in the
+  search list, trusted for code signing); the designated requirement is the bundle id plus the
+  certificate hash, so the microphone permission survives rebuilds. A build without
+  `ROBO_SIGN_IDENTITY` is ad hoc and macOS asks again each time.
+- **Start the app with `open -n --env ROBO_HERMES_URL=http://127.0.0.1:9 X.app`** for a real
+  microphone: launched from a shell, the shell is the microphone client and robo says it lost it.
+  Dev switches: `ROBO_NO_VOICE=1`, `ROBO_NO_WATCH=1` (`ROBO_HERMES_URL` also skips robo's Brave).
+- **ONNX Runtime**: `native/Vendor/onnxruntime-swift-package-manager` is Microsoft's bindings trimmed
+  and pointed at the 1.30.0 pod. Upstream's 1.24.2 changes 6 of 200 transcripts against the Python
+  app's 1.31; any ORT version change moves the encoder output ~4 %, enough to flip a transcript.
+  No 1.31 pod was published on 2026-10-13 (`curl -sI https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.31.0.zip`);
+  the Swift encoder is ~13 ms per clip slower than Python's until it is. 1.30 also keeps the encoder
+  weights twice (~1.4 GB footprint instead of ~0.8 GB), so `Parakeet.init` sets
+  `session.disable_prepacking=1` (+15-20 ms per clip, same transcripts; measured with `footprint`,
+  not `ps`, which is unreliable on a loaded Mac): drop it once a 1.31 pod exists.
+- **ORT 1.30+ sends usage telemetry to Microsoft by default** (sockets to MSFT addresses 9-13 s after
+  a session is created, in Python's 1.31 wheel too; none with `ORT_DISABLE_TELEMETRY=1`). Both
+  builds set it before ORT starts (`listen.Parakeet.__init__`, Swift `Parakeet.init`).
+- Swift traps to remember: `String ==` treats `e`+U+0301 and U+00E9 as equal (Python does not) and
+  indexes grapheme clusters, so code-point logic uses `unicodeScalars`; `round()` is half-to-even in
+  Python; `@MainActor` tests only run main-queue hops they `await`.
+- **Skills call `{{ROBO}} plan|activity`** (`hermes/skills/school/study-plan/SKILL.md`): each
+  `robo setup` fills the command of its own build (Python: `uv run --project <checkout> robo`; Swift:
+  the app executable). `Setup.checkout` and `RoboApp.dataDir` come from `#filePath` of the build, so
+  build from this checkout; Swift `robo setup` refuses a bare binary (it needs the `.app`).
+- **First launch of a new signing identity** shows the microphone permission dialog; until it is
+  answered the UI must not wait on it (`Listener.start()` must not block the main thread).

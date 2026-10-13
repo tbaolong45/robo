@@ -11,7 +11,7 @@ A desktop companion in the spirit of Desktop Goose, but helpful. Robo is a small
 - **Speech bubble, a holo card.** A card above the face with a header (the bot's name, a HERMES light that follows the gateway's `/health`, a MIC light, the model), then what you said (in full, long requests scroll), then "listening…" and Messenger-style typing dots while robo thinks (with "searching the web…" and the like beside them), then the answer **typed out letter by letter** at about 55 characters a second, with a short pause at the end of a sentence. It never falls far behind Hermes, so a long reply is not still typing a minute after it arrived. Click the reply or press Esc once to show it all at once. The card's colour follows the face's mood. It closes by itself 20 s after the last letter, or press Esc again.
 - **Themes.** Right-click → 🎨 Theme: Cyan HUD (default), Matrix, Amber CRT, Violet Aurora or Daylight; the choice is remembered. To go further, edit `~/.config/robo/theme.json` (every key is optional, a bad value is skipped and the rest still applies): `{"theme": "matrix", "tokens": {"bot_name": "PIXEL", "hue": 300, "cps": 80, "caret": "bar"}}`. `tokens` overrides single values of the chosen theme: the fields of `Theme` in `src/robo/theme.py` (colours, `cps` typing speed with 0 = instant, `caret` block/bar/under, `shape` cut/round, `bot_name`, `model_chip`, ...). Changes show the next time you open the right-click menu.
 - **The face shows what Hermes is doing and how it feels.** States: listening, thinking, browsing, talking, idle, sleepy after 5 min, asleep after 15 min. Hermes starts each reply with a hidden `[[feel:x]]` tag, and the face changes expression before the first word appears.
-- **Floating pet.** Robo rests, then drifts to another spot near the bottom or a side of the screen, with its eyes leading the way it walks. Its eyes follow your mouse pointer while you move it (it forgets a pointer that has been still for 15 s), and now and then, while it idles, it shows a mood (curious, happy, playful or calm). It stays put while you're talking to it and naps in the bottom-right corner. Drag it anywhere and it stays there for 10 min. Right-click: 📚 Digest · 💬 Type · 📌 Stay/🧭 Wander · ⏸ Watch/▶ Watch · 🎨 Theme · ✕ Quit.
+- **Floating pet.** Robo rests, then drifts to another spot near the bottom or a side of the screen, with its eyes leading the way it walks. Its eyes follow your mouse pointer while you move it (it forgets a pointer that has been still for 15 s), and now and then, while it idles, it shows a mood (curious, happy, playful or calm). It stays put while you're talking to it and naps in the bottom-right corner. Drag it anywhere, including onto another monitor, and it stays there for 10 min; when it wanders it visits every screen you have, and it naps in the corner of the one it is on. Right-click: 📚 Digest · 💬 Type · 📌 Stay/🧭 Wander · ⏸ Watch/▶ Watch · 🎨 Theme · ✕ Quit.
 - **All permissions.** At your request, robo uses everything without asking (`approvals.mode: off`): apps (Hermes `computer_use`), the terminal, files, code execution, its own browser (any site, raw browser control), web search and memory. Its persona tells it to do exactly what you asked: send, post, submit, delete or pay only when your request says so.
   - It still can't change its own Hermes setup or its installed school skills (`robo-guard` + an `approvals.deny` rule).
   - Switch `approvals.mode` back to `manual` (in `src/robo/setup.py`, then `robo setup`) and robo asks Allow/Deny before irreversible steps again: deleting, sending, sudo, Send/Submit-style clicks.
@@ -173,6 +173,20 @@ uv run python scripts/voice_eval.py /tmp/voice   # macOS: 10 TTS voices through 
 uv run python scripts/voice_eval.py --record ~/robo-voice   # you read 10 prompts (about 3 min); clips stay in that folder
 uv run python scripts/voice_eval.py --wavs ~/robo-voice     # scores YOUR voice and says if the speech gate would let it through
 ```
+
+## Native build (Swift, in progress)
+
+`native/` ports everything above to Swift for macOS, with no Python at run time, and it is what runs at login (since 2026-10-13). The Python version above still works as a fallback; never run both at once, since both would listen and answer.
+
+```bash
+cd native
+./test.sh                                      # all tests (use this, not `swift test`; see CLAUDE.md)
+ROBO_SIGN_IDENTITY="Robo Local Signing" ./bundle.sh ~/Applications/Robo.app   # signed build, onnxruntime embedded
+~/Applications/Robo.app/Contents/MacOS/robo setup   # once: Hermes profile, skills, login item
+open -n ~/Applications/Robo.app                # run it (for the microphone, start it this way, not from a shell)
+```
+
+Without the signing identity (CLAUDE.md says how it was made) the build is ad hoc signed and macOS asks for the microphone again after every rebuild.
 
 ## Limits (known)
 
