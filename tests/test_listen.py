@@ -1,4 +1,5 @@
 import itertools
+import os
 import queue
 import sys
 import threading
@@ -125,6 +126,21 @@ def test_parakeet_loads_on_the_cpu_only(monkeypatch):
     listen.Parakeet()
     assert loaded == {"name": listen.STT_MODEL, "quantization": "int8",
                       "providers": ["CPUExecutionProvider"]}
+
+
+def test_parakeet_keeps_onnxruntime_from_reporting_to_microsoft(monkeypatch):
+    """onnxruntime 1.30+ opens a connection to a Microsoft server unless this is set first."""
+    monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "unset below")
+    monkeypatch.delenv("ORT_DISABLE_TELEMETRY")  # so the test restores "not set" afterwards
+    seen = {}
+
+    def load_model(name, **kwargs):
+        seen["telemetry"] = os.environ.get("ORT_DISABLE_TELEMETRY")  # when onnx_asr starts ORT
+        return object()
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    listen.Parakeet()
+    assert seen == {"telemetry": "1"}
 
 
 def test_parakeet_hears_every_utterance_at_the_same_level(monkeypatch):

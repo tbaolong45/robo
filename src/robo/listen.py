@@ -5,6 +5,7 @@ in the few seconds after it answers, or after a click on its face. Nothing leave
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
 import threading
@@ -154,6 +155,9 @@ class Parakeet:
     (downloaded once, ~650 MB, into the Hugging Face cache)."""
 
     def __init__(self):
+        # onnxruntime 1.30+ opens a connection to a Microsoft server to report usage unless this is
+        # set before it starts (checked 2026-10-13 on 1.31); robo is an offline assistant.
+        os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
         import onnx_asr
 
         # CPU only: CoreML (macOS default) loads 3x slower, runs 2x slower, hears differently
