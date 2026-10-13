@@ -20,13 +20,11 @@ public enum Listen {
     static let endSilenceS = 0.7  // other speech (TV, people): short, so little is transcribed
     public static let noSpeechS = 6.0
     static let maxUtteranceS = 15.0
-    static let patientSilenceS = 1.6  // talking to robo: a pause to think does not end the request ("over" does)
+    static let patientSilenceS = 3.0  // talking to robo: a pause to think does not end the request (no end word)
     static let patientMaxS = 120.0
     public static let minSpeechFrames = 4  // ~0.3 s above the gate, or it was a knock, not a sentence
     public static let readTimeout = 0.5
     static let earlyFrames = 15  // ~1.2 s into a sentence, check whether it starts with robo's name
-    static let overEvery = 10  // ~0.8 s: while you talk to robo, check whether you just said "over"
-    static let overWindow = 25  // ~2 s of the latest audio for that check
     static let micStallS = 5.0  // no frame for this long: the mic is gone (unplugged, or stuck after a sleep)
     static let micRetryS = 5.0  // ...then it is reopened this often
     static let silentFrames = 38  // ~3 s of exact zeros: that is what a microphone without permission delivers
@@ -61,7 +59,6 @@ private func regex(_ pattern: String) -> NSRegularExpression {
 private let lead = regex(#"^\W*(?:(?:hey|hi|high|hay|ok|okay|yo)\W*)?"# + startName + #"\b\W*"#)
 private let tail = regex(#"\W*\b"# + endName + #"\W*$"#)
 private let anywhere = regex(#"\b"# + endName + #"\b"#)  // "robo"-like words are rare anywhere
-private let over = regex(#"[\W_]*\bover(?:\s+and\s+out)?\W*$"#)
 
 private func whole(_ s: String) -> NSRange { NSRange(location: 0, length: (s as NSString).length) }
 private func found(_ re: NSRegularExpression, in s: String) -> Bool { re.firstMatch(in: s, range: whole(s)) != nil }
@@ -81,11 +78,6 @@ func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNe
 public func addressed(_ text: String) -> String? {
     guard found(lead, in: text) || found(tail, in: text) || found(anywhere, in: text) else { return nil }
     return withoutName(text)
-}
-
-/// `text` without the closing "over" that ended it.
-public func withoutOver(_ text: String) -> String {
-    over.stringByReplacingMatches(in: text, range: whole(text), withTemplate: "")
 }
 
 /// `text` without a leading or trailing "(hey) robo".
@@ -189,10 +181,10 @@ public typealias Transcribe = ([Float]) throws -> String
 
 /// Hears every sentence on its own thread; callbacks run on that thread or the inference queue.
 ///
-/// `onWake()` when robo is called by name, then `onText(request)`. Saying "over" ends a request at
-/// once, even when the room never goes quiet (TV). A sentence also counts without the name while robo
-/// expects one: after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`),
-/// after `followUp(seconds:)` (it just answered), or right after a bare "robo". A mic that stops
+/// `onWake()` when robo is called by name, then `onText(request)`. A request ends after
+/// `patientSilenceS` of quiet. A sentence also counts without the name while robo expects one:
+/// after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`), after
+/// `followUp(seconds:)` (it just answered), or right after a bare "robo". A mic that stops
 /// delivering is reopened; one that only gives silence is reported through `onNote`, like every
 /// other message for the user.
 ///
@@ -358,7 +350,7 @@ public final class Listener {
                     infer.async(group: inflight) { [self] in
                         do {
                             let text = try transcribe(audio)
-                            heard(u.over ? withoutOver(text) : text, woke: u.woke)
+                            heard(text, woke: u.woke)
                         } catch { lock.withLock { failure = error } }
                     }
                 }
@@ -411,13 +403,13 @@ public final class Listener {
         }
     }
 
-    struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool; var over: Bool }
+    struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool }
 
-    /// Frames until the sentence ends (or stop()), how many were above the gate, whether robo woke
-    /// up (a quick early check found its name at the start), and whether "over" ended it.
+    /// Frames until the sentence ends (or stop()), how many were above the gate, and whether robo
+    /// woke up (a quick early check found its name at the start).
     private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool,
                         quick: Transcribe) throws -> Utterance {
-        var u = Utterance(frames: first, loud: 1, woke: woke, over: false)
+        var u = Utterance(frames: first, loud: 1, woke: woke)
         var ep = Endpointer(gate: gate)
         let start = first.count
         _ = ep.feed(rms(first.last!))  // the frame that crossed the gate
@@ -432,17 +424,12 @@ public final class Listener {
             let level = rms(frame)
             if level > gate { u.loud += 1 }
             if ep.feed(level) { break }
-            let n = u.frames.count - start
-            if n < min(Listen.earlyFrames, Listen.overEvery) { continue }
-            if !u.woke && n == Listen.earlyFrames {
+            if !u.woke && u.frames.count - start == Listen.earlyFrames {
                 u.woke = addressed(try infer.sync { try quick(u.frames.flatMap { $0 }) }) != nil
                 if u.woke {
                     onWake()
                     ep.endSilence = Listen.patientSilenceS; ep.maxS = Listen.patientMaxS
                 }
-            } else if u.woke && n % Listen.overEvery == 0 {
-                let text = try infer.sync { try quick(u.frames.suffix(Listen.overWindow).flatMap { $0 }) }
-                if found(over, in: text) { u.over = true; return u }
             }
         }
         return u

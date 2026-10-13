@@ -137,7 +137,7 @@ sequenceDiagram
     Note over L: 80 ms frames, speech gate,<br/>pre-roll keeps the first syllable
     L->>W: about 1.2 s in: the name was heard, face perks up
     Note over W: mind: listening
-    L->>L: 1.6 s of silence ends the request,<br/>level the audio, Parakeet transcribes
+    L->>L: 3 s of silence ends the request,<br/>level the audio, Parakeet transcribes
     L->>W: heard: "what's due this week"
     W->>W: show your question in the card, mind: thinking
     W->>B: ask(text), new worker thread

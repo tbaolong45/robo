@@ -42,6 +42,11 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
 - **Don't end a request on a "?".** Parakeet punctuates a clause cut off mid-question as a question
   (36 of 40 probes, 4 TTS voices), so an early send would pass half a request to an agent that has
   every permission. The README promises that a pause to think does not end the request.
+- **No spoken end word** (removed 2026-10-13 at the user's request). A request ends only after
+  `PATIENT_SILENCE_S` = 3 s of quiet (Swift `Listen.patientSilenceS`). The old "over" check ran every
+  ~0.8 s on the last 2 s of audio, so a natural "over" mid-sentence sent a half request; the 1.6 s
+  pause also cut off thinking. Cost: a room that never goes quiet (TV) keeps the request open up to
+  `PATIENT_MAX_S`. Don't add a word that can occur in speech.
 - **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model
   loads on its thread. Use `Listener.running`, not the return value, to know voice input is alive.
   Listener callbacks reach the UI only through `app._Bridge` signals.

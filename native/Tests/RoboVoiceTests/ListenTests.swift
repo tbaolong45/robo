@@ -73,19 +73,6 @@ func sentencesNotForRobo(text: String) {
     #expect(addressed(text) == nil)
 }
 
-@Test(arguments: [
-    ("Robo, what's the date, over.", "what's the date"),
-    ("what's the date over", "what's the date"),
-    ("Robo, flip the page over", "flip the page over"),  // not ended by the word: kept
-])
-func overIsDroppedOnlyWhenItEndedTheCommand(text: String, command: String) {
-    let ended = text != "Robo, flip the page over"
-    #expect(withoutName(ended ? withoutOver(text) : text) == command)
-    #expect(withoutOver("Robo, what's the date, over and out.") == "Robo, what's the date")
-    #expect(withoutOver("please... OVER and OUT!!") == "please")
-    #expect(withoutOver("over_") == "over_")
-}
-
 // MARK: - Endpointer, speech gate, levelling
 
 /// 1-based frame at which the Endpointer says the utterance ended (frames of 0.25 s).
@@ -490,15 +477,15 @@ final class Gate {
     #expect(events.isEmpty && calls.all == ["quick"])
 }
 
-@Test func sayingOverEndsTheCommandEvenWhileTheTVKeepsTalking() {
-    let noisy = frames(0, 8) + frames(8, 208, speech)  // 16 s of sound: the room never goes quiet
+@Test func theWordOverDoesNotEndARequest() {
+    // 16 s of sound, then quiet: only the quiet ends it, and "over" stays in the text
+    let clip = frames(0, 8) + frames(8, 208, speech) + frames(208, 260)
     let stt = FakeStt("Robo, what's the date, over.")
-    let (lis, events) = start(FakeMic(noisy), stt,
-                              quick: FakeStt("Robo, what's the date", repeating: "what's the date, over."))
+    let (lis, events) = start(FakeMic(clip), stt, quick: FakeStt("Robo, what's the date"))
     #expect(events.get() == .wake)
-    #expect(events.get() == .text("what's the date"))
+    #expect(events.get() == .text("what's the date, over."))
     lis.stop()
-    #expect(stt.heard[0].count / Listen.frame < 60)  // ended at "over", not at the 15 s limit
+    #expect(stt.heard.count == 1 && stt.heard[0].count / Listen.frame > 200)
 }
 
 @Test func oneModelServesTheQuickChecksByDefault() {
@@ -512,14 +499,14 @@ final class Gate {
 }
 
 @Test func onceRoboIsListeningAThinkingPauseDoesNotEndTheRequest() {
-    // woke by name, then 1.2 s of silence mid-request, then more words
-    let clip = frames(0, 8) + frames(8, 20, speech) + frames(20, 35) + frames(35, 45, speech) + frames(45, 80)
+    // woke by name, then 2.4 s of silence mid-request, then more words; 3.2 s of silence ends it
+    let clip = frames(0, 8) + frames(8, 20, speech) + frames(20, 50) + frames(50, 60, speech) + frames(60, 100)
     let stt = FakeStt("Robo, plan my day and also check my mail")
     let (lis, events) = start(FakeMic(clip), stt, quick: FakeStt("Robo, plan my"))
     #expect(events.get() == .wake)
     #expect(events.get() == .text("plan my day and also check my mail"))
     lis.stop()
-    #expect(stt.heard.count == 1 && tags(stt.heard[0]).contains(44))  // one request, both halves
+    #expect(stt.heard.count == 1 && tags(stt.heard[0]).contains(59))  // one request, both halves
 }
 
 @Test func aLongRequestIsNotCutAtFifteenSeconds() {
