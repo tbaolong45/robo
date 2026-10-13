@@ -92,7 +92,7 @@ def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
 @pytest.mark.parametrize("path", sorted(p for p in HERMES.rglob("*") if p.is_file()
                                         and "__pycache__" not in p.parts), ids=str)
 def test_templates_hold_no_machine_paths(path):
-    """robo setup fills {{ROBO_PROJECT}}; a fixed /home/... path breaks on another laptop."""
+    """robo setup fills {{ROBO}}; a fixed /home/... path breaks on another laptop."""
     assert not re.search(r"/home/[a-z]", path.read_text(encoding="utf-8"))
 
 
@@ -214,5 +214,5 @@ def test_templates_use_only_placeholders_setup_fills():
         key for p in HERMES.rglob("*") if p.is_file() and "__pycache__" not in p.parts
         for key in re.findall(r"\{\{(\w+)\}\}", p.read_text(encoding="utf-8"))
     }
-    assert used <= {"MOODLE_BASE_URL", "ROBO_PROJECT", "DESKTOP_APPS", "VAULT"}
+    assert used <= {"MOODLE_BASE_URL", "ROBO", "DESKTOP_APPS", "VAULT"}
     assert "VAULT" in used

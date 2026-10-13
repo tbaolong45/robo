@@ -249,7 +249,7 @@ def setup(
     if moodle and set_env(robo_env, {"MOODLE_BASE_URL": moodle}):
         done.append(f"set your Moodle address to {moodle}")
     fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set",
-            "ROBO_PROJECT": str(PROJECT),
+            "ROBO": f"uv run --project {PROJECT} robo",  # skills run `{{ROBO}} plan ...`
             "VAULT": str(vault.VAULT),  # where drafts, plans and notes go; see robo.vault
             "DESKTOP_APPS": DESKTOP_APPS["darwin" if sys.platform == "darwin" else "linux"]}
     if _copy_tree(templates, profile_dir(), fill):

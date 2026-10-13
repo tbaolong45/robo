@@ -25,7 +25,7 @@ digest has the classes and deadlines) instead of fetching again.
 3. `study-ledger`: `read_file(path="~/.local/share/robo/study.md")` for exams, goals, weak
    results and preferences (block length, best time of day).
 4. Yesterday's activity:
-   `terminal(command="uv run --project {{ROBO_PROJECT}} robo activity --days 1", timeout=60)`.
+   `terminal(command="{{ROBO}} activity --days 1", timeout=60)`.
    If it fails, skip it. Use it to continue unfinished work and not repeat what is done.
 
 ## Plan
@@ -38,7 +38,7 @@ digest has the classes and deadlines) instead of fetching again.
      with weak results +0.1-0.2; goals and review 0.2-0.4. Split work over 2 h into blocks.
    - busy: `[{"title": "Calculus", "start": "2026-10-11T09:00:00", "end": "2026-10-11T10:30:00"}]`,
      today's classes and any existing events (including `[Robo]` ones).
-2. `terminal(command="uv run --project {{ROBO_PROJECT}} robo plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json", timeout=60)`.
+2. `terminal(command="{{ROBO}} plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json", timeout=60)`.
    It prints `{"blocks": [{"title", "start", "end"}], "unscheduled": [...]}`, already packed
    with no overlaps, breaks, and deadlines respected. Use its times as they are; never
    re-pack by hand. If it errors, fix the JSON once and rerun.
