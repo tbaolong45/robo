@@ -14,6 +14,7 @@ public struct Rect: Equatable {
 
 public enum Roam {
     public static let speed = 40.0  // px/s average travel speed (ease-in-out peaks at 1.5x)
+    public static let callSpeed = 240.0  // px/s: the walk to a corner when called; a drift's pace would take a minute
     public static let rest = 20.0...60.0  // s to rest between drifts
     public static let margin = 160.0  // px: drift targets lie this close to the bottom, left or right edge
     public static let edge = 24.0  // px gap from the bottom-right corner where it sleeps
@@ -81,7 +82,7 @@ public func pickTarget<G: RandomNumberGenerator>(_ rng: inout G, _ screen: Rect,
 
 /// Moves the window like a pet: rest, drift (to any screen), sleep in a corner, stay when needed.
 public final class Roamer {
-    public enum Mode: String { case none = "", rest, drift, present, held, sleep }
+    public enum Mode: String { case none = "", rest, drift, present, held, sleep, come }
 
     public private(set) var screens: [Rect]
     public private(set) var size: Vec
@@ -110,7 +111,7 @@ public final class Roamer {
     /// -1 / 1 while drifting left / right, else 0: where its eyes should lead.
     public var heading: Int {
         let dx = goal.x - pos.x
-        return mode == .drift ? (dx > 8 ? 1 : 0) - (dx < -8 ? 1 : 0) : 0
+        return mode == .drift || mode == .come ? (dx > 8 ? 1 : 0) - (dx < -8 ? 1 : 0) : 0
     }
 
     public func resize(_ size: Vec) {
@@ -130,14 +131,20 @@ public final class Roamer {
         heldUntil = now + seconds
     }
 
-    /// Advance to `now`; return the window's top-left.
-    public func step(now: Double, asleep: Bool, engaged: Bool) -> IVec {
+    /// Advance to `now`; return the window's top-left. `engaged`: the user has it by the mouse, so it
+    /// freezes. `called`: a request or the card is up, so it walks to the nearest corner and stays (a
+    /// spot the user chose, `held`, wins).
+    public func step(now: Double, asleep: Bool, engaged: Bool, called: Bool = false) -> IVec {
         let dt = last.map { min(max(now - $0, 0), Roam.maxDT) } ?? 0
         last = now
         if engaged {
             mode = .present
         } else if now < heldUntil {
             mode = .held
+        } else if called {
+            if mode != .come || goal != nearestCorner() { go(nearestCorner(), Roam.callSpeed) }
+            mode = .come
+            _ = travel(dt)
         } else if asleep {
             if mode != .sleep || goal != bed() { go(bed()) }
             mode = .sleep
@@ -164,17 +171,25 @@ public final class Roamer {
         restUntil = now + uniform(Roam.rest.lowerBound, Roam.rest.upperBound, &rng)
     }
 
-    /// The bottom-right corner of the screen it is on, so a nap never needs a long walk.
-    private func bed() -> Vec {
+    /// The four corners (top-left, top-right, bottom-left, bottom-right) of the screen it is on, `edge`
+    /// in from each, so a walk to one never crosses to another screen.
+    private func corners() -> [Vec] {
         let s = screens.max { overlap(pos, size, $0) < overlap(pos, size, $1) }!
-        return clamp(Vec(s.x + s.w - size.x - Roam.edge, s.y + s.h - size.y - Roam.edge), size, s)
+        let left = s.x + Roam.edge, top = s.y + Roam.edge
+        let right = s.x + s.w - size.x - Roam.edge, bottom = s.y + s.h - size.y - Roam.edge
+        return [Vec(left, top), Vec(right, top), Vec(left, bottom), Vec(right, bottom)].map { clamp($0, size, s) }
     }
 
-    private func go(_ target: Vec) {
+    /// The bottom-right corner, so a nap never needs a long walk.
+    private func bed() -> Vec { corners()[3] }
+
+    private func nearestCorner() -> Vec { corners().min { dist($0, pos) < dist($1, pos) }! }
+
+    private func go(_ target: Vec, _ speed: Double = Roam.speed) {
         origin = pos
         goal = target
         elapsed = 0
-        trip = dist(pos, target) / Roam.speed
+        trip = dist(pos, target) / speed
     }
 
     /// Ease from origin toward goal; true on arrival.

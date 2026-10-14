@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 SPEED = 40.0  # px/s average travel speed (ease-in-out peaks at 1.5x)
+CALL_SPEED = 240.0  # px/s: the walk to a corner when called; a drift's pace would take a minute
 REST = (20.0, 60.0)  # s to rest between drifts
 MARGIN = 160  # px: drift targets lie this close to the bottom, left or right edge
 EDGE = 24  # px gap from the bottom-right corner where it sleeps
@@ -87,7 +88,7 @@ class Roamer:
     def heading(self) -> int:
         """-1 / 1 while drifting left / right, else 0: where its eyes should lead."""
         dx = self.goal[0] - self.pos[0]
-        return ((dx > 8) - (dx < -8)) if self.mode == "drift" else 0
+        return ((dx > 8) - (dx < -8)) if self.mode in ("drift", "come") else 0
 
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
@@ -102,14 +103,22 @@ class Roamer:
         self.pos = fit(pos, self.size, self.screens)
         self.held_until = now + seconds
 
-    def step(self, now: float, activity: str, engaged: bool) -> tuple[int, int]:
-        """Advance to `now`; return the window's top-left."""
+    def step(self, now: float, activity: str, engaged: bool,
+             called: bool = False) -> tuple[int, int]:
+        """Advance to `now`; return the window's top-left. `engaged`: the user has it by the
+        mouse, so it freezes. `called`: a request or the card is up, so it walks to the nearest
+        corner and stays (a spot the user chose, `held`, wins)."""
         dt = 0.0 if self.last is None else min(max(now - self.last, 0.0), MAX_DT)
         self.last = now
         if engaged:
             self.mode = "present"
         elif now < self.held_until:
             self.mode = "held"
+        elif called:
+            if self.mode != "come" or self.goal != self._nearest_corner():
+                self._go(self._nearest_corner(), CALL_SPEED)
+            self.mode = "come"
+            self._travel(dt)
         elif activity == "asleep":
             if self.mode != "sleep" or self.goal != self._bed():
                 self._go(self._bed())
@@ -137,15 +146,25 @@ class Roamer:
         """A random screen to drift to (the only one without drawing, so a seed keeps its path)."""
         return self.screens[0] if len(self.screens) == 1 else self.rng.choice(self.screens)
 
-    def _bed(self) -> tuple[float, float]:
-        """The bottom-right corner of the screen it is on, so a nap never needs a long walk."""
+    def _corners(self) -> list[tuple[float, float]]:
+        """The four corners (top-left, top-right, bottom-left, bottom-right) of the screen it is
+        on, EDGE in from each, so a walk to one never crosses to another screen."""
         s = max(self.screens, key=lambda s: _overlap(self.pos, self.size, s))
-        return _clamp((s.x + s.w - self.size[0] - EDGE, s.y + s.h - self.size[1] - EDGE),
-                      self.size, s)
+        left, top = s.x + EDGE, s.y + EDGE
+        right, bottom = s.x + s.w - self.size[0] - EDGE, s.y + s.h - self.size[1] - EDGE
+        return [_clamp(c, self.size, s) for c in
+                ((left, top), (right, top), (left, bottom), (right, bottom))]
 
-    def _go(self, goal: tuple[float, float]) -> None:
+    def _bed(self) -> tuple[float, float]:
+        """The bottom-right corner, so a nap never needs a long walk."""
+        return self._corners()[3]
+
+    def _nearest_corner(self) -> tuple[float, float]:
+        return min(self._corners(), key=lambda c: math.dist(c, self.pos))
+
+    def _go(self, goal: tuple[float, float], speed: float = SPEED) -> None:
         self.origin, self.goal, self.elapsed = self.pos, goal, 0.0
-        self.trip = math.dist(self.pos, goal) / SPEED
+        self.trip = math.dist(self.pos, goal) / speed
 
     def _travel(self, dt: float) -> bool:
         """Ease from origin toward goal; True on arrival."""

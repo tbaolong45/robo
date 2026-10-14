@@ -3,7 +3,19 @@ import random
 
 import pytest
 
-from robo.roam import EDGE, HOLD, MARGIN, MAX_DT, REST, SPEED, Rect, Roamer, fit, pick_target
+from robo.roam import (
+    CALL_SPEED,
+    EDGE,
+    HOLD,
+    MARGIN,
+    MAX_DT,
+    REST,
+    SPEED,
+    Rect,
+    Roamer,
+    fit,
+    pick_target,
+)
 
 SCREEN = Rect(0, 0, 1920, 1080)
 SCREENS = (SCREEN,)
@@ -18,10 +30,10 @@ ROUNDING = 1.5  # px: integer output can add up to ~sqrt(2) to a step
 TOP = (900, 0)  # far from the margin band, so the first drift is long
 
 
-def run(r, t0, seconds, activity="idle", engaged=False, fps=FPS):
+def run(r, t0, seconds, activity="idle", engaged=False, fps=FPS, called=False):
     """Step `r` at `fps` for `seconds` after t0; return [(t, pos)]."""
     ts = [t0 + i / fps for i in range(1, int(seconds * fps) + 1)]
-    return [(t, r.step(t, activity, engaged)) for t in ts]
+    return [(t, r.step(t, activity, engaged, called)) for t in ts]
 
 
 def until(r, t, mode, limit=600.0):
@@ -229,3 +241,71 @@ def test_unplugging_its_screen_brings_it_back_to_the_one_left():
     r = Roamer(BOTH, FACE, seed=6, start=(3000, 500))
     r.set_screens((SCREEN,))
     assert r.step(0.0, "idle", False) == (1800, 500)
+
+
+# --- called: it walks to the nearest corner of its screen instead of freezing mid-drift -----------
+
+LEFT_EDGE, RIGHT_EDGE = EDGE, 1920 - 120 - EDGE
+TOP_EDGE, BOTTOM_EDGE = EDGE, 1080 - 120 - EDGE
+
+
+@pytest.mark.parametrize(("start", "corner"), [
+    ((700, 300), (LEFT_EDGE, TOP_EDGE)),
+    ((1100, 300), (RIGHT_EDGE, TOP_EDGE)),
+    ((700, 700), (LEFT_EDGE, BOTTOM_EDGE)),
+    ((1100, 700), (RIGHT_EDGE, BOTTOM_EDGE)),
+])
+def test_called_walks_to_the_nearest_corner_at_call_speed_and_stays(start, corner):
+    r = Roamer(SCREENS, FACE, seed=1, start=start)
+    trip = math.dist(start, corner) / CALL_SPEED
+    run(r, 0.0, trip - 1, called=True)
+    assert r.pos != corner and r.mode == "come"
+    assert run(r, trip - 1, 2.5, called=True)[-1][1] == corner  # on time, not at drift speed
+    assert {p for _, p in run(r, trip + 1.5, 30, called=True)} == {corner}
+
+
+def test_its_eyes_lead_the_way_to_the_corner():
+    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))
+    run(r, 0.0, 0.5, called=True)
+    assert r.heading == -1
+
+
+def test_pressing_it_freezes_the_walk():
+    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))
+    run(r, 0.0, 1, called=True)
+    frozen = r.step(1.0, "idle", True, True)
+    assert {p for _, p in run(r, 1.0, 5, engaged=True, called=True)} == {frozen}
+    assert r.mode == "present"
+
+
+def test_a_spot_the_user_chose_wins_over_a_call():
+    r = Roamer(SCREENS, FACE, seed=5)
+    r.hold(0.0, (500, 300))
+    assert {p for _, p in run(r, 0.0, 20, called=True)} == {(500, 300)} and r.mode == "held"
+    assert run(r, HOLD, 20, called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)  # the hold is over
+
+
+def test_after_a_call_it_rests_in_the_corner_then_drifts_on():
+    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))
+    corner = (LEFT_EDGE, TOP_EDGE)
+    assert run(r, 0.0, 10, called=True)[-1][1] == corner
+    assert {p for _, p in run(r, 10, REST[0] - 1)} == {corner} and r.mode == "rest"
+    assert any(p != corner for _, p in run(r, 10 + REST[0] - 1, REST[1] + 10))
+
+
+def test_the_corner_is_one_of_the_screen_it_is_on():
+    main, built_in = Rect(0, 0, 2560, 1440), Rect(-1800, 271, 1800, 1169)
+    r = Roamer((main, built_in), FACE, seed=1, start=(-1700, 500))
+    assert run(r, 0.0, 30, called=True)[-1][1] == (-1800 + EDGE, 271 + EDGE)
+
+
+def test_a_call_wins_over_sleep():
+    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))  # bed: bottom-right; call: top-left
+    assert run(r, 0.0, 20, "asleep", called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)
+
+
+def test_a_bigger_window_re_aims_the_walk():
+    r = Roamer(SCREENS, FACE, seed=1, start=(1100, 700))
+    run(r, 0.0, 1, called=True)
+    r.resize(BUBBLE)
+    assert run(r, 1.0, 20, called=True)[-1][1] == (1920 - 400 - EDGE, 1080 - 300 - EDGE)

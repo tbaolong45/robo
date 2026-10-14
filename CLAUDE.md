@@ -47,6 +47,13 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   ~0.8 s on the last 2 s of audio, so a natural "over" mid-sentence sent a half request; the 1.6 s
   pause also cut off thinking. Cost: a room that never goes quiet (TV) keeps the request open up to
   `PATIENT_MAX_S`. Don't add a word that can occur in speech.
+- **Speech gate floor** (`MIN_GATE` / `Listen.minGate` = 0.008, lowered from 0.02 on 2026-10-15). The
+  user's "Robo" on the MacBook Pro mic has p99 0.020 and peak 0.032 per 80 ms frame (room floor 0.0012,
+  room peaks ~0.005), so at 0.02 none of five calls reached the model; at 0.008 all five did, at 0.012
+  two. Calibrate on the user's own voice through the real mic (`scripts/voice_eval.py --record`, or
+  replay a clip through `Endpointer`), not a TTS voice. Recording from the Bluetooth headset
+  (WH-CH720N) while Robo ran was followed by "I lost the microphone, reconnecting..." in Robo (not
+  isolated: probably the headset's profile switch); it recovered by itself within ~20 s.
 - **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model
   loads on its thread. Use `Listener.running`, not the return value, to know voice input is alive.
   Listener callbacks reach the UI only through `app._Bridge` signals.
@@ -87,6 +94,12 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
   (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
   `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
+- **Called = corner** (`Roamer.step`, 2026-10-13): priority is `engaged` (mouse pressed: freeze) >
+  `held` (a drop or "Stay": it stays, even while you talk) > `called` (request or card up: walks to
+  the nearest corner of its screen at `CALL_SPEED` = 240 px/s, since a drift's 40 px/s takes a minute
+  across 2560 px, and stays) > `asleep` (bed) > wander. Before this it froze mid-drift at a random
+  spot. After the call it rests in the corner, then drifts. The branch draws no random numbers, so
+  seeded wander paths did not change. Swift's resting tick is 500 ms: a call can lag 0.5 s.
 - **Several monitors** (`roam.fit`): the window must lie inside the *union* of the screens and may
   straddle two that touch; a spot half over a dead corner between unequal monitors goes to the nearest
   single-screen clamp. Both drag paths must call `roamer.hold` on every move, or the 33 ms roam tick

@@ -696,8 +696,9 @@ class RoboWindow(QWidget):
         QTimer.singleShot(0, refit)
 
     def _roam(self) -> None:
-        engaged = self.busy or not self.panel.isHidden() or self.press is not None
-        x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged)
+        engaged = self.press is not None or self.moving  # the user has it: freeze
+        called = self.busy or not self.panel.isHidden()  # it walks to a corner and stays
+        x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged, called)
         if (x, y) != (self.x(), self.y()):
             self.move(x, y)
 

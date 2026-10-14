@@ -400,6 +400,24 @@ def test_a_drag_robo_moves_itself_is_not_pulled_back_by_the_roam_tick(tmp_path):
     assert win.roamer.held_until > time.monotonic() + 60
 
 
+def test_the_roam_tick_walks_it_to_a_corner_when_called_and_freezes_it_on_a_press(tmp_path):
+    from PySide6.QtCore import QPoint
+
+    win, _ = floating(tmp_path, FakeClient([]))
+    flags, real = [], win.roamer.step
+    win.roamer.step = lambda now, activity, engaged, called=False: (
+        flags.append((engaged, called)) or real(now, activity, engaged, called))
+    win._roam()
+    assert flags[-1] == (False, False)
+    win.busy = True  # a request is running
+    win._roam()
+    assert flags[-1] == (False, True)
+    win.press = QPoint(1, 1)  # and the user has hold of the face
+    win._roam()
+    assert flags[-1] == (True, True)
+    win.press, win.busy = None, False
+
+
 def test_roaming_follows_the_monitors_that_are_plugged_in(tmp_path, monkeypatch):
     from robo.roam import Rect
 

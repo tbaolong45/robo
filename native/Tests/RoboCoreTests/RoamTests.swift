@@ -19,10 +19,10 @@ private struct Sample { let t: Double; let pos: IVec }
 
 /// Step `r` at `fps` for `seconds` after t0.
 private func run(_ r: Roamer, _ t0: Double, _ seconds: Double, asleep: Bool = false,
-                 engaged: Bool = false, fps: Double = fps) -> [Sample] {
+                 engaged: Bool = false, called: Bool = false, fps: Double = fps) -> [Sample] {
     (0..<Int(seconds * fps)).map { i in
         let t = t0 + Double(i + 1) / fps
-        return Sample(t: t, pos: r.step(now: t, asleep: asleep, engaged: engaged))
+        return Sample(t: t, pos: r.step(now: t, asleep: asleep, engaged: engaged, called: called))
     }
 }
 
@@ -252,4 +252,70 @@ func presentFreezesMidDrift(asleep: Bool) {
     let r = Roamer(screens: both, size: face, seed: 6, start: Vec(3000, 500))
     r.setScreens([screen])
     #expect(r.step(now: 0, asleep: false, engaged: false) == IVec(1800, 500))
+}
+
+// MARK: - called: it walks to the nearest corner of its screen instead of freezing mid-drift
+
+private let leftEdge = Roam.edge, topEdge = Roam.edge
+private let rightEdge = 1920 - 120 - Roam.edge, bottomEdge = 1080 - 120 - Roam.edge
+private func ivec(_ p: Vec) -> IVec { IVec(Int(p.x), Int(p.y)) }
+
+@Test(arguments: [
+    (Vec(700, 300), Vec(leftEdge, topEdge)), (Vec(1100, 300), Vec(rightEdge, topEdge)),
+    (Vec(700, 700), Vec(leftEdge, bottomEdge)), (Vec(1100, 700), Vec(rightEdge, bottomEdge)),
+])
+func calledWalksToTheNearestCornerAtCallSpeedAndStays(start: Vec, corner: Vec) {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: start)
+    let trip = dist(start, corner) / Roam.callSpeed
+    _ = run(r, 0, trip - 1, called: true)
+    #expect(r.pos != corner && r.mode == .come)
+    #expect(run(r, trip - 1, 2.5, called: true).last?.pos == ivec(corner))  // on time, not at drift speed
+    #expect(Set(run(r, trip + 1.5, 30, called: true).map(\.pos)) == [ivec(corner)])
+}
+
+@Test func itsEyesLeadTheWayToTheCorner() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))
+    _ = run(r, 0, 0.5, called: true)
+    #expect(r.heading == -1)
+}
+
+@Test func pressingItFreezesTheWalk() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))
+    _ = run(r, 0, 1, called: true)
+    let frozen = r.step(now: 1, asleep: false, engaged: true, called: true)
+    #expect(Set(run(r, 1, 5, engaged: true, called: true).map(\.pos)) == [frozen])
+    #expect(r.mode == .present)
+}
+
+@Test func aSpotTheUserChoseWinsOverACall() {
+    let r = Roamer(screens: screens, size: face, seed: 5)
+    r.hold(now: 0, pos: Vec(500, 300))
+    #expect(Set(run(r, 0, 20, called: true).map(\.pos)) == [IVec(500, 300)] && r.mode == .held)
+    #expect(run(r, Roam.hold, 20, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))  // the hold is over
+}
+
+@Test func afterACallItRestsInTheCornerThenDriftsOn() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))
+    let corner = ivec(Vec(leftEdge, topEdge))
+    #expect(run(r, 0, 10, called: true).last?.pos == corner)
+    #expect(Set(run(r, 10, Roam.rest.lowerBound - 1).map(\.pos)) == [corner] && r.mode == .rest)
+    #expect(run(r, 10 + Roam.rest.lowerBound - 1, Roam.rest.upperBound + 10).contains { $0.pos != corner })
+}
+
+@Test func theCornerIsOneOfTheScreenItIsOn() {
+    let main = Rect(0, 0, 2560, 1440), builtIn = Rect(-1800, 271, 1800, 1169)
+    let r = Roamer(screens: [main, builtIn], size: face, seed: 1, start: Vec(-1700, 500))
+    #expect(run(r, 0, 30, called: true).last?.pos == IVec(-1800 + Int(Roam.edge), 271 + Int(Roam.edge)))
+}
+
+@Test func aCallWinsOverSleep() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))  // bed: bottom-right; call: top-left
+    #expect(run(r, 0, 20, asleep: true, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))
+}
+
+@Test func aBiggerWindowReAimsTheWalk() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(1100, 700))
+    _ = run(r, 0, 1, called: true)
+    r.resize(bubble)
+    #expect(run(r, 1, 20, called: true).last?.pos == IVec(1920 - 400 - Int(Roam.edge), 1080 - 300 - Int(Roam.edge)))
 }

@@ -214,17 +214,19 @@ final class RoboWindow {
     // MARK: - roaming
 
     func roam() {
-        let engaged = busy || !card.isHidden || press != nil
-        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: engaged)
+        let called = busy || !card.isHidden  // it walks to a corner and stays
+        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
         scheduleRoam()
     }
 
-    /// 30 steps a second only while something moves: walking, or a sleeper on its way to its bed. Resting,
-    /// held (10 minutes after a drop) and asleep in its corner, nothing changes between two half seconds.
+    /// 30 steps a second only while something moves: walking, a sleeper on its way to its bed, or a call
+    /// on its way to a corner. Resting, held (10 minutes after a drop) and asleep in its corner, nothing
+    /// changes between two half seconds.
     func scheduleRoam() {
-        let moving = roamer.mode == .drift || (roamer.mode == .sleep && roamer.pos != roamer.goal)
+        let travelling = (roamer.mode == .sleep || roamer.mode == .come) && roamer.pos != roamer.goal
+        let moving = roamer.mode == .drift || travelling
         let wanted = moving ? RoboWindow.roamFast : RoboWindow.roamSlow
         guard wanted != roamInterval else { return }
         roamInterval = wanted

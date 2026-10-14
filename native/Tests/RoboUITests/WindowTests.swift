@@ -213,6 +213,24 @@ import RoboVoice
         #expect(r.window.press != nil)
     }
 
+    @Test func aRequestWalksItToACornerAndAPressFreezesIt() async {
+        let r = Rig()
+        defer { r.close() }
+        r.window.roamer.pos = Vec(600, 500)  // not held: it was just drifting here
+        r.window.move(to: r.window.roamer.pos)
+        r.window.busy = true  // a request is running
+        for _ in 0..<400 { r.clock.advance(0.05); r.window.roam() }
+        let roamer = r.window.roamer
+        #expect(roamer.mode == .come && roamer.pos == roamer.goal && roamer.pos == r.window.windowTopLeft)
+        #expect([24.0, 1280.0].contains(roamer.goal.x))  // a left or right corner of the 1440 pt display
+        roamer.pos = Vec(600, 500)  // and now the user takes hold of the face
+        r.window.move(to: roamer.pos)
+        at(r, r.overFace)
+        r.window.faceMouse(.press)
+        for _ in 0..<40 { r.clock.advance(0.05); r.window.roam() }
+        #expect(roamer.mode == .present && roamer.pos == Vec(600, 500))
+    }
+
     /// Dragging from the main display across the seam onto the built-in one: no snap-back, straddling is
     /// fine, and it stays on the far display after the drop.
     @Test func dragAcrossDisplaysHasNoSnapBack() async {
