@@ -16,7 +16,7 @@ public enum Listen {
     static let noiseFrames = 62  // ~5 s of quiet RMS for the noise floor
     static let noisePercentile = 20.0
     static let gateFactor = 2.5  // speech = RMS above 2.5x the room's noise floor...
-    public static let minGate = 0.02  // ...and above this (float RMS, -1..1)
+    public static let minGate = 0.008  // ...and above this (float RMS, -1..1); a real "Robo" on a MacBook mic peaks ~0.03
     static let endSilenceS = 0.7  // other speech (TV, people): short, so little is transcribed
     public static let noSpeechS = 6.0
     static let maxUtteranceS = 15.0

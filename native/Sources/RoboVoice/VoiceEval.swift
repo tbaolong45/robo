@@ -155,7 +155,7 @@ private func scoreClips(_ folder: URL) throws {
     }
     print("\n\(total - wrong.count)/\(total) correct; gate = \(Listen.minGate) RMS, "
           + "\(silent.count) clip(s) below it" + (silent.isEmpty ? "" : ": \(silent.joined(separator: ", "))"))
-    if !silent.isEmpty { print("Your voice is quieter than the gate: lower minGate in Listen.swift (try 0.012).") }
+    if !silent.isEmpty { print("Your voice is quieter than the gate: lower minGate in Listen.swift (try 0.005).") }
 }
 
 private let prompts = [("robo", "Robo, what time is it?"), ("robo", "Hey robo, what's due this week?"),

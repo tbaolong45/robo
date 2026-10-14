@@ -148,7 +148,7 @@ def evaluate(folder: Path) -> None:
     print(f"\n{total - len(wrong)}/{total} correct; gate = {listen.MIN_GATE} RMS, "
           f"{len(silent)} clip(s) below it" + (f": {', '.join(silent)}" if silent else ""))
     if silent:
-        print("Your voice is quieter than the gate: lower MIN_GATE in listen.py (try 0.012).")
+        print("Your voice is quieter than the gate: lower MIN_GATE in listen.py (try 0.005).")
 
 
 if __name__ == "__main__":

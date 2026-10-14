@@ -25,7 +25,7 @@ PRE_ROLL_FRAMES = 6  # ~0.5 s kept from before the voice crossed the gate (soft 
 NOISE_FRAMES = 62  # ~5 s of quiet RMS for the noise floor
 NOISE_PERCENTILE = 20
 GATE_FACTOR = 2.5  # speech = RMS above 2.5x the room's noise floor...
-MIN_GATE = 0.02  # ...and above this (float RMS, -1..1)
+MIN_GATE = 0.008  # ...and above this (float RMS, -1..1); a real "Robo" on a MacBook mic peaks ~0.03
 END_SILENCE_S = 0.7  # other speech (TV, people): short, so little is transcribed
 NO_SPEECH_S = 6.0
 MAX_UTTERANCE_S = 15.0
