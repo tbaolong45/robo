@@ -1,8 +1,10 @@
-// Everything the card paints: the frame (glow, glass, aura, scanlines, grid, sheen, header tint, divider,
-// border, brackets, tail dot), the header with its lights and model chip, the quote's bar, the caret, the
-// typing dots, buttons, the theme swatches. Port of src/robo/hud.py and the painting half of widgets.py.
-// Every colour comes from a `Theme` token (`Themes.rgba`, `accent`, `labelColour`), never a literal. The
-// views are y-down (isFlipped) so the Python coordinates carry over unchanged.
+// Everything the card draws apart from its text: the glass pane behind it, the header with its lights and model chip,
+// the quote's bar, the caret, the typing dots and the buttons. The pane is the system's Liquid Glass
+// (`NSGlassEffectView`, macOS 26; a frosted `NSVisualEffectView` before that), so the fill, the edge and the shadow
+// are not painted here, and the text and the status lights use the system colours, which follow light and dark and
+// stay legible over any wallpaper. The only colour of our own is the accent the face's mood paints (`Themes.accent`):
+// it tints the glass a little and colours the orb, the caret, the dots and the quote's bar. The views are y-down
+// (isFlipped).
 import AppKit
 import RoboCore
 
@@ -12,16 +14,25 @@ extension RGBA {
 
 /// Metrics and drawing shared by the card's views.
 enum Chrome {
-    static let glow: CGFloat = 6  // px of margin around the frame that the glow may use
+    static let glow: CGFloat = 6  // px of margin around the glass pane (room for the glass's own edge light)
     static let headerH: CGFloat = 26
-    static let tailW: CGFloat = 20, tailH: CGFloat = 9
-    /// The card's single column: 6 glow + 13 padding at the sides, 6 + 26 header + 10 on top, 9 tail + 10 below.
+    static let gap: CGFloat = 9  // between the pane and the face below it (there is no tail: the pane floats above the face)
+    static let radius: CGFloat = 24  // the pane's corner radius
+    /// The card's single column: 6 margin + 13 padding at the sides, 6 + 26 header + 10 on top, 9 gap + 10 below.
     static let margins = NSEdgeInsets(top: 42, left: 19, bottom: 19, right: 19)
     static let spacing: CGFloat = 8
     static let bar: CGFloat = 2, wash: CGFloat = 5  // the quote's accent bar and the tinted strip it sits on
 
     static func color(_ hex: String, _ alpha: Double = 1) -> NSColor { Themes.rgba(hex, alpha: alpha).ns }
     static func accent(_ t: Theme, _ hue: Double, _ alpha: Double = 1) -> NSColor { Themes.accent(t, hue, alpha: alpha).ns }
+
+    /// The system's own colours: they resolve at draw time, so light, dark and the glass behind decide.
+    static let text = NSColor.labelColor
+    static let textDim = NSColor.secondaryLabelColor
+    static let faint = NSColor.tertiaryLabelColor
+    static let hairline = NSColor.separatorColor
+    /// A quiet wash over glass: chips, code boxes.
+    static func wash(_ alpha: CGFloat) -> NSColor { NSColor.labelColor.withAlphaComponent(alpha) }
 
     /// The hue in the 2 degree steps the card follows the face in (Python `round` is half to even).
     static func quantised(_ hue: Double) -> Double {
@@ -30,6 +41,8 @@ enum Chrome {
     }
 
     // MARK: fonts
+
+    static func ui(_ px: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: px, weight: weight) }
 
     static let monoFamily: String = {
         let have = Set(NSFontManager.shared.availableFontFamilies)
@@ -71,161 +84,40 @@ enum Chrome {
         let baseline = y + ((h - (m.ascent + m.descent)) / 2) + m.ascent + 0.5  // Qt's text sits half a pixel lower (measured against its pixels)
         NSAttributedString(string: s, attributes: attrs(font, colour, kern: kern)).draw(at: NSPoint(x: x, y: baseline - font.ascender))
     }
+}
 
-    // MARK: arcs and the outline
+/// The card's glass: `NSGlassEffectView` on macOS 26 and later, a frosted `NSVisualEffectView` before. Both are a
+/// plain view behind the card's other views (not their parent), so the layout is the card's own.
+final class GlassSurface: NSView {
+    private let effect: NSView
 
-    /// Qt's `arcTo`: angles are counter-clockwise on the screen from 3 o'clock; the context is y-down.
-    private static func arc(_ p: CGMutablePath, _ r: CGRect, _ start: Double, _ sweep: Double) {
-        let c = CGPoint(x: r.midX, y: r.midY)
-        p.addArc(center: c, radius: r.width / 2, startAngle: -start * .pi / 180, endAngle: -(start + sweep) * .pi / 180, clockwise: sweep > 0)
-    }
-
-    static func corner(_ t: Theme, _ r: CGRect) -> CGFloat { max(0, min(CGFloat(t.corner), min(r.width, r.height) / 2 - 1)) }
-
-    /// The frame: chamfered or rounded corners, and the tail notch in the bottom edge.
-    static func outline(_ r: CGRect, _ t: Theme, tailX: CGFloat) -> CGPath {
-        let c = corner(t, r), x0 = r.minX, y0 = r.minY, x1 = r.maxX, y1 = r.maxY, hw = tailW / 2
-        let tail = [CGPoint(x: tailX + hw, y: y1), CGPoint(x: tailX, y: y1 + tailH), CGPoint(x: tailX - hw, y: y1)]
-        let p = CGMutablePath()
-        if t.shape == "round" && c > 0 {
-            p.move(to: CGPoint(x: x0 + c, y: y0))
-            p.addLine(to: CGPoint(x: x1 - c, y: y0))
-            arc(p, CGRect(x: x1 - 2 * c, y: y0, width: 2 * c, height: 2 * c), 90, -90)
-            p.addLine(to: CGPoint(x: x1, y: y1 - c))
-            arc(p, CGRect(x: x1 - 2 * c, y: y1 - 2 * c, width: 2 * c, height: 2 * c), 0, -90)
-            for pt in tail + [CGPoint(x: x0 + c, y: y1)] { p.addLine(to: pt) }
-            arc(p, CGRect(x: x0, y: y1 - 2 * c, width: 2 * c, height: 2 * c), 270, -90)
-            p.addLine(to: CGPoint(x: x0, y: y0 + c))
-            arc(p, CGRect(x: x0, y: y0, width: 2 * c, height: 2 * c), 180, -90)
+    override init(frame: NSRect) {
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = Chrome.radius
+            effect = glass
         } else {
-            let pts = [CGPoint(x: x0 + c, y: y0), CGPoint(x: x1 - c, y: y0), CGPoint(x: x1, y: y0 + c), CGPoint(x: x1, y: y1 - c),
-                       CGPoint(x: x1 - c, y: y1)] + tail + [CGPoint(x: x0 + c, y: y1), CGPoint(x: x0, y: y1 - c), CGPoint(x: x0, y: y0 + c)]
-            p.move(to: pts[0])
-            for pt in pts.dropFirst() { p.addLine(to: pt) }
+            let blur = NSVisualEffectView()
+            blur.material = .hudWindow
+            blur.state = .active  // the panel is never the key window: follow-the-window would leave it grey
+            blur.blendingMode = .behindWindow
+            blur.wantsLayer = true
+            blur.layer?.cornerRadius = Chrome.radius
+            blur.layer?.masksToBounds = true
+            effect = blur
         }
-        p.closeSubpath()
-        return p
+        super.init(frame: frame)
+        addSubview(effect)
     }
+    required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// One of the four corner brackets ("tl", "tr", "br", "bl"): an arm of `brLen` each way that follows the corner.
-    static func bracket(_ corner: String, _ r: CGRect, _ t: Theme) -> CGPath {
-        let c = Self.corner(t, r), x0 = r.minX, y0 = r.minY, x1 = r.maxX, y1 = r.maxY
-        let n = max(CGFloat(t.brLen), c)  // an arm shorter than the chamfer would fold back on itself
-        let round = t.shape == "round" && c > 0
-        let p = CGMutablePath()
-        switch corner {
-        case "tl":
-            p.move(to: CGPoint(x: x0, y: y0 + n)); p.addLine(to: CGPoint(x: x0, y: y0 + c))
-            if round { arc(p, CGRect(x: x0, y: y0, width: 2 * c, height: 2 * c), 180, -90) } else { p.addLine(to: CGPoint(x: x0 + c, y: y0)) }
-            p.addLine(to: CGPoint(x: x0 + n, y: y0))
-        case "tr":
-            p.move(to: CGPoint(x: x1 - n, y: y0)); p.addLine(to: CGPoint(x: x1 - c, y: y0))
-            if round { arc(p, CGRect(x: x1 - 2 * c, y: y0, width: 2 * c, height: 2 * c), 90, -90) } else { p.addLine(to: CGPoint(x: x1, y: y0 + c)) }
-            p.addLine(to: CGPoint(x: x1, y: y0 + n))
-        case "br":
-            p.move(to: CGPoint(x: x1, y: y1 - n)); p.addLine(to: CGPoint(x: x1, y: y1 - c))
-            if round { arc(p, CGRect(x: x1 - 2 * c, y: y1 - 2 * c, width: 2 * c, height: 2 * c), 0, -90) } else { p.addLine(to: CGPoint(x: x1 - c, y: y1)) }
-            p.addLine(to: CGPoint(x: x1 - n, y: y1))
-        default:
-            p.move(to: CGPoint(x: x0 + n, y: y1)); p.addLine(to: CGPoint(x: x0 + c, y: y1))
-            if round { arc(p, CGRect(x: x0, y: y1 - 2 * c, width: 2 * c, height: 2 * c), 270, -90) } else { p.addLine(to: CGPoint(x: x0, y: y1 - c)) }
-            p.addLine(to: CGPoint(x: x0, y: y1 - n))
-        }
-        return p
-    }
+    override var isFlipped: Bool { true }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); effect.frame = bounds }
 
-    // MARK: the frame
-
-    private static func gradient(_ stops: [(Double, RGBA)]) -> CGGradient {
-        let space = CGColorSpace(name: CGColorSpace.sRGB)!
-        return CGGradient(colorsSpace: space, colors: stops.map { $0.1.ns.cgColor } as CFArray, locations: stops.map { CGFloat($0.0) })!
-    }
-
-    /// The card's frame and surface at `size` (logical px) and pixel ratio `dpr`: glow, glass fill, aura, scanlines,
-    /// grid, sheen, header tint and divider, border, corner brackets, tail dot. Transparent where nothing is
-    /// painted; the text goes on top. The card caches it (`CardView.frame(for:)`).
-    static func frame(_ t: Theme, size: CGSize, dpr: CGFloat, hue: Double) -> CGImage? {
-        func acc(_ alpha: Double = 1, _ dh: Double = 0) -> RGBA { Themes.accent(t, hue + dh, alpha: alpha) }
-        let w = size.width, h = size.height
-        guard let g = CGContext(data: nil, width: Int((w * dpr).rounded()), height: Int((h * dpr).rounded()), bitsPerComponent: 8,
-                                bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        g.scaleBy(x: dpr, y: -dpr)  // y-down, like Qt
-        g.translateBy(x: 0, y: -h)
-        let body = CGRect(x: glow + 0.5, y: glow + 0.5, width: w - 2 * glow - 1, height: h - glow - tailH - 1)
-        let path = outline(body, t, tailX: w / 2)
-        if t.glow > 0 {  // halo: faint strokes, widest first, so alpha builds toward the frame; ~5 % layers: no visible edge
-            g.setShouldAntialias(false)
-            for (i, width) in [9.0, 7, 5, 3].enumerated() {
-                g.setStrokeColor(acc(t.glow * 0.035 * Double(i + 1)).ns.cgColor)
-                g.setLineWidth(width); g.setLineJoin(.round)
-                g.addPath(path); g.strokePath()
-            }
-            g.setShouldAntialias(true)
-        }
-        func fill(_ draw: () -> Void) { g.saveGState(); g.addPath(path); g.clip(); draw(); g.restoreGState() }
-        let alpha = max(t.bgA, 0.90)  // the window cannot blur the wallpaper: stay mostly opaque
-        fill {
-            g.drawLinearGradient(gradient([(0, Themes.rgba(t.bgTop, alpha: alpha)), (1, Themes.rgba(t.bgBot, alpha: alpha))]),
-                                 start: CGPoint(x: 0, y: body.minY), end: CGPoint(x: 0, y: body.maxY), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-        }
-        let dh = Themes.auraShift(t, hue)
-        if t.aura > 0 {  // a bloom in the top right corner, shifted toward pink
-            fill {
-                g.drawRadialGradient(gradient([(0, acc(t.aura, dh)), (1, acc(0, dh))]), startCenter: CGPoint(x: body.maxX - 20, y: body.minY + 6), startRadius: 0,
-                                     endCenter: CGPoint(x: body.maxX - 20, y: body.minY + 6), endRadius: 190, options: [])
-            }
-        }
-        if t.scanA > 0 {
-            fill {
-                g.setFillColor(Themes.rgba(t.scanC, alpha: t.scanA).ns.cgColor)
-                for y in stride(from: 0, to: Int(h), by: t.scanPx) { g.fill(CGRect(x: 0, y: CGFloat(y), width: w, height: 1)) }
-            }
-        }
-        if t.gridA > 0 {
-            fill {
-                g.setFillColor(acc(t.gridA).ns.cgColor)
-                for x in stride(from: 6, to: Int(w), by: 14) { for y in stride(from: 6, to: Int(h), by: 14) { g.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: 1, height: 1)) } }
-            }
-        }
-        if t.sheen > 0 {  // gloss over the top half
-            fill {
-                g.drawLinearGradient(gradient([(0, RGBA(r: 255, g: 255, b: 255, a: UInt8((255 * t.sheen).rounded(.toNearestOrEven)))), (1, RGBA(r: 255, g: 255, b: 255, a: 0))]),
-                                     start: CGPoint(x: 0, y: body.minY), end: CGPoint(x: 0, y: body.minY + body.height * 0.5), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-            }
-        }
-        fill {  // header tint
-            g.setFillColor(acc(0.07).ns.cgColor)
-            g.fill(CGRect(x: body.minX, y: body.minY, width: body.width, height: headerH))
-        }
-        let y = body.minY + headerH  // divider, and a bright tick under the diamond
-        g.saveGState()
-        g.clip(to: CGRect(x: body.minX + 1, y: y - 0.5, width: body.width - 2, height: 1))
-        g.drawLinearGradient(gradient([(0, acc(0.55)), (0.65, acc(0.10)), (1, acc(0.04))]), start: CGPoint(x: body.minX, y: 0), end: CGPoint(x: body.maxX, y: 0),
-                             options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-        g.restoreGState()
-        g.setFillColor(acc(0.95).ns.cgColor)
-        g.fill(CGRect(x: body.minX + 13, y: y - 0.8, width: 27, height: 1.6))
-        g.setLineWidth(1)  // the border; the stroke drifts toward pink from the top left to the bottom right
-        if t.auraDh > 0 {
-            g.saveGState(); g.addPath(path); g.replacePathWithStrokedPath(); g.clip()
-            g.drawLinearGradient(gradient([(0, acc(t.borderA)), (1, acc(t.borderA, dh))]), start: CGPoint(x: body.minX, y: body.minY), end: CGPoint(x: body.maxX, y: body.maxY),
-                                 options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
-            g.restoreGState()
-        } else {
-            g.setStrokeColor(acc(t.borderA).ns.cgColor); g.addPath(path); g.strokePath()
-        }
-        if t.brLen > 0 {
-            for corner in ["tl", "tr", "br", "bl"] {  // brighter and thicker than the border
-                for (width, a) in [(t.brW + 4, 0.12), (t.brW, 1.0)] {
-                    g.setStrokeColor(acc(a).ns.cgColor); g.setLineWidth(width); g.setLineCap(.butt); g.setLineJoin(.miter)
-                    g.addPath(bracket(corner, body, t)); g.strokePath()
-                }
-            }
-        }
-        g.setFillColor(acc(1).ns.cgColor)  // the tail's tip: a small bright dot
-        g.fillEllipse(in: CGRect(x: w / 2 - 1.5, y: body.maxY + tailH - 3, width: 3, height: 3))
-        return g.makeImage()
+    /// A light wash of the accent over the glass (macOS 26 only: the old blur has no tint).
+    func tint(_ colour: NSColor) {
+        if #available(macOS 26, *), let glass = effect as? NSGlassEffectView { glass.tintColor = colour }
     }
 }
 
@@ -234,33 +126,30 @@ extension LedState {
     var suffix: String { [.warn: " …", .loading: " …", .bad: " ✕", .off: " OFF"][self] ?? "" }
 }
 
-/// Ink for a small label: "lab" is the accent's paler label colour, "warn" the warning light, "dim" the quiet text.
+/// Ink for a small label: the system's secondary label, the warning orange, or the quieter tertiary one.
 enum Tone { case lab, warn, dim }
 
-/// Tiny monospace text painted in the live accent hue: "YOU ▸", "APPROVAL ▸", the status line.
+/// A small caption in the system font: "YOU ▸", "APPROVAL ▸", the status line.
 final class MicroLabel: NSView {
     var text: String { didSet { if text != oldValue { needsDisplay = true } } }
-    var theme: Theme { didSet { needsDisplay = true } }
-    var hue: Double { didSet { needsDisplay = true } }
     let tone: Tone, px: CGFloat, spacing: CGFloat, bold: Bool
 
-    init(_ text: String = "", theme: Theme, px: CGFloat = 9, spacing: CGFloat = 1.4, bold: Bool = true, tone: Tone = .lab) {
-        (self.text, self.theme, self.hue, self.tone, self.px, self.spacing, self.bold) = (text, theme, theme.hue, tone, px, spacing, bold)
+    init(_ text: String = "", px: CGFloat = 10, spacing: CGFloat = 0.8, bold: Bool = true, tone: Tone = .lab) {
+        (self.text, self.tone, self.px, self.spacing, self.bold) = (text, tone, px, spacing, bold)
         super.init(frame: .zero)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
-    var font: NSFont { Chrome.mono(px, bold: bold) }
-    /// QLabel's own hint ignores the letter spacing, so it is measured here.
+    var font: NSFont { Chrome.ui(px, bold ? .semibold : .regular) }
     var fitting: NSSize { NSSize(width: Chrome.advance(text, font, kern: spacing) + 2, height: Chrome.metrics(font).ascent + Chrome.metrics(font).descent + 2) }
 
     override func draw(_ dirtyRect: NSRect) {
         let ink: NSColor
         switch tone {
-        case .lab: ink = Themes.labelColour(theme, hue).ns
-        case .warn: ink = Chrome.color(theme.ledWarn)
-        case .dim: ink = Chrome.color(theme.textDim)
+        case .lab: ink = Chrome.textDim
+        case .warn: ink = .systemOrange
+        case .dim: ink = Chrome.faint
         }
         Chrome.line(text, font, ink, kern: spacing, x: 0, y: 0, h: bounds.height)
     }
@@ -272,12 +161,13 @@ struct Led {
     let name: String, hot: String?
     private(set) var state = LedState.unknown
     private(set) var lit = true, pulse = 1.0
-    static let font = Chrome.mono(8, bold: true)
+    static let font = Chrome.ui(9, .semibold)
+    static let kern: CGFloat = 0.8
 
     init(_ name: String, hot: String? = nil, state: LedState = .unknown) { self.name = name; self.hot = hot; self.state = state }
 
     var label: String { state == .hot && hot != nil ? hot! : name + state.suffix }
-    var width: CGFloat { 14 + Chrome.advance(label, Led.font, kern: 1) + 2 }
+    var width: CGFloat { 14 + Chrome.advance(label, Led.font, kern: Led.kern) + 2 }
     var motion: String { [.warn: "blink", .loading: "blink", .hot: "pulse"][state] ?? "" }
 
     mutating func set(_ s: LedState) { state = s }
@@ -294,34 +184,32 @@ struct Led {
     func draw(in box: CGRect, _ t: Theme, hue: Double) {
         let c = CGPoint(x: box.minX + 7, y: box.midY)
         let ring = state == .unknown || state == .off
-        let dim = Themes.rgba(t.textDim)
         if ring {  // unknown / off: an empty ring
-            dim.ns.setStroke()
+            Chrome.textDim.setStroke()
             let p = NSBezierPath(ovalIn: CGRect(x: c.x - 2.4, y: c.y - 2.4, width: 4.8, height: 4.8)); p.lineWidth = 1.2; p.stroke()
         } else if !lit {  // the dark half of a blink
-            Themes.rgba(t.textDim, alpha: 0.35).ns.setFill()
+            Chrome.textDim.withAlphaComponent(0.35).setFill()
             NSBezierPath(ovalIn: CGRect(x: c.x - 2.7, y: c.y - 2.7, width: 5.4, height: 5.4)).fill()
         } else {
-            let dot: RGBA
+            let dot: NSColor
             switch state {
-            case .ok: dot = Themes.rgba(t.ledOk)
-            case .warn, .loading: dot = Themes.rgba(t.ledWarn)
-            case .bad: dot = Themes.rgba(t.ledBad)
-            default: dot = Themes.accent(t, hue)
+            case .ok: dot = .systemGreen
+            case .warn, .loading: dot = .systemOrange
+            case .bad: dot = .systemRed
+            default: dot = Chrome.accent(t, hue)
             }
-            let strength = motion == "pulse" ? 60 + 120 * pulse : 110
-            let halo = NSGradient(colors: [RGBA(r: dot.r, g: dot.g, b: dot.b, a: UInt8(strength.rounded())).ns, RGBA(r: dot.r, g: dot.g, b: dot.b, a: 0).ns])!
-            halo.draw(fromCenter: c, radius: 0, toCenter: c, radius: 7, options: [])
-            dot.ns.setFill()
+            let strength = motion == "pulse" ? 0.24 + 0.47 * pulse : 0.43
+            NSGradient(colors: [dot.withAlphaComponent(strength), dot.withAlphaComponent(0)])!.draw(fromCenter: c, radius: 0, toCenter: c, radius: 7, options: [])
+            dot.setFill()
             NSBezierPath(ovalIn: CGRect(x: c.x - 2.7, y: c.y - 2.7, width: 5.4, height: 5.4)).fill()
         }
-        Chrome.line(label, Led.font, dim.ns, kern: 1, x: box.minX + 14, y: box.minY, h: box.height)
+        Chrome.line(label, Led.font, Chrome.textDim, kern: Led.kern, x: box.minX + 14, y: box.minY, h: box.height)
     }
 }
 
-/// The strip at the top of the frame: diamond, the bot's name, a Hermes and a microphone light, the model chip
-/// on the right. When too narrow the chip goes first (under 40 px it is hidden); the lights and the name keep
-/// their room. The card puts it at (6, 6) of the frame.
+/// The strip at the top of the pane: an orb in the accent, the bot's name, a Hermes and a microphone light, the model
+/// chip on the right, a hairline under it. When too narrow the chip goes first (under 40 px it is hidden); the lights
+/// and the name keep their room. The card puts it at (6, 6).
 final class HeaderView: NSView {
     var theme: Theme { didSet { place(); needsDisplay = true } }
     var hue: Double { didSet { needsDisplay = true } }
@@ -332,7 +220,8 @@ final class HeaderView: NSView {
     private(set) var chipText = ""
     /// Where each light starts (the dot's slot is 3 px to its right).
     private(set) var linkX: CGFloat = 0, micX: CGFloat = 0
-    private static let chipFont = Chrome.mono(9), nameFont = Chrome.mono(11, bold: true)
+    private static let chipFont = Chrome.ui(10, .medium), nameFont = Chrome.ui(11, .semibold)
+    private static let nameKern: CGFloat = 1.6, chipKern: CGFloat = 0.2
 
     init(theme: Theme, model: String) {
         (self.theme, self.hue, self.model) = (theme, theme.hue, model)
@@ -358,44 +247,48 @@ final class HeaderView: NSView {
 
     /// The bot's name as the header spells it.
     var displayName: String { theme.botName.uppercased() }
+    /// What of it is drawn: a long name gives way before the lights do (the chip goes first of all).
+    private(set) var shownName = ""
 
     private func place() {
-        var x = 25 + Chrome.advance(displayName, Self.nameFont, kern: 2.4) + 14
+        let lights = link.width + 6 + mic.width + 6
+        shownName = Self.elided(displayName, to: max(0, bounds.width - 12 - 25 - 14 - lights), Self.nameFont, Self.nameKern)
+        var x = 25 + Chrome.advance(shownName, Self.nameFont, kern: Self.nameKern) + 14
         linkX = x - 3; x += link.width + 6  // 3 px left of the dot's slot: the halo needs room
         micX = x - 3; x += mic.width + 6
         let text = Themes.chipText(theme, configuredModel: model)
         let room = bounds.width - 12 - x  // the chip's whole width (text plus 7 px padding each side)
-        let shown = Self.elided(text, to: max(0, room - 14))
-        let width = Chrome.advance(shown, Self.chipFont, kern: 0.3) + 14
+        let shown = Self.elided(text, to: max(0, room - 14), Self.chipFont, Self.chipKern)
+        let width = Chrome.advance(shown, Self.chipFont, kern: Self.chipKern) + 14
         chipText = shown
         chip = text.isEmpty || width < 40 ? nil : CGRect(x: bounds.width - 12 - width, y: ((Chrome.headerH - 17) / 2).rounded(.down), width: width, height: 17)
         needsDisplay = true
     }
 
-    private static func elided(_ s: String, to limit: CGFloat) -> String {
-        if Chrome.advance(s, chipFont, kern: 0.3) <= limit { return s }
+    private static func elided(_ s: String, to limit: CGFloat, _ font: NSFont, _ kern: CGFloat) -> String {
+        if Chrome.advance(s, font, kern: kern) <= limit { return s }
         var t = Array(s)
-        while !t.isEmpty && Chrome.advance(String(t) + "…", chipFont, kern: 0.3) > limit { t.removeLast() }
+        while !t.isEmpty && Chrome.advance(String(t) + "…", font, kern: kern) > limit { t.removeLast() }
         return String(t) + "…"
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let t = theme, h = Chrome.headerH
-        NSGraphicsContext.saveGraphicsState()  // the diamond: a halo square and a solid one, turned 45 degrees
-        let move = NSAffineTransform(); move.translateX(by: 14, yBy: h / 2); move.rotate(byDegrees: 45); move.concat()
-        Chrome.accent(t, hue, 0.25).setFill(); NSRect(x: -5, y: -5, width: 10, height: 10).fill()
-        Chrome.accent(t, hue).setFill(); NSRect(x: -3, y: -3, width: 6, height: 6).fill()
-        NSGraphicsContext.restoreGraphicsState()
-        Chrome.line(displayName, Self.nameFont, Themes.labelColour(t, hue).ns, kern: 2.4, x: 25, y: 0, h: h)  // the accent itself is under 4.5:1 on blues
+        let orb = CGPoint(x: 14, y: h / 2)  // a bead of light in the accent
+        NSGradient(colors: [Chrome.accent(t, hue, 0.55), Chrome.accent(t, hue, 0)])!.draw(fromCenter: orb, radius: 0, toCenter: orb, radius: 9, options: [])
+        Chrome.accent(t, hue).setFill()
+        NSBezierPath(ovalIn: CGRect(x: orb.x - 3.5, y: orb.y - 3.5, width: 7, height: 7)).fill()
+        Chrome.line(shownName, Self.nameFont, Chrome.text, kern: Self.nameKern, x: 25, y: 0, h: h)
         link.draw(in: CGRect(x: linkX, y: 0, width: link.width, height: h), t, hue: hue)
         mic.draw(in: CGRect(x: micX, y: 0, width: mic.width, height: h), t, hue: hue)
         if let chip {
-            Chrome.accent(t, hue, 0.07).setFill(); Chrome.accent(t, hue, 0.38).setStroke()
-            let r = NSBezierPath(roundedRect: chip.insetBy(dx: 0.5, dy: 0.5), xRadius: CGFloat(t.radius), yRadius: CGFloat(t.radius))
-            r.fill(); r.lineWidth = 1; r.stroke()
-            let w = Chrome.advance(chipText, Self.chipFont, kern: 0.3)
-            Chrome.line(chipText, Self.chipFont, Chrome.color(t.textDim), kern: 0.3, x: chip.minX + ((chip.width - w) / 2).rounded(.down), y: chip.minY, h: chip.height)
+            Chrome.wash(0.08).setFill()
+            NSBezierPath(roundedRect: chip, xRadius: chip.height / 2, yRadius: chip.height / 2).fill()
+            let w = Chrome.advance(chipText, Self.chipFont, kern: Self.chipKern)
+            Chrome.line(chipText, Self.chipFont, Chrome.textDim, kern: Self.chipKern, x: chip.minX + ((chip.width - w) / 2).rounded(.down), y: chip.minY, h: chip.height)
         }
+        Chrome.hairline.setFill()
+        NSRect(x: 8, y: h - 1, width: bounds.width - 16, height: 1).fill()
     }
 }
 
@@ -411,7 +304,7 @@ final class QuoteView: NSView {
         let t = theme, h = bounds.height, w = bounds.width
         Chrome.accent(t, hue, 0.10).setFill(); NSRect(x: 0, y: 1, width: Chrome.wash, height: h - 2 - 7).fill()
         NSGradient(colors: [Chrome.accent(t, hue), Chrome.accent(t, hue, 0.30)])!.draw(in: NSRect(x: 0, y: 1, width: Chrome.bar, height: h - 2 - 7), angle: 90)
-        NSGradient(colors: [Chrome.accent(t, hue, 0.26), Chrome.accent(t, hue, 0)])!.draw(in: NSRect(x: 11, y: h - 1, width: w - 11, height: 1), angle: 0)  // between the question and the answer
+        NSGradient(colors: [Chrome.hairline, Chrome.hairline.withAlphaComponent(0)])!.draw(in: NSRect(x: 11, y: h - 1, width: w - 11, height: 1), angle: 0)  // between the question and the answer
     }
 }
 
@@ -491,17 +384,16 @@ final class TypingDotsView: NSView {
     }
 }
 
-/// A button in the card's style sheet: the menu chips and Allow / Deny.
+/// A capsule button on the glass: the menu chips and Allow / Deny.
 final class ButtonView: NSView {
     enum Kind { case plain, allow, deny }
     var title: String { didSet { needsDisplay = true; setAccessibilityLabel(title) } }
     var kind: Kind { didSet { needsDisplay = true } }
-    var theme: Theme { didSet { needsDisplay = true } }  // the style sheet uses the RESTING hue, so no live hue here
     var onClick: (() -> Void)?
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
 
-    init(_ title: String, kind: Kind = .plain, theme: Theme) {
-        (self.title, self.kind, self.theme) = (title, kind, theme)
+    init(_ title: String, kind: Kind = .plain) {
+        (self.title, self.kind) = (title, kind)
         super.init(frame: .zero)
         setAccessibilityRole(.button); setAccessibilityLabel(title)
     }
@@ -520,79 +412,38 @@ final class ButtonView: NSView {
     override func accessibilityPerformPress() -> Bool { onClick?(); return true }
 
     override func draw(_ dirtyRect: NSRect) {
-        let t = theme
-        func a(_ alpha: Double) -> NSColor { Chrome.accent(t, t.hue, alpha) }
-        var fill = a(0.08), edge = a(0.34), ink = Chrome.color(t.text), weight = NSFont.Weight.regular
-        switch (kind, hovered) {
-        case (.plain, true): fill = a(0.22); edge = a(0.85)
-        case (.plain, false): break
-        case (.allow, _):
-            fill = hovered ? Themes.labelColour(t, t.hue).ns : a(1); edge = a(1); ink = Chrome.color(t.onAccent); weight = .semibold
-        case (.deny, _):
-            fill = hovered ? a(0.12) : .clear; edge = Themes.rgba(t.textDim, alpha: 0.45).ns
-            ink = hovered ? Chrome.color(t.text) : Chrome.color(t.textDim)
+        var fill = Chrome.wash(hovered ? 0.16 : 0.08), edge = NSColor.clear, ink = Chrome.text, weight = NSFont.Weight.regular
+        switch kind {
+        case .plain: break
+        case .allow: fill = NSColor.controlAccentColor.withAlphaComponent(hovered ? 1 : 0.88); ink = .white; weight = .semibold
+        case .deny: fill = hovered ? Chrome.wash(0.08) : .clear; edge = Chrome.hairline; ink = hovered ? Chrome.text : Chrome.textDim
         }
-        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: CGFloat(t.radius), yRadius: CGFloat(t.radius))
-        fill.setFill(); r.fill(); edge.setStroke(); r.lineWidth = 1; r.stroke()
-        let s = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: weight), .foregroundColor: ink, .kern: Chrome.qtKern(13)])
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let capsule = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
+        fill.setFill(); capsule.fill()
+        if edge != .clear { edge.setStroke(); capsule.lineWidth = 1; capsule.stroke() }
+        let s = NSAttributedString(string: title, attributes: [.font: Chrome.ui(13, weight), .foregroundColor: ink, .kern: Chrome.qtKern(13)])
         let size = s.size()
         s.draw(at: NSPoint(x: ((bounds.width - size.width) / 2).rounded(.down), y: ((bounds.height - size.height) / 2).rounded(.down)))
     }
 }
 
-/// A theme in the picker: a miniature card painted in that theme's OWN colours (resting hue), the current one ringed.
-final class SwatchView: NSView {
-    let theme: Theme
-    var current = false { didSet { needsDisplay = true } }
-    var onClick: (() -> Void)?
-
-    init(_ theme: Theme) {
-        self.theme = theme
-        super.init(frame: NSRect(x: 0, y: 0, width: 54, height: 34))
-        toolTip = theme.label
-        setAccessibilityRole(.button); setAccessibilityLabel(theme.label)
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-    override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-    override func mouseUp(with event: NSEvent) { if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() } }
-    override func accessibilityPerformPress() -> Bool { onClick?(); return true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let t = theme
-        func acc(_ alpha: Double = 1) -> NSColor { Chrome.accent(t, t.hue, alpha) }
-        let r = bounds.insetBy(dx: 2, dy: 2)
-        let radius = t.shape == "round" ? min(CGFloat(t.corner), 7) : 2
-        let card = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
-        NSGradient(colors: [Chrome.color(t.bgTop), Chrome.color(t.bgBot)])!.draw(in: card, angle: 90)
-        acc(current ? 0.95 : 0.35).setStroke(); card.lineWidth = current ? 1.8 : 1; card.stroke()
-        func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ colour: NSColor) {
-            colour.setFill(); NSBezierPath(roundedRect: NSRect(x: r.minX + x, y: r.minY + y, width: w, height: h), xRadius: h / 2, yRadius: h / 2).fill()
-        }
-        bar(7, 7, 18, 3, acc()); bar(7, 14, 28, 2.5, Chrome.color(t.text)); bar(7, 19, 19, 2.5, Chrome.color(t.text))
-        acc().setFill(); NSBezierPath(ovalIn: NSRect(x: r.maxX - 11, y: r.maxY - 10, width: 6, height: 6)).fill()
-    }
-}
-
-/// A word-wrapped label of the style sheet: the footer (a hairline above, 6 px of padding) and the approval's well
-/// (tinted, a warning-coloured bar at its left, rounded on the right).
+/// A word-wrapped label: the footer (a hairline above, 6 px of padding) and the approval's well (a soft orange
+/// wash with a bar at its left, rounded on the right).
 final class WrapLabelView: NSView {
     enum Kind { case footer, well }
     let kind: Kind
     var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
-    var theme: Theme { didSet { needsDisplay = true } }
 
-    init(_ kind: Kind, theme: Theme) { (self.kind, self.theme) = (kind, theme); super.init(frame: .zero) }
+    init(_ kind: Kind) { self.kind = kind; super.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("not used") }
     override var isFlipped: Bool { true }
 
-    private var font: NSFont { Chrome.mono(kind == .footer ? 11 : 11.5) }
+    private var font: NSFont { Chrome.ui(kind == .footer ? 11 : 12) }
     // QLabel puts half the width of an "x" in front of its text when it has a frame (a border in the style sheet)
     private var indent: CGFloat { (Chrome.advance("x", font) / 2).rounded(.down) }
     private var inset: NSEdgeInsets { kind == .footer ? NSEdgeInsets(top: 7, left: indent, bottom: 0, right: 0) : NSEdgeInsets(top: 6, left: 10 + indent, bottom: 6, right: 8) }
-    private var ink: NSColor { Chrome.color(kind == .footer ? theme.textDim : theme.text) }
+    private var ink: NSColor { kind == .footer ? Chrome.textDim : Chrome.text }
 
     /// The height the text needs at `width` (QLabel's height for width).
     func height(for width: CGFloat) -> CGFloat {
@@ -603,17 +454,16 @@ final class WrapLabelView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let t = theme, i = inset
+        let i = inset
         if kind == .footer {
-            Chrome.accent(t, t.hue, 0.22).setFill(); NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+            Chrome.hairline.setFill(); NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
         } else {
             NSGraphicsContext.saveGraphicsState()
             bounds.clip()
-            let r = CGFloat(t.radius)
-            Chrome.accent(t, t.hue, 0.07).setFill()
-            NSBezierPath(roundedRect: NSRect(x: -r, y: 0, width: bounds.width + r, height: bounds.height), xRadius: r, yRadius: r).fill()
+            NSColor.systemOrange.withAlphaComponent(0.12).setFill()
+            NSBezierPath(roundedRect: NSRect(x: -8, y: 0, width: bounds.width + 8, height: bounds.height), xRadius: 8, yRadius: 8).fill()
             NSGraphicsContext.restoreGraphicsState()
-            Chrome.color(t.ledWarn).setFill(); NSRect(x: 0, y: 0, width: 2, height: bounds.height).fill()
+            NSColor.systemOrange.setFill(); NSRect(x: 0, y: 0, width: 2, height: bounds.height).fill()
         }
         NSAttributedString(string: text, attributes: Chrome.attrs(font, ink)).draw(
             with: NSRect(x: i.left, y: i.top, width: bounds.width - i.left - i.right, height: bounds.height - i.top - i.bottom), options: [.usesLineFragmentOrigin])

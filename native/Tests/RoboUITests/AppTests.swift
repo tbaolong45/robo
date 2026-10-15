@@ -489,7 +489,7 @@ extension Thread {
     /// The card's header chip is the model `robo setup` configures, not a copy of its name.
     @Test func theHeaderChipShowsTheModelSetupConfigured() {
         #expect(Setup.model.hasPrefix("claude-"))
-        #expect(Themes.chipText(Themes.cyan, configuredModel: Setup.model) == String(Setup.model.dropFirst(7)))
+        #expect(Themes.chipText(Themes.glass, configuredModel: Setup.model) == String(Setup.model.dropFirst(7)))
     }
 
     @Test func theMachineKeepsEverythingUnderTheHome() {

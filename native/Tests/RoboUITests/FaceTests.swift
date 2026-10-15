@@ -143,11 +143,18 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
         #expect(f.goal == FaceParams.target(.idle, "happy") && f.hueFn == nil)
     }
 
-    @Test(arguments: [("cyan", 188.0, 168.0, 44.0, 216.0), ("matrix", 128, 108, 44, 216),
-                      ("amber", 38, 18, 52, 216), ("aurora", 268, 248, 44, 216),
-                      ("daylight", 196, 176, 44, 216)])
-    func theFaceTakesTheThemesHues(_ key: String, _ neutral: Double, _ happy: Double, _ proud: Double, _ sad: Double) {
-        let t = Themes.all.first { $0.key == key }!
+    // The resting hues the five retired themes had (188, 128, 38, 268, 196): the hue token still moves every neutral pose
+    // and keeps the signal emotions 14 degrees away from it (proud gold lands near 38).
+    @Test(arguments: [(188.0, 168.0, 44.0, 216.0), (128, 108, 44, 216),
+                      (38, 18, 52, 216), (268, 248, 44, 216),
+                      (196, 176, 44, 216)])
+    func theFaceTakesTheThemesHues(_ restingHue: Double, _ happy: Double, _ proud: Double, _ sad: Double) {
+        let neutral = restingHue
+        let key = "hue \(Int(restingHue))"
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("robo-face-theme-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try? "{\"tokens\": {\"hue\": \(Int(restingHue))}}".write(to: file, atomically: true, encoding: .utf8)
+        let t = Themes.load(path: file)
         let f = face()
         f.setTheme(hue: { a, e, h in Themes.hueFor(t, activity: a, emotion: e, base: h) }, bg: nil)
         for (a, e, hue) in [(Activity.idle, "neutral", neutral), (.idle, "happy", happy), (.idle, "proud", proud),
@@ -223,7 +230,7 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
             let p = FaceParams.target(a, e)
             let plain = paint(p)
             #expect(plain == paint(p, bg: (FaceRender.screen, FaceRender.bg)))  // pixel for pixel
-            let tokens = Themes.cyan.faceBg  // the same colours as theme tokens
+            let tokens = Themes.glass.faceBg  // the same colours as theme tokens
             #expect(plain == paint(p, bg: (Themes.rgba(tokens.centre), Themes.rgba(tokens.edge))))
         }
     }

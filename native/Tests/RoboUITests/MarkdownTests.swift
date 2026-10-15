@@ -75,7 +75,20 @@ private func rgb(_ c: NSColor) -> [Int] {
     let s = c.usingColorSpace(.sRGB)!
     return [s.redComponent, s.greenComponent, s.blueComponent, s.alphaComponent].map { Int(($0 * 255).rounded()) }
 }
-private func hex(_ token: String) -> [Int] { let c = Themes.rgba(token); return [Int(c.r), Int(c.g), Int(c.b), 255] }
+/// The glass theme with `tokens` (the inside of theme.json's "tokens" object) on top, read through the real loader.
+private func glass(_ tokens: String) -> Theme {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("robo-md-theme-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try? "{\"tokens\": {\(tokens)}}".write(to: file, atomically: true, encoding: .utf8)
+    return Themes.load(path: file)
+}
+/// Runs `body` under the dark appearance, so dynamic system colours resolve the same way for the expectation and the drawing.
+@MainActor private func dark(_ body: () -> Void) {
+    let old = NSApp.appearance
+    NSApp.appearance = NSAppearance(named: .darkAqua)
+    defer { NSApp.appearance = old }
+    body()
+}
 
 /// The paragraphs of a styled text: the string without its separator, and the attributes of its first character.
 private func blocks(_ s: NSAttributedString) -> [(text: String, attrs: [NSAttributedString.Key: Any])] {
@@ -98,7 +111,7 @@ private func italic(_ f: NSFont) -> Bool { f.fontDescriptor.symbolicTraits.conta
 private func run(_ s: NSAttributedString, _ needle: String) -> [NSAttributedString.Key: Any] {
     s.attributes(at: (s.string as NSString).range(of: needle).location, effectiveRange: nil)
 }
-private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NSAttributedString { Markdown.attributed(text, theme: t, hidden: hidden) }
+private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> NSAttributedString { Markdown.attributed(text, theme: t, hidden: hidden) }
 
 @Suite @MainActor struct MarkdownStyleTests {
     init() { _ = NSApplication.shared }  // AppKit text and scrolling need the application object
@@ -122,15 +135,15 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         #expect(spacing(b[0].attrs) == Markdown.headingGap && spacing(b[1].attrs) == 0)
     }
 
-    @Test func codeLinesFormADarkMonospaceBox() {
-        let t = Themes.cyan, s = md("before\n\n```python\ndef f():\n    return 1\n```\n\nafter")
+    @Test func codeLinesFormAWashedMonospaceBox() {
+        let s = md("before\n\n```python\ndef f():\n    return 1\n```\n\nafter")
         let b = blocks(s)
         #expect(b.map(\.text) == ["before", "def f():", "    return 1", "after"])
         for line in [b[1], b[2]] {
-            #expect(rgb(line.attrs[.codeBox] as! NSColor) == hex(t.codeBg))
+            #expect(rgb(line.attrs[.codeBox] as! NSColor) == rgb(Chrome.wash(0.07)))
             #expect(indent(line.attrs) == 8)  // padding at the left of the box
             #expect(font(line.attrs).pointSize == 12 && font(line.attrs).fontName.contains(Chrome.monoFamily.replacingOccurrences(of: " ", with: "")))
-            #expect(rgb(line.attrs[.foregroundColor] as! NSColor) == hex(t.codeFg))
+            #expect(rgb(line.attrs[.foregroundColor] as! NSColor) == rgb(Chrome.text))
         }
         #expect(spacing(b[1].attrs) == 0)  // the lines touch: one box
         #expect(spacing(b[2].attrs) == Markdown.gap)
@@ -143,19 +156,21 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         #expect(box.textView.frame.width == 302 && box.documentHeight > 3 * 14)  // wrapped onto several lines, nothing sticks out
     }
 
-    @Test func inlineCodeAndLinksAreReadableOnTheDarkPanel() {
-        let t = Themes.cyan, s = md("run `ls -l` or see [the notes](https://example.com) now")
+    @Test func inlineCodeAndLinksUseTheSystemColours() {
+        let s = md("run `ls -l` or see [the notes](https://example.com) now")
         let code = run(s, "ls -l"), link = run(s, "the notes"), plain = run(s, "run ")
-        #expect((code[.inlineBox] as! InlineBox).colour == Chrome.color(t.inlineBg) && font(code).pointSize == 12)
-        #expect(rgb(link[.foregroundColor] as! NSColor) == hex(t.link) && link[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
+        #expect(rgb((code[.inlineBox] as! InlineBox).colour) == rgb(Chrome.wash(0.10)) && font(code).pointSize == 12)
+        #expect(rgb(link[.foregroundColor] as! NSColor) == rgb(.linkColor) && link[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
         #expect((link[.link] as? URL)?.absoluteString == "https://example.com")
         #expect(plain[.inlineBox] == nil && plain[.link] == nil && plain[.underlineStyle] == nil)  // plain text untouched
-        #expect(rgb(code[.foregroundColor] as! NSColor) == hex(t.text))  // inline code keeps the text colour; the tint is what the theme guarantees it on
+        #expect(rgb(code[.foregroundColor] as! NSColor) == rgb(Chrome.text))  // inline code keeps the text colour; the tint is a wash over the glass
     }
 
     @Test func theFunctionIsPure() {
-        for t in Themes.all { #expect(md(sample, t).isEqual(to: md(sample, t))) }
-        #expect(!md(sample, Themes.cyan).isEqual(to: md(sample, Themes.matrix)))
+        let big = glass("\"text_px\": 16")
+        #expect(md(sample, big).isEqual(to: md(sample, big)))
+        #expect(md(sample).isEqual(to: md(sample)))
+        #expect(!md(sample).isEqual(to: md(sample, big)))  // other tokens, other text
     }
 
     @Test func aTableIsABlockPerCellWithAnEmptyBlockAfterItAndBeforeItWhenItStartsTheText() {
@@ -171,7 +186,7 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
     @Test func theTableHasQtsGridAndItsHeightsAndTheNextBlockDoesNotTouchIt() {
         // Qt (Python card, cyan): the reply of "table" is 111 px tall (doc 109.7) with a header and two rows, "tableend" 58 (doc 56),
         // and "after" starts 10 px under the last line of the grid; each row is 26 px (17 of text, 4 padding each side, 1 border)
-        func height(_ md: String) -> CGFloat { let b = TextBox(width: 302); b.setContent(Markdown.attributed(md, theme: Themes.cyan)); return b.documentHeight }
+        func height(_ md: String) -> CGFloat { let b = TextBox(width: 302); b.setContent(Markdown.attributed(md, theme: Themes.glass)); return b.documentHeight }
         #expect(abs(height("| Day | Class |\n|-----|-------|\n| Mon | Physics |\n| Tue | Quiz |\n\nAfter the table.") - 109.7) < 2.5)
         #expect(abs(height("| a | b |\n|---|---|\n| 1 | 2 |") - 56) < 2.5)
         #expect(abs(height("Before.\n\n| a | **b** |\n|:--|--:|\n| 1 | a longer cell |\n\n- item after") - 103.4) < 2.5)
@@ -182,7 +197,7 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         var best = 1.0
         for _ in 0..<10 {
             let t = ProcessInfo.processInfo.systemUptime
-            _ = md(reply, Themes.matrix)
+            _ = md(reply)
             best = min(best, ProcessInfo.processInfo.systemUptime - t)
         }
         #expect(best < 0.02)  // Python's check; a debug build on a busy machine has the slack
@@ -200,24 +215,27 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
 @Suite @MainActor struct MarkdownThemeTests {
     init() { _ = NSApplication.shared }  // AppKit text and scrolling need the application object
 
-    @Test(arguments: Themes.all.map(\.key)) func aThemedLookDressesHeadingsCodeAndLinksInTheThemesColours(_ key: String) {
-        let t = Themes.all.first { $0.key == key }!, s = md(sample, t)
+    @Test(arguments: ["", "\"text_px\": 17, \"line_h\": 130"]) func theLookDressesHeadingsCodeAndLinksInTheSystemColours(_ tokens: String) {
+        let t = glass(tokens), s = md(sample, t)
         let b = blocks(s)
         #expect(b.map(\.text) == ["Title", "para code link bold", "a", "b", "c", "x = 1", "y = 2", "end"])
         let head = b[0].attrs
-        #expect(rgb(head[.foregroundColor] as! NSColor) == hex(t.head) && bold(font(head)))
+        #expect(rgb(head[.foregroundColor] as! NSColor) == rgb(Chrome.text) && bold(font(head)))
         let para = b[1].attrs
-        #expect((run(s, "code")[.inlineBox] as! InlineBox).colour == Chrome.color(t.inlineBg))
-        #expect(rgb(run(s, "link")[.foregroundColor] as! NSColor) == hex(t.link))
-        #expect(rgb(b[5].attrs[.codeBox] as! NSColor) == hex(t.codeBg) && rgb(b[5].attrs[.foregroundColor] as! NSColor) == hex(t.codeFg))
+        #expect(rgb((run(s, "code")[.inlineBox] as! InlineBox).colour) == rgb(Chrome.wash(0.10)))
+        #expect(rgb(run(s, "link")[.foregroundColor] as! NSColor) == rgb(.linkColor))
+        #expect(rgb(b[5].attrs[.codeBox] as! NSColor) == rgb(Chrome.wash(0.07)) && rgb(b[5].attrs[.foregroundColor] as! NSColor) == rgb(Chrome.text))
         let levelOne = indent(b[2].attrs), nested = indent(b[3].attrs)
-        #expect(levelOne == 18 + (t.bodyMono ? 6 : 0) && nested == 2 * levelOne)
+        #expect(levelOne == 18 && nested == 2 * levelOne)
         let body = font(para)
         #expect(body.pointSize == CGFloat(t.textPx))
-        #expect(body.isFixedPitch == t.bodyMono)
+        #expect(!body.isFixedPitch)  // the body is always the system font
         // the extra of the line height (the percent of Qt's line, rounded up) is the line spacing
         let line = (para[.paragraphStyle] as! NSParagraphStyle).lineSpacing
-        #expect(abs(line + NSLayoutManager().defaultLineHeight(for: body) - Chrome.qtLine(body) * CGFloat(t.lineH) / 100) < 0.01)
+        // Qt's line is not rounded up for the hair over a whole number (Markdown.qtLine; Chrome.qtLine has no such tolerance,
+        // and the two differ at 17 px)
+        let qtLine = (body.ascender - body.descender + body.leading - 0.05).rounded(.up)
+        #expect(abs(line + NSLayoutManager().defaultLineHeight(for: body) - qtLine * CGFloat(t.lineH) / 100) < 0.01)
     }
 
     @Test func headingsAreBoldInTheHeadColourAtTheirLevelsSize() {
@@ -225,21 +243,20 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         let s = md("# one\n\n## two\n\n### three\n\n#### four\n\nbody")
         let b = blocks(s)
         #expect(b.map { font($0.attrs).pointSize } == [17, 16, 15, 14, 14])
-        #expect(b.prefix(4).allSatisfy { bold(font($0.attrs)) && rgb($0.attrs[.foregroundColor] as! NSColor) == hex(Themes.cyan.head) })
+        #expect(b.prefix(4).allSatisfy { bold(font($0.attrs)) && rgb($0.attrs[.foregroundColor] as! NSColor) == rgb(Chrome.text) })
         #expect(!bold(font(b[4].attrs)))
-        #expect(md("# one", Themes.matrix).attribute(.font, at: 0, effectiveRange: nil).map { ($0 as! NSFont).pointSize } == 17)  // a monospace body too
     }
 
     @Test func headingLinesAreTallerLikeQts() {
         // Qt (measured on the fixed Python card, cyan): blocks of 20 / 19 / 18 px (H1 / H2 / H3), body 17, each x 1.16
         func line(_ md: String) -> CGFloat {
             let box = TextBox(width: 302)
-            box.setContent(Markdown.attributed(md, theme: Themes.cyan))
+            box.setContent(Markdown.attributed(md, theme: Themes.glass))
             return box.documentHeight
         }
         #expect(abs(line("# one") - 20 * 1.16) < 0.6 && abs(line("### three") - 18 * 1.16) < 0.6 && abs(line("body") - 17 * 1.16) < 0.6)
         #expect(line("# one") > line("## two") && line("## two") >= line("### three") && line("### three") > line("body"))
-        let gap = TextBox(width: 302); gap.setContent(Markdown.attributed("# one\n\nbody", theme: Themes.cyan))
+        let gap = TextBox(width: 302); gap.setContent(Markdown.attributed("# one\n\nbody", theme: Themes.glass))
         #expect(abs(gap.documentHeight - (20 * 1.16 + Markdown.headingGap + 17 * 1.16)) < 1)  // HEADING_GAP is unchanged
     }
 
@@ -247,12 +264,11 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         let s = md("## a *it* `code` [link](https://x.y)")
         #expect(italic(font(run(s, "it"))) && bold(font(run(s, "it"))) && font(run(s, "it")).pointSize == 16)
         #expect(run(s, "code")[.inlineBox] == nil && !font(run(s, "code")).isFixedPitch && font(run(s, "code")).pointSize == 16)
-        #expect(run(s, "link")[.link] != nil && rgb(run(s, "link")[.foregroundColor] as! NSColor) == hex(Themes.cyan.head) && run(s, "link")[.underlineStyle] == nil)
+        #expect(run(s, "link")[.link] != nil && rgb(run(s, "link")[.foregroundColor] as! NSColor) == rgb(Chrome.text) && run(s, "link")[.underlineStyle] == nil)
     }
 
-    @Test func theListIndentIsEighteenAndSixMoreWhenTheBodyIsMonospace() {
+    @Test func theListIndentIsEighteen() {
         #expect(indent(blocks(md("- a"))[0].attrs) == 18)
-        #expect(indent(blocks(md("- a", Themes.matrix))[0].attrs) == 24)
         #expect(indent(blocks(md("para"))[0].attrs) == 0)
     }
 
@@ -296,29 +312,32 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         let s = md("a\n\n---\n\nb")
         #expect(s.string == "a\n\nb")
         let rule = (s.string as NSString).range(of: "\n\n").location + 1  // the terminator of the empty block
-        #expect((s.attribute(.rule, at: rule, effectiveRange: nil) as? NSColor).map(rgb) == hex(Themes.cyan.text))
+        #expect((s.attribute(.rule, at: rule, effectiveRange: nil) as? NSColor).map(rgb) == rgb(Chrome.text))
         #expect(s.attribute(.rule, at: 1, effectiveRange: nil) == nil)
         #expect(md("a\n\n---").attribute(.ruleEnd, at: 1, effectiveRange: nil) != nil)  // a rule last has no character: the one before carries it
         #expect(md("---").string == "\n" && md("---\n\nafter").string == "\n\nafter")  // Qt keeps an empty block before a rule that starts the text
     }
 
     @Test func aRuleIsDrawnAcrossTheWidthInTheTextColour() {
-        for source in ["intro\n\n---\n\nend", "intro\n\n---"] {
-            let box = TextBox(width: 302)
-            box.setContent(md(source))
-            box.setBoxHeight(box.wantedHeight(cap: 300))
-            let rep = box.bitmapImageRepForCachingDisplay(in: box.bounds)!
-            box.cacheDisplay(in: box.bounds, to: rep)
-            let want = Themes.rgba(Themes.cyan.text)
-            var rows: [Int] = []
-            for y in 0..<rep.pixelsHigh {
-                let wide = (0..<rep.pixelsWide).filter { x in
-                    let c = rep.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
-                    return abs(Int(c.redComponent * 255) - Int(want.r)) < 6 && abs(Int(c.blueComponent * 255) - Int(want.b)) < 6 && c.alphaComponent > 0.9
-                }.count
-                if wide > rep.pixelsWide * 9 / 10 { rows.append(y) }
+        dark {  // the text colour is dynamic: fix the appearance so the expectation and the drawing agree
+            for source in ["intro\n\n---\n\nend", "intro\n\n---"] {
+                let box = TextBox(width: 302)
+                box.setContent(md(source))
+                box.setBoxHeight(box.wantedHeight(cap: 300))
+                let rep = box.bitmapImageRepForCachingDisplay(in: box.bounds)!
+                box.cacheDisplay(in: box.bounds, to: rep)
+                let want = Chrome.text.usingColorSpace(.sRGB)!  // resolved under the dark appearance
+                var rows: [Int] = []
+                for y in 0..<rep.pixelsHigh {
+                    let wide = (0..<rep.pixelsWide).filter { x in
+                        let c = rep.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
+                        return abs(c.redComponent - want.redComponent) < 0.03 && abs(c.blueComponent - want.blueComponent) < 0.03
+                            && abs(c.alphaComponent - want.alphaComponent) < 0.06
+                    }.count
+                    if wide > rep.pixelsWide * 9 / 10 { rows.append(y) }
+                }
+                #expect(!rows.isEmpty && rows.count <= 2, "\(source.debugDescription): a line of the text colour across the box: rows \(rows)")
             }
-            #expect(!rows.isEmpty && rows.count <= 2, "\(source.debugDescription): a line of the text colour across the box: rows \(rows)")
         }
     }
 
@@ -386,13 +405,13 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
         }
         #expect(s.attribute(.link, at: (s.string as NSString).range(of: "now").location, effectiveRange: nil) != nil || (s.string as NSString).range(of: "now").location >= n - 12)
         #expect(md("abc", hidden: 99).length == 3 && (md("abc", hidden: 99).attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor).alphaComponent == 0)
-        #expect((md("abc", hidden: 0).attribute(.foregroundColor, at: 2, effectiveRange: nil) as! NSColor).alphaComponent == 1)
+        #expect((md("abc", hidden: 0).attribute(.foregroundColor, at: 2, effectiveRange: nil) as! NSColor).alphaComponent == Chrome.text.alphaComponent)  // the system ink is not fully opaque
     }
 
     @Test func theHiddenCountIsUTF16LikeQts() {
         let s = md("😀 hi", hidden: 2)  // "hi" is hidden; the emoji is two units
         #expect(s.length == 5)
-        #expect((s.attribute(.foregroundColor, at: 2, effectiveRange: nil) as! NSColor).alphaComponent == 1)
+        #expect((s.attribute(.foregroundColor, at: 2, effectiveRange: nil) as! NSColor).alphaComponent == Chrome.text.alphaComponent)
         #expect((s.attribute(.foregroundColor, at: 3, effectiveRange: nil) as! NSColor).alphaComponent == 0)
     }
 
@@ -442,11 +461,9 @@ private func md(_ text: String, _ t: Theme = Themes.cyan, hidden: Int = 0) -> NS
     }
 
     @Test func aLineWithAnEmojiIsNotTallerThanOneWithout() {
-        for t in [Themes.cyan, Themes.matrix] {
-            let plain = TextBox(width: 302), emoji = TextBox(width: 302)
-            plain.setContent(md("In Obsidian: Plan", t)); emoji.setContent(md("📓 In Obsidian: Plan 📂", t))
-            #expect(abs(plain.wantedHeight(cap: 300) - emoji.wantedHeight(cap: 300)) <= 1, "\(t.key)")
-        }
+        let plain = TextBox(width: 302), emoji = TextBox(width: 302)
+        plain.setContent(md("In Obsidian: Plan")); emoji.setContent(md("📓 In Obsidian: Plan 📂"))
+        #expect(abs(plain.wantedHeight(cap: 300) - emoji.wantedHeight(cap: 300)) <= 1)
     }
 
     @Test func plainTextIsOneFontAndColour() {

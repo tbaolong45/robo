@@ -12,7 +12,7 @@ final class TypePanel: NSPanel {
     private var previous: NSRunningApplication?  // who had the keyboard before this window took it
 
     /// `onSubmit` gets the stripped text, never an empty one.
-    init(theme: Theme, focus: Focus = Focus(), onSubmit: @escaping (String) -> Void) {
+    init(focus: Focus = Focus(), onSubmit: @escaping (String) -> Void) {
         self.onSubmit = onSubmit
         self.focus = focus
         previous = focus.other()
@@ -23,16 +23,10 @@ final class TypePanel: NSPanel {
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]  // never pulls the user out of a full-screen Space
         hidesOnDeactivate = false
-        appearance = NSAppearance(named: theme.dark ? .darkAqua : .aqua)
-        backgroundColor = Chrome.color(theme.bgTop)
 
-        let label = NSTextField(labelWithString: "Ask robo:")
-        label.textColor = Chrome.color(theme.text)
+        let label = NSTextField(labelWithString: "Ask robo:")  // the system's own look: light or dark as macOS is
         label.frame = CGRect(x: 20, y: 90, width: 340, height: 20)
         field.frame = CGRect(x: 20, y: 58, width: 340, height: 24)
-        field.textColor = Chrome.color(theme.text)
-        field.drawsBackground = true
-        field.backgroundColor = Chrome.color(theme.bgBot)
         field.target = self
         field.action = #selector(ok)  // Return
         let okButton = NSButton(title: "OK", target: self, action: #selector(ok))

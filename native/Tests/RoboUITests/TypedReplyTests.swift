@@ -253,70 +253,44 @@ import RoboSystem
 // MARK: - themes
 
 @MainActor @Suite(.serialized) struct ThemeTests {
-    private func saved(_ r: Rig) -> [String: Any] {
-        (try? JSONSerialization.jsonObject(with: Data(contentsOf: r.theme))) as? [String: Any] ?? [:]
-    }
-
-    @Test func aSwatchSwitchesTheLookAtOnceAndIsRememberedWithTheOtherSettings() async {
+    @Test func anEditedThemeRestylesTheFaceAndCardAndKeepsTheOtherTokens() async {
         let r = Rig(cps: 0, tokens: ", \"bot_name\": \"PIXEL\"")
         defer { r.close() }
         let w = r.win
+        try? "{\"tokens\": {\"cps\": 0, \"bot_name\": \"PIXEL\", \"hue\": 128, \"face_bg\": [\"#04140a\", \"#010603\"]}}".write(to: r.theme, atomically: true, encoding: .utf8)
         let old = w.theme
-        w.card.onPickTheme?("matrix")
-        let t = Themes.matrix
-        #expect(w.theme.key == "matrix" && w.theme.botName == "PIXEL")  // tokens kept
-        #expect(w.tw.pace.cps == 0)  // and so is the typing speed from them
-        #expect(w.theme != old && w.theme.text == t.text)
-        #expect(w.card.theme.key == "matrix")  // the card was restyled
-        let bg = Themes.rgba(t.faceBg.centre)
+        w.applyTheme(Themes.load(path: r.theme))
+        #expect(w.theme.key == "glass" && w.theme.botName == "PIXEL" && w.theme.hue == 128)
+        #expect(w.tw.pace.cps == 0)  // the typing speed comes from the tokens
+        #expect(w.theme != old)
+        #expect(w.card.theme == w.theme)  // the card was restyled
+        let bg = Themes.rgba("#04140a")
         #expect(w.face.hueFn != nil && w.face.bg?.0 == bg)
-        let file = saved(r)
-        #expect(file["theme"] as? String == "matrix" && (file["tokens"] as? [String: Any])?["bot_name"] as? String == "PIXEL")
-        #expect(Themes.load(path: r.theme).key == "matrix")
-        #expect(w.themeStamp == Themes.stamp(path: r.theme))
         w.typeText()
-        #expect(r.typers.count == 1)  // the Type window takes the theme too (TypePanel tests)
-    }
-
-    @Test func aThemeThatCannotBeSavedStillAppliesForThisRun() async {
-        let r = Rig()
-        defer { r.close() }
-        let blocked = r.dir.appendingPathComponent("file")
-        try? "not a folder".write(to: blocked, atomically: true, encoding: .utf8)
-        r.window.machine.themeFile = blocked.appendingPathComponent("theme.json")
-        r.window.card.onPickTheme?("amber")
-        #expect(r.window.theme.key == "amber")
-        #expect(!FileManager.default.fileExists(atPath: r.window.machine.themeFile.path))
+        #expect(r.typers.count == 1)
     }
 
     @Test func aThemeJsonEditedByHandShowsWhenTheMenuOpens() async {
         let r = Rig()
         defer { r.close() }
         let w = r.win
-        #expect(w.theme.key == "cyan")
+        #expect(w.theme.key == "glass")
         w.showMenu()
-        #expect(w.theme.key == "cyan")  // nothing changed: nothing re-read
+        #expect(w.theme.hue == Themes.glass.hue)  // nothing changed: nothing re-read
         try? await Task.sleep(for: .milliseconds(20))
         try? "{\"theme\": \"aurora\", \"tokens\": {\"cps\": 0, \"hue\": 300}}".write(to: r.theme, atomically: true, encoding: .utf8)
         w.showMenu()
-        #expect(w.theme.key == "aurora" && w.theme.hue == 300)
+        #expect(w.theme.key == "glass" && w.theme.hue == 300)  // the old "theme" key is ignored, the tokens apply
     }
 
     @Test func theFaceTakesTheNewThemesHuesAtOnceButSweepsToThem() async {
         let r = Rig()
         defer { r.close() }
         let w = r.win
-        #expect(w.face.goal.hue == Themes.cyan.hue + 0)  // snapped at start-up
-        w.card.onPickTheme?("matrix")
+        #expect(w.face.goal.hue == Themes.glass.hue + 0)  // snapped at start-up
+        try? "{\"tokens\": {\"cps\": 0, \"hue\": 128}}".write(to: r.theme, atomically: true, encoding: .utf8)
+        w.applyTheme(Themes.load(path: r.theme))
         #expect(w.face.goal.hue == 128)
         #expect(w.face.params.hue == 188)  // the sweep to it takes about 0.3 s
     }
-
-    @Test func theMenuOpensTheCardForEightSeconds() async {
-        let r = Rig()
-        defer { r.close() }
-        r.window.card.onPickTheme?("daylight")
-        #expect(r.window.closeAfter == 8 && !r.window.card.isHidden)
-    }
 }
-

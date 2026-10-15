@@ -20,6 +20,8 @@ protocol Ear: AnyObject {
     var ready: Bool { get }
     func start() -> Bool
     func listenNow()
+    func hold()
+    func release()
     func followUp(seconds: Double)
     func stop(wait: Double)
 }

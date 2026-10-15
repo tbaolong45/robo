@@ -85,7 +85,7 @@ final class RoboWindow {
     init(hermes: HermesAPI, digest: DigestClock, persona: String = "",
                 today: @escaping () -> CalendarDay = { CalendarDay() }, network: (() -> Bool)? = nil,
                 watchWake: Bool = true, listener: EarFactory? = nil, watcher: Watching? = nil, health: String = "",
-                poller makePoller: PollerFactory? = nil, machine: Machine) {
+                poller makePoller: PollerFactory? = nil, hotkey: Hotkey? = nil, machine: Machine) {
         self.hermes = hermes
         self.digest = digest
         self.persona = persona
@@ -122,9 +122,7 @@ final class RoboWindow {
         card.isHidden = true
         card.fit = { [unowned self] change in self.fit(change) }
         card.onReplyClick = { [unowned self] in self.skip() }
-        card.onPickTheme = { [unowned self] key in self.pickTheme(key) }
         card.onMenu = { [unowned self] action in self.menu(action) }
-        card.onTheme = { [unowned self] in self.open(closeAfter: 8) }  // choosing a swatch takes a while
         card.onApprove = { [unowned self] choice in self.approve(ApprovalChoice(rawValue: choice) ?? .deny) }
         face.setTheme(hue: hueFunction(theme), bg: screenColours(theme), snap: true)
         face.onMouse = { [unowned self] kind in self.faceMouse(kind) }
@@ -147,6 +145,8 @@ final class RoboWindow {
             let e = listener({ [bridge] in bridge.event(.listening(true)) }, { [bridge] in bridge.heard($0) },
                              { [bridge] in bridge.note($0) })
             ear = e.start() ? e : nil
+            hotkey?.onDown = { [weak self] in self?.talkDown() }
+            hotkey?.onUp = { [weak self] in self?.ear?.release() }
         }
         if !health.isEmpty {
             let make: PollerFactory = makePoller ?? { HealthPoller(url: $0, onState: $1) }
@@ -293,6 +293,13 @@ final class RoboWindow {
         }
     }
 
+    /// The push-to-talk key went down: robo listens until it comes up.
+    func talkDown() {
+        guard let ear, ear.running else { return }
+        ear.hold()
+        onEvent(.listening(true))  // show it at once (and interrupt an answer)
+    }
+
     // MARK: - the right-click menu
 
     func showMenu() {
@@ -345,20 +352,11 @@ final class RoboWindow {
 
     func screenColours(_ t: Theme) -> (RGBA, RGBA) { (Themes.rgba(t.faceBg.centre), Themes.rgba(t.faceBg.edge)) }
 
-    /// A swatch was clicked: switch now, and remember it (a file we cannot write still leaves the new look
-    /// on for this run).
-    func pickTheme(_ key: String) {
-        applyTheme(Themes.load(path: machine.themeFile, choice: key))
-        Themes.saveChoice(key, path: machine.themeFile)
-        themeStamp = Themes.stamp(path: machine.themeFile)
-        open(closeAfter: 8)
-    }
-
-    /// Switch the look live, nothing restarts: face colours, card, typing speed, sizes.
+    /// Switch the look live (theme.json was edited), nothing restarts: face colours, card, typing speed, sizes.
     func applyTheme(_ t: Theme) {
         theme = t
         face.setTheme(hue: hueFunction(t), bg: screenColours(t))
-        card.setTheme(t)  // restyles the header, quote, labels, dots and caret too
+        card.setTheme(t)  // restyles the header, quote, dots and caret too
         card.setHue(Themes.liveHue(t, faceNow: face.params.hue, activity: mind.activity.rawValue))
         var pace = tw.pace
         pace.cps = t.cps
@@ -373,7 +371,7 @@ final class RoboWindow {
     /// A small window of its own, on the face's display.
     func typeText() {
         typer?.close()
-        let t = TypePanel(theme: theme) { [weak self] in self?.ask($0) }
+        let t = TypePanel { [weak self] in self?.ask($0) }
         let displays = machine.displays()
         if let d = space.display(at: faceCentre, in: displays) { t.place(on: d.visible) }
         typer = t

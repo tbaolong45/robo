@@ -1,17 +1,18 @@
-// The speech card: port of hud.Card and the card half of app.py (the widgets laid out in `panel.inner`, the sizing of
-// the text boxes, the right-click menu, the theme picker, the approval). The window (E1's RoboWindow) owns the face,
-// the clock and the Hermes events; it drives this view through the setters below and gets callbacks back.
+// The speech card, on a pane of Liquid Glass (`GlassSurface`, behind everything): the widgets laid out in one column, the
+// sizing of the text boxes, the right-click menu and the approval. The window (RoboWindow) owns the face, the clock and
+// the Hermes events; it drives this view through the setters below and gets callbacks back.
 //
 // Layout: the card is 340 wide with one column (margins 19, 42, 19, 19, spacing 8, 302 wide) in this order: menu,
-// picker, quote, status row, reply, footer, approval. Hidden items take no room. The header is a child at (6, 6) of
-// the frame, not in the column. The owner sets the card's frame to `fittingHeight` inside `fit`.
+// quote, status row, reply, footer, approval. Hidden items take no room. The header is a child at (6, 6) of the frame,
+// not in the column, and the glass pane sits from (6, 6) to `Chrome.gap` short of the bottom. The owner sets the card's
+// frame to `fittingHeight` inside `fit`.
 import AppKit
 import RoboCore
 
 /// The status light's states (hud.LED_STATES).
 enum LedState: String, CaseIterable, Sendable { case unknown, ok, warn, loading, bad, hot, off }
 
-/// A right-click menu entry; Theme only toggles the picker (see `onTheme`).
+/// A right-click menu entry.
 enum MenuAction: Sendable { case digest, type, stay, watch, quit }
 
 /// A view that places its own children (no Auto Layout) whenever its size changes, and when the card asks.
@@ -21,72 +22,38 @@ class Placing: NSView {
     func place() {}
 }
 
-/// The right-click menu: three chips in a row of six columns, two columns each; the second row is Watch, Theme, Quit
-/// (two columns each), or just Theme and Quit (three each) when there is nothing to watch.
+/// The right-click menu: three chips in a row of six columns, two columns each; the second row is Watch and Quit
+/// (three columns each), or just Quit (all six) when there is nothing to watch.
 final class MenuView: Placing {
-    let digest, type, stay, watch, themer, quit: ButtonView
+    let digest, type, stay, watch, quit: ButtonView
     let hasWatch: Bool
     static let rowH: CGFloat = 28, spacing: CGFloat = 6
 
-    init(theme: Theme, hasWatch: Bool) {
-        digest = ButtonView("📚 Digest", theme: theme); type = ButtonView("💬 Type", theme: theme); stay = ButtonView("📌 Stay", theme: theme)
-        watch = ButtonView("⏸ Watch", theme: theme); themer = ButtonView("🎨 Theme", theme: theme); quit = ButtonView("✕ Quit", theme: theme)
+    init(hasWatch: Bool) {
+        digest = ButtonView("📚 Digest"); type = ButtonView("💬 Type"); stay = ButtonView("📌 Stay")
+        watch = ButtonView("⏸ Watch"); quit = ButtonView("✕ Quit")
         self.hasWatch = hasWatch
         super.init(frame: .zero)
         for b in buttons { addSubview(b) }
         if !hasWatch { watch.isHidden = true }  // never shown, so not in the grid
     }
     required init?(coder: NSCoder) { fatalError("not used") }
-    var buttons: [ButtonView] { [digest, type, stay, watch, themer, quit] }
+    var buttons: [ButtonView] { [digest, type, stay, watch, quit] }
     var height: CGFloat { 2 * Self.rowH + Self.spacing }
 
-    /// The cells as (row, column, columns spanned), like QGridLayout's `getItemPosition`.
+    /// The cells as (row, column, columns spanned).
     var cells: [(ButtonView, Int, Int, Int)] {
-        let low = hasWatch ? [watch, themer, quit] : [themer, quit]
+        let low = hasWatch ? [watch, quit] : [quit]
         return [digest, type, stay].enumerated().map { ($1, 0, 2 * $0, 2) }
             + low.enumerated().map { ($1, 1, 6 / low.count * $0, 6 / low.count) }
     }
 
     override func place() {
-        // Six equal columns; with nothing to watch, QGridLayout (measured in the Python card) gives the middle two 47 and the
-        // outer four 44.5 of 272 px, so the top chips come out 95 / 100 / 95 wide.
-        let free = bounds.width - 5 * Self.spacing, widths: [CGFloat] = hasWatch ? Array(repeating: free / 6, count: 6) : [44.5, 44.5, 47, 47, 44.5, 44.5].map { $0 * free / 272 }
-        let starts = widths.indices.map { i in widths[..<i].reduce(0, +) + CGFloat(i) * Self.spacing }
-        for (button, row, column, span) in cells {  // Qt rounds the exact cell edges
-            let left = starts[column].rounded(), right = (starts[column + span - 1] + widths[column + span - 1]).rounded()
+        let free = bounds.width - 5 * Self.spacing, width = free / 6  // six equal columns
+        for (button, row, column, span) in cells {
+            let left = (CGFloat(column) * (width + Self.spacing)).rounded(), right = (CGFloat(column + span - 1) * (width + Self.spacing) + width).rounded()
             button.frame = NSRect(x: left, y: CGFloat(row) * (Self.rowH + Self.spacing), width: right - left, height: Self.rowH)
         }
-    }
-}
-
-/// "THEME ▸ CYAN HUD" and one swatch per theme.
-final class PickerView: Placing {
-    let label: MicroLabel
-    private(set) var swatches: [(key: String, view: SwatchView)] = []
-    var onPick: ((String) -> Void)?
-    static let height: CGFloat = 2 + 12 + 5 + 34
-
-    init(current: String, theme: Theme) {
-        label = MicroLabel("", theme: theme)
-        super.init(frame: .zero)
-        addSubview(label)
-        for t in Themes.all {
-            let s = SwatchView(t)
-            s.onClick = { [weak self] in self?.onPick?(t.key) }
-            swatches.append((t.key, s))
-            addSubview(s)
-        }
-        setCurrent(current)
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-    func setCurrent(_ key: String) {
-        label.text = Themes.all.first(where: { $0.key == key }).map { "THEME ▸ \($0.label.uppercased())" } ?? "THEME ▸"
-        for (k, s) in swatches { s.current = k == key }
-    }
-
-    override func place() {
-        label.frame = NSRect(x: 2, y: 2, width: bounds.width - 4, height: 12)
-        for (i, s) in swatches.enumerated() { s.view.frame = NSRect(x: 2 + 61 * CGFloat(i), y: 19, width: 54, height: 34) }  // centred in five equal cells
     }
 }
 
@@ -98,8 +65,8 @@ final class QuoteBlock: Placing {
 
     init(theme: Theme) {
         background = QuoteView(theme: theme)
-        label = MicroLabel("YOU ▸", theme: theme)
-        followUp = MicroLabel("↳ FOLLOW-UP", theme: theme, tone: .dim)
+        label = MicroLabel("YOU ▸")
+        followUp = MicroLabel("↳ FOLLOW-UP", tone: .dim)
         super.init(frame: .zero)
         for v in [background, label, followUp, text] { addSubview(v) }
         followUp.isHidden = true
@@ -122,7 +89,7 @@ final class StatusRow: Placing {
     let dots: TypingDotsView, label: MicroLabel
     init(theme: Theme) {
         dots = TypingDotsView(theme: theme)
-        label = MicroLabel("", theme: theme, px: 11, spacing: 0.2, bold: false)
+        label = MicroLabel("", px: 11, spacing: 0.2, bold: false)
         super.init(frame: .zero)
         addSubview(dots); addSubview(label)
         dots.isHidden = true; label.isHidden = true
@@ -142,11 +109,11 @@ final class ApprovalView: Placing {
     let label: MicroLabel, well: WrapLabelView
     let allow: ButtonView, deny: ButtonView
 
-    init(theme: Theme) {
-        label = MicroLabel("APPROVAL ▸", theme: theme, tone: .warn)
-        well = WrapLabelView(.well, theme: theme)
-        allow = ButtonView("Allow", kind: .allow, theme: theme)  // the accent; Deny is the quiet one
-        deny = ButtonView("Deny", kind: .deny, theme: theme)
+    override init(frame: NSRect = .zero) {
+        label = MicroLabel("APPROVAL ▸", tone: .warn)
+        well = WrapLabelView(.well)
+        allow = ButtonView("Allow", kind: .allow)  // the system accent; Deny is the quiet one
+        deny = ButtonView("Deny", kind: .deny)
         super.init(frame: .zero)
         for v in [label, well, allow, deny] { addSubview(v) }
     }
@@ -176,14 +143,13 @@ final class CardView: NSView {
     /// resizes to `fittingHeight`. The default just runs it.
     var fit: (_ change: () -> Void) -> Void = { $0() }
     var onReplyClick: (() -> Void)?  // left click on the reply: within 4 pt, not a link, nothing selected
-    var onPickTheme: ((String) -> Void)?
-    var onMenu: ((MenuAction) -> Void)?  // after the card hid the menu and the picker
-    var onTheme: (() -> Void)?  // after the Theme chip toggled the picker (the window re-arms its close timer)
+    var onMenu: ((MenuAction) -> Void)?  // after the card hid the menu
     var onApprove: ((String) -> Void)?  // "once" | "deny"
 
+    /// The glass pane: behind everything else, `Chrome.glow` in from the sides and top, `Chrome.gap` short of the bottom.
+    let glass = GlassSurface()
     let header: HeaderView
     let chips: MenuView
-    let picker: PickerView
     let quote: QuoteBlock
     let statusRow: StatusRow
     let reply = TextBox(width: 302)
@@ -193,24 +159,21 @@ final class CardView: NSView {
     private var caretBox: CGRect?  // in the reply's viewport
     private var footerText = ""
     private var heardText = ""
-    private var painted: (key: [Double], image: NSImage)?
-    private(set) var frameBuilds = 0  // how often the frame image was rebuilt (the cache key: size, pixel ratio, hue step, theme revision)
 
     /// `model` is the configured model name ("claude-sonnet-5.5"), for the header chip when the theme names none.
     init(theme: Theme, hasWatch: Bool, model: String = "") {
         self.theme = theme
         hue = Chrome.quantised(theme.hue)
         header = HeaderView(theme: theme, model: model)
-        chips = MenuView(theme: theme, hasWatch: hasWatch)
-        picker = PickerView(current: theme.key, theme: theme)
+        chips = MenuView(hasWatch: hasWatch)
         quote = QuoteBlock(theme: theme)
         statusRow = StatusRow(theme: theme)
-        footer = WrapLabelView(.footer, theme: theme)
-        approval = ApprovalView(theme: theme)
+        footer = WrapLabelView(.footer)
+        approval = ApprovalView()
         caret = CaretView(theme: theme)
         super.init(frame: NSRect(x: 0, y: 0, width: CardView.width, height: Chrome.margins.top + Chrome.margins.bottom))
-        for v in [chips, picker, quote, statusRow, reply, footer, approval, caret, header] as [NSView] { addSubview(v) }
-        for v in [chips, picker, quote, statusRow, reply, footer, approval] as [NSView] { v.isHidden = true }
+        for v in [glass, chips, quote, statusRow, reply, footer, approval, caret, header] as [NSView] { addSubview(v) }
+        for v in [chips, quote, statusRow, reply, footer, approval] as [NSView] { v.isHidden = true }
         header.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: CardView.width - 2 * Chrome.glow, height: Chrome.headerH)
         reply.textView.onClick = { [weak self] in self?.onReplyClick?() }
         wire()
@@ -226,8 +189,6 @@ final class CardView: NSView {
         chips.stay.onClick = { [weak self] in self?.pressed(.stay) }
         chips.watch.onClick = { [weak self] in self?.pressed(.watch) }
         chips.quit.onClick = { [weak self] in self?.pressed(.quit) }
-        chips.themer.onClick = { [weak self] in self?.togglePicker(); self?.onTheme?() }  // the menu stays up
-        picker.onPick = { [weak self] key in self?.onPickTheme?(key) }
         approval.allow.onClick = { [weak self] in self?.onApprove?("once") }
         approval.deny.onClick = { [weak self] in self?.onApprove?("deny") }
     }
@@ -239,7 +200,6 @@ final class CardView: NSView {
     func setTheme(_ t: Theme) {
         theme = t
         resumeAt = 0  // the window renders the reply again in the new look: now
-        picker.setCurrent(t.key)
         applyTheme()
         applyHue()
         relayout()
@@ -254,45 +214,23 @@ final class CardView: NSView {
         return true
     }
 
-    /// What follows the live hue (hud.Card._restyle): the header, the quote's bar, the labels, the dots, the caret and the frame.
-    /// Called at the face's pace, so it touches nothing that holds text.
+    /// What follows the live hue: the glass's tint, the header, the quote's bar, the dots and the caret. Called at the face's
+    /// pace (a step of 2 degrees), so it touches nothing that holds text and paints nothing but a few small marks.
     private func applyHue() {
+        glass.tint(Chrome.accent(theme, hue, Self.tint))
         header.theme = theme; header.hue = hue
         quote.background.theme = theme; quote.background.hue = hue
-        for l in [quote.label, quote.followUp, statusRow.label, approval.label, picker.label] { l.theme = theme; l.hue = hue }
         statusRow.dots.theme = theme; statusRow.dots.hue = hue
         caret.theme = theme; caret.hue = hue
-        needsDisplay = true
     }
 
-    /// What the style sheet of the Python card styled, at the theme's resting hue: buttons, the well, the footer, selection and
-    /// link colours, the scroll bars, the quote's text.
+    /// How much of the accent the glass takes: enough to follow the mood, not enough to cost the text its contrast.
+    static let tint = 0.10
+
+    /// Selection and link colours, the scroll bar and the quote's text.
     private func applyTheme() {
-        chips.buttons.forEach { $0.theme = theme }
-        approval.allow.theme = theme; approval.deny.theme = theme
-        approval.well.theme = theme; footer.theme = theme
         quote.text.style(theme); reply.style(theme)
-        quote.text.setContent(Markdown.plain(heardText, font: .systemFont(ofSize: 12).italic, colour: Chrome.color(theme.textDim)))
-    }
-
-    // MARK: the frame
-
-    /// The pixel ratio the current drawing context renders at.
-    private func ratio() -> CGFloat { NSGraphicsContext.current.map { max(1, $0.cgContext.convertToDeviceSpace(CGSize(width: 1, height: 1)).width) } ?? window?.backingScaleFactor ?? 2 }
-
-    /// The frame image for the current size, theme and hue step, rebuilt only when one of them changed.
-    func frameImage(dpr: CGFloat) -> NSImage? {
-        let key = [bounds.width, bounds.height, Double(dpr), hue, Double(theme.rev)]
-        if let painted, painted.key == key { return painted.image }
-        guard let cg = Chrome.frame(theme, size: bounds.size, dpr: dpr, hue: hue) else { return nil }
-        let image = NSImage(cgImage: cg, size: bounds.size)
-        painted = (key, image)
-        frameBuilds += 1
-        return image
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        frameImage(dpr: ratio())?.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        quote.text.setContent(Markdown.plain(heardText, font: .systemFont(ofSize: 12).italic, colour: Chrome.textDim))
     }
 
     // MARK: header
@@ -312,7 +250,7 @@ final class CardView: NSView {
 
     func setHeard(_ text: String, followUp: Bool) {
         heardText = text
-        quote.text.setContent(Markdown.plain(text, font: .systemFont(ofSize: 12).italic, colour: Chrome.color(theme.textDim)))
+        quote.text.setContent(Markdown.plain(text, font: .systemFont(ofSize: 12).italic, colour: Chrome.textDim))
         quote.followUp.isHidden = !(followUp && !text.isEmpty)
         quote.place()
         sizeText()
@@ -446,21 +384,17 @@ final class CardView: NSView {
         refit { chips.isHidden = false }
     }
 
-    /// Hides the menu and the picker with it.
     func hideMenu() {
-        if !chips.isHidden { refit { chips.isHidden = true; picker.isHidden = true } }
+        if !chips.isHidden { refit { chips.isHidden = true } }
     }
-
-    func togglePicker() { refit { picker.isHidden.toggle() } }
 
     // MARK: layout
 
-    private var flow: [NSView] { [chips, picker, quote, statusRow, reply, footer, approval].filter { !$0.isHidden } }
+    private var flow: [NSView] { [chips, quote, statusRow, reply, footer, approval].filter { !$0.isHidden } }
 
     private func height(of v: NSView) -> CGFloat {
         switch v {
         case chips: return chips.height
-        case picker: return PickerView.height
         case quote: return quote.height
         case statusRow: return statusRow.height
         case footer: return footer.height(for: Self.columnWidth)
@@ -489,13 +423,19 @@ final class CardView: NSView {
             (v as? Placing)?.place()
             y += h
         }
-        header.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: bounds.width - 2 * Chrome.glow, height: Chrome.headerH)
+        placeChrome(bounds.size)
         positionCaret()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        header.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: newSize.width - 2 * Chrome.glow, height: Chrome.headerH)
+        placeChrome(newSize)
+    }
+
+    /// The glass and the header, which are not part of the column.
+    private func placeChrome(_ size: NSSize) {
+        glass.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: size.width - 2 * Chrome.glow, height: size.height - Chrome.glow - Chrome.gap)
+        header.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: size.width - 2 * Chrome.glow, height: Chrome.headerH)
     }
 
     /// `QWidget.underMouse`: false while hidden.

@@ -189,12 +189,12 @@ enum Markdown {
         let lineH: CGFloat  // the multiple of the font's line
         let indent: CGFloat
 
-        init(_ t: Theme) {
-            text = Chrome.color(t.text); head = Chrome.color(t.head); link = Chrome.color(t.link)
-            codeBg = Chrome.color(t.codeBg); codeFg = Chrome.color(t.codeFg); inlineBg = Chrome.color(t.inlineBg); grid = Chrome.color(t.textDim)
-            body = t.bodyMono ? Chrome.mono(CGFloat(t.textPx)) : .systemFont(ofSize: CGFloat(t.textPx))
+        init(_ t: Theme) {  // the system's colours: they follow light and dark and the glass behind the card
+            text = Chrome.text; head = Chrome.text; link = .linkColor
+            codeBg = Chrome.wash(0.07); codeFg = Chrome.text; inlineBg = Chrome.wash(0.10); grid = Chrome.textDim
+            body = .systemFont(ofSize: CGFloat(t.textPx))
             lineH = CGFloat(t.lineH) / 100
-            indent = Markdown.indent + (t.bodyMono ? 6 : 0)
+            indent = Markdown.indent
         }
     }
 
@@ -533,8 +533,8 @@ final class TextBox: NSScrollView {
     var string: String { textView.string }
 
     func style(_ t: Theme) {
-        textView.selectedTextAttributes = [.backgroundColor: Chrome.accent(t, t.hue, 0.35), .foregroundColor: Chrome.color(t.text)]
-        textView.linkTextAttributes = [.foregroundColor: Chrome.color(t.link), .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
+        textView.selectedTextAttributes = [.backgroundColor: Chrome.accent(t, t.hue, 0.35), .foregroundColor: Chrome.text]
+        textView.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
         (verticalScroller as? KnobScroller)?.knob = Chrome.accent(t, t.hue, 0.45)
     }
 

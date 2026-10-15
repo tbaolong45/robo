@@ -47,6 +47,17 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   ~0.8 s on the last 2 s of audio, so a natural "over" mid-sentence sent a half request; the 1.6 s
   pause also cut off thinking. Cost: a room that never goes quiet (TV) keeps the request open up to
   `PATIENT_MAX_S`. Don't add a word that can occur in speech.
+- **Push to talk = Ctrl+Q (Swift app only, 2026-10-16)**, at the user's request, instead of the name.
+  `RoboUI/Hotkey.swift` uses Carbon `RegisterEventHotKey` (no Accessibility or Input Monitoring
+  permission; one down and one up event, no auto-repeat; a system hotkey should keep Ctrl+Q from the app in front, not checked).
+  `Listener.hold()/release()` record from down to up regardless of the gate, +4 frames of tail; a press
+  under `Listen.tapS` = 0.4 s is a click (`listenNow`). `Listener(nameWake:)` is `!hotkeyRegistered`:
+  with the key, loud sound outside a window is not even transcribed; if the system refuses the key, the
+  name wake is back. Registration is exclusive only inside a process: a second process registering the
+  same combo was accepted in a probe, so a clash with another app is not detected (and which app gets
+  the key then is untested). The Python build still wakes by name (spec and fallback). Test the real key
+  with the user's own press (checked live 2026-10-16: hold and tap both work); a synthetic Ctrl+Q posted
+  with `CGEvent` goes to the system, whichever app is in front.
 - **Speech gate floor** (`MIN_GATE` / `Listen.minGate` = 0.008, lowered from 0.02 on 2026-10-15). The
   user's "Robo" on the MacBook Pro mic has p99 0.020 and peak 0.032 per 80 ms frame (room floor 0.0012,
   room peaks ~0.005), so at 0.02 none of five calls reached the model; at 0.008 all five did, at 0.012
@@ -83,7 +94,29 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   flash. A tick costs about 3 ms (`setMarkdown`), so typing is ~10 % of a core for a few seconds;
   raise `TYPE_S` before anything else if a machine struggles. `cps: 0` shows replies at once.
   The pace follows Hermes (it never lags more than ~2-6 s), so don't slow it down for looks.
-- **Themes**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
+- **Liquid Glass card (Swift app, 2026-10-16, at the user's request; replaces the holo card and the five
+  themes there)**: `GlassSurface` (`CardChrome.swift`) is `NSGlassEffectView` on macOS 26, a frosted
+  `NSVisualEffectView(.hudWindow, state .active)` before. It is a plain sibling *behind* the card's views at
+  `Chrome.glow` in, `Chrome.gap` (9) short of the bottom: the layout numbers (margins 42/19/19/19, column 302,
+  window 348 wide, face x 110) did not change, and there is no tail (a rounded rect is all glass can be).
+  Spike results (scratch app, same panel flags, 2026-10-16): glass renders properly in the never-key panel of an
+  accessory app, in light and dark; `.clear` has weak contrast on bright backdrops, so `.regular`; the panel's
+  transparent margin passes clicks through (WindowServer hit test); a 30 Hz resize costs ~0.5 ms per tick, no
+  measurable window-server difference from a plain view. Text, lights and buttons are the system colours
+  (`Chrome.text/textDim/hairline/wash`), fonts the system font (mono only for code), so no contrast table is
+  possible any more: look at it over a bright and a dark backdrop (put your own striped window under a test copy
+  and capture only that region, never a region of the user's desktop). The hue (accent) tints the glass at
+  `CardView.tint` = 0.10, per 2-degree step. Only `Themes.glass` exists; `theme.json` keeps `hue, acc_s, acc_v,
+  face_bg, cps, text_px, line_h, caret, caret_ms, follow_emotion, bot_name, model_chip` and ignores the rest. The
+  card fades in over 0.18 s (`RoboWindow.fadeIn`, not with Reduce Motion); closing is instant on purpose.
+  Measured with a throwaway probe against a clean checkout of the previous commit (2026-10-16, this Mac): a
+  hue step costs 2.09 ms on the holo card (the card-sized frame bitmap rebuilt at 2x) and 0.04 ms now (one
+  `tintColor`), about 50x less, and the face's mood sweep makes these steps all the time. The typing tick
+  (`CardView.setReply`, 1000 characters) is 0.7 ms on average in both (median 0.8), so caching fonts or the
+  Markdown look was tried and dropped: no gain. Typing is ~2 % of a core at 30 Hz; don't optimise it further
+  without a new measurement.
+  The Themes, Header lights and Face cost notes below describe the Python tree.
+- **Themes (Python tree)**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
   follows the face's live hue in all five themes (the user chose this over one fixed colour);
   `hud.chrome` is cached on `Theme.rev` plus the quantised hue. Label contrast is tested at all
   360 hues (`tests/test_theme.py`), because the face's hue sweeps through every colour.

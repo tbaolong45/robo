@@ -180,6 +180,26 @@ import RoboVoice
         #expect(r.window.mind.activity == .listening && !r.window.card.isHidden)
     }
 
+    @Test func theTalkKeyListensWhileHeldAndLetsGoOnRelease() async {
+        let key = Hotkey()  // not registered: the test calls what the system would
+        let r = Rig(hotkey: key)
+        defer { r.close() }
+        key.onDown()
+        #expect(r.ear.holds == 1 && r.ear.releases == 0)
+        #expect(r.window.mind.activity == .listening && !r.window.card.isHidden)
+        key.onUp()
+        #expect(r.ear.releases == 1)
+    }
+
+    @Test func theTalkKeyDoesNothingWhenTheListenerIsDead() async {
+        let key = Hotkey()
+        let r = Rig(hotkey: key)
+        defer { r.close() }
+        r.ear.running = false
+        key.onDown()
+        #expect(r.ear.holds == 0 && r.window.mind.activity != .listening)
+    }
+
     @Test func aDragMovesTheWindowAndLeavesItThere() async {
         let r = Rig()
         defer { r.close() }
@@ -500,16 +520,6 @@ import RoboVoice
         #expect(r.hermes.asked.isEmpty && !r.window.busy)
         r.window.typeText()  // a second one replaces the first
         #expect(r.typers.count == 2)
-    }
-
-    @Test func theTypeWindowTakesTheThemesColours() async {
-        let r = Rig()
-        defer { r.close() }
-        r.window.typeText()
-        let t = r.typers[0]
-        let c = t.backgroundColor.usingColorSpace(.sRGB)!
-        let want = Themes.rgba(r.window.theme.bgTop)
-        #expect(abs(c.redComponent * 255 - Double(want.r)) < 1.5 && abs(c.blueComponent * 255 - Double(want.b)) < 1.5)
     }
 
     // MARK: the menu

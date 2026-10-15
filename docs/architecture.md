@@ -252,7 +252,7 @@ bullet, an open code fence) never flashes on screen. See `src/robo/typewriter.py
 | Pages, charts, slides, flashcards | `~/Robo/` | Hermes (`robo-make` skill) |
 | Activity log (app, window, idle, sites, files) | `~/.local/share/robo/activity.db` (0600, 30 days) | Robo's activity watcher |
 | Study ledger (goals, exams, results) | `~/.local/share/robo/study.md` (0600) | Created by Robo at start, edited by Hermes (`study-ledger` skill) |
-| Theme | `~/.config/robo/theme.json` | You, or the 🎨 Theme menu |
+| Theme tokens (hue, bot name, typing speed...) | `~/.config/robo/theme.json` | You (the Swift app has no Theme menu; the Python build still writes the `theme` key from its 🎨 menu) |
 | "Digest already done today" | `data/robo_state.json` in the checkout | Robo |
 | Persona, skills, guard plugin, `config.yaml`, API key | `~/.hermes/profiles/robo/` | `robo setup` |
 | Robo's private browser profile | `~/.hermes/profiles/robo/brave/` | Created when Robo first starts; your logins are added by `robo signin` |
@@ -302,8 +302,10 @@ features without the window.
   Hermes setup (`~/.hermes`, the `hermes` CLI) and editing its installed school skills.
 - Text Robo reads from mail, chats or web pages is data, not instructions; that is a rule in the
   persona, not a technical barrier (see "Prompt injection" in the README).
-- The microphone stays on while Robo runs. A sentence is acted on only when it uses Robo's name,
-  or follows an answer within 10 s, or comes right after you click the face.
+- The microphone stays on while Robo runs. In the Swift app a sentence is acted on only while you
+  hold Ctrl+Q, after a tap of it or a click on the face, or within 10 s of an answer; the name is
+  not listened for unless macOS refuses the key. The Python build acts on a sentence that
+  uses Robo's name, follows an answer within 10 s, or comes right after a click on the face.
 
 ## 9. Where to read the code first
 

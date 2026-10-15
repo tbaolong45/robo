@@ -364,7 +364,21 @@ extension RoboWindow {
         closeAfter = after
         let armed = after != 0 && !tw.pending  // while it types, finishedTyping arms the timer
         closeAt = armed ? now() + after : 0
-        if card.isHidden { fit { card.isHidden = false } }
+        if card.isHidden {
+            fit { card.isHidden = false }
+            fadeIn()
+        }
+    }
+
+    /// The card appears with a short fade (closing stays instant: the window shrinks around the face at once).
+    /// The model value is 1 straight away, only what is on screen eases in; Reduce Motion skips it.
+    private func fadeIn() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        card.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            card.animator().alphaValue = 1
+        }
     }
 
     func closeBubble() {

@@ -99,7 +99,7 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
 final class FakeEar: Ear {
     let onWake: () -> Void, onText: (String) -> Void, onNote: (String) -> Void
     let ok: Bool
-    var now = 0, follow = 0.0, stops = 0
+    var now = 0, follow = 0.0, stops = 0, holds = 0, releases = 0
     var stopped: Bool { stops > 0 }
     var running = true, ready = true
 
@@ -108,6 +108,8 @@ final class FakeEar: Ear {
     }
     func start() -> Bool { ok }
     func listenNow() { now += 1 }
+    func hold() { holds += 1 }
+    func release() { releases += 1 }
     func followUp(seconds: Double) { follow = seconds }
     func stop(wait: Double) { stops += 1 }
 }
@@ -188,7 +190,7 @@ extension CardView {
     init(_ script: [FakeHermes.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
          listener: Bool = true, micOK: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
          today: @escaping () -> CalendarDay = { Rig.day }, network: @escaping () -> Bool = { true },
-         watchPaused: Bool = false) {
+         watchPaused: Bool = false, hotkey: Hotkey? = nil) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         hermes = FakeHermes(script, fail: fail)
         digest = DigestClock(path: dir.appendingPathComponent("state.json"))
@@ -220,7 +222,7 @@ extension CardView {
                 let p = FakePoller(url, on)
                 self.pollers.append(p)
                 return p
-            }, machine: m)
+            }, hotkey: hotkey, machine: m)
     }
 
     private var steps = 0

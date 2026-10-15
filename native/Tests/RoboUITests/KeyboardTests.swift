@@ -85,7 +85,7 @@ private let selectAllAction = #selector(NSText.selectAll(_:))
     @Test func cmdVAndCmdAWorkInTheTypeWindow() async {
         let r = Rig()
         defer { r.close() }
-        let panel = TypePanel(theme: Themes.cyan) { _ in }
+        let panel = TypePanel { _ in }
         defer { panel.close() }
         panel.makeKey()
         panel.makeFirstResponder(panel.field)
@@ -175,7 +175,7 @@ private let textKeyDown = #selector(NSTextView.keyDown(with:))
     // MARK: the Type window
 
     @Test func theTypeWindowFollowsTheUserIntoFullScreenSpacesLikeThePanel() {
-        let panel = TypePanel(theme: Themes.cyan) { _ in }
+        let panel = TypePanel { _ in }
         defer { panel.close() }
         #expect(panel.collectionBehavior.contains(.canJoinAllSpaces) && panel.collectionBehavior.contains(.fullScreenAuxiliary))
     }
@@ -187,7 +187,7 @@ private let textKeyDown = #selector(NSTextView.keyDown(with:))
         var submitted: [String] = []
         for how in ["ok", "cancel", "close"] {
             r.activated = []
-            let panel = TypePanel(theme: Themes.cyan, focus: r.window.machine.focus) { submitted.append($0) }
+            let panel = TypePanel(focus: r.window.machine.focus) { submitted.append($0) }
             panel.field.stringValue = "hi"
             switch how {
             case "ok": panel.ok()
@@ -203,10 +203,10 @@ private let textKeyDown = #selector(NSTextView.keyDown(with:))
         let r = Rig()
         defer { r.close() }
         r.appActive = false
-        TypePanel(theme: Themes.cyan, focus: r.window.machine.focus) { _ in }.close()
+        TypePanel(focus: r.window.machine.focus) { _ in }.close()
         r.appActive = true
         r.frontmost = nil
-        TypePanel(theme: Themes.cyan, focus: r.window.machine.focus) { _ in }.close()
+        TypePanel(focus: r.window.machine.focus) { _ in }.close()
         #expect(r.activated.isEmpty)
     }
 }

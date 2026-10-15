@@ -1,19 +1,20 @@
-// Port of the card parts of tests/test_hud.py and tests/test_chat_ui.py: the frame and its cache, the header and its lights, the
-// quote, the caret, the picker, the menu grid, the approval, the sizing and scrolling of the reply, the skip click.
+// Port of the card parts of tests/test_hud.py and tests/test_chat_ui.py, for the Liquid Glass card: the glass pane and its tint,
+// the header and its lights, the quote, the caret, the menu grid, the approval, the sizing and scrolling of the reply, the
+// skip click. The card paints no frame of its own any more (the pane is a system view behind it), so what is checked here is
+// its geometry, its tint, and that everything else it draws is the small marks on top.
 // Not ported, because they have no meaning here: the Qt style sheet tests (`qss` parses, uses the tokens: there is no style sheet,
-// the same tokens are read by the painting code), "the picker is one grid, not nested rows" (a Qt shutdown crash), the
-// QLayout-based assertions (the card lays out by hand), the docked window.
+// the same tokens are read by the painting code), the QLayout-based assertions (the card lays out by hand), the docked window.
+// Colours that the system decides (label, separator, fills) follow light and dark, so a pixel probe on them asserts "painted /
+// not painted / differs" and only the accent (the one colour of our own) is compared with a value.
 import AppKit
 import Foundation
 import Testing
 @testable import RoboCore
 @testable import RoboUI
 
-private let keys = Themes.all.map(\.key)
-
 // MARK: helpers
 
-@MainActor private func makeCard(_ t: Theme = Themes.cyan, watch: Bool = false, model: String = "") -> CardView {
+@MainActor private func makeCard(_ t: Theme = Themes.glass, watch: Bool = false, model: String = "") -> CardView {
     _ = NSApplication.shared
     let card = CardView(theme: t, hasWatch: watch, model: model)
     card.renderBudget = .infinity  // a slow machine must not make a test skip a render
@@ -42,10 +43,14 @@ private struct Bitmap {
         let p = at(x, y, dpr: dpr), a = Double(max(1, p.a)) / 255
         return (Int(Double(p.r) / a), Int(Double(p.g) / a), Int(Double(p.b) / a), p.a)
     }
-    /// The hue in degrees of the (un-premultiplied) pixel.
-    func hue(_ x: Double, _ y: Double, dpr: Double = 1) -> Double {
-        let p = at(x, y, dpr: dpr), a = Double(max(1, p.a)) / 255
-        return Double(NSColor(srgbRed: Double(p.r) / 255 / a, green: Double(p.g) / 255 / a, blue: Double(p.b) / 255 / a, alpha: 1).hueComponent) * 360
+    /// Every pixel (x, y) in image pixels, with its colour un-premultiplied.
+    var pixels: [(x: Int, y: Int, r: Int, g: Int, b: Int, a: Int)] {
+        (0..<height).flatMap { y in
+            (0..<width).map { x in
+                let i = (y * width + x) * 4, a = Double(max(1, Int(data[i + 3]))) / 255
+                return (x, y, Int(Double(data[i]) / a), Int(Double(data[i + 1]) / a), Int(Double(data[i + 2]) / a), Int(data[i + 3]))
+            }
+        }
     }
     var bytes: [UInt8] { data }
 }
@@ -62,17 +67,34 @@ private struct Bitmap {
     return ctx.makeImage()!
 }
 
-private func angle(_ a: Double, _ b: Double) -> Double { abs((a - b + 180).truncatingRemainder(dividingBy: 360) - 180) }
+/// A card is fitted to what it shows, as the window does after a change.
+@MainActor private func fitted(_ card: CardView) {
+    card.setFrameSize(NSSize(width: CardView.width, height: card.fittingHeight))
+    card.relayout()
+}
+
+/// sRGB components of a colour, to compare two NSColors that are not the same object.
+private func components(_ c: NSColor?) -> [CGFloat] {
+    guard let s = c?.usingColorSpace(.sRGB) else { return [] }
+    return [s.redComponent, s.greenComponent, s.blueComponent, s.alphaComponent]
+}
+
+private func same(_ a: NSColor?, _ b: NSColor) -> Bool {
+    let x = components(a), y = components(b)
+    return x.count == 4 && zip(x, y).allSatisfy { abs($0 - $1) < 0.01 }
+}
+
+private let hues = [0.0, 90, 188, 270, 330]
 
 private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it." }.joined(separator: "\n\n")
 
-// MARK: the frame
+// MARK: the glass pane
 
 @Suite @MainActor struct CardFrameTests {
     @Test func theCardIsAsWideAsTheOldPanelAndPutsTheHeaderInTheFrame() {
         let card = makeCard()
         #expect(card.frame.width == CardView.width && CardView.width == 340)
-        #expect(card.header.frame == NSRect(x: 6, y: 6, width: 328, height: 26))  // inside the 6 px glow margin
+        #expect(card.header.frame == NSRect(x: 6, y: 6, width: 328, height: 26))  // inside the 6 px glass margin
         card.setFrameSize(NSSize(width: 340, height: 330))
         #expect(card.header.frame == NSRect(x: 6, y: 6, width: 328, height: 26))
         #expect(card.isFlipped)
@@ -80,85 +102,66 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
 
     @Test func theColumnHasThePythonMarginsAndSpacingAndHiddenItemsTakeNoRoom() {
         let card = makeCard()
-        #expect(card.fittingHeight == 61.0)  // nothing shows: top margin and the tail's 19
+        #expect(card.fittingHeight == 61.0)  // nothing shows: the top margin 42 and the bottom 19
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        card.togglePicker()
-        #expect(card.fittingHeight == 184.0)  // 42 + 62 + 8 + 53 + 19
+        #expect(card.fittingHeight == 123.0)  // 42 + 62 (two rows of 28 and 6 between) + 19: one item, so no spacing
         #expect(card.chips.frame == NSRect(x: 19, y: 42, width: 302, height: 62))
-        #expect(card.picker.frame == NSRect(x: 19, y: 112, width: 302, height: 53))
+        card.setStatusRow(typing: true, label: "")
+        #expect(card.fittingHeight == 123.0 + 8 + 16)  // the status row (16) under the menu with the column's 8
+        #expect(card.statusRow.frame == NSRect(x: 19, y: 42 + 62 + 8, width: 302, height: 16))
+        card.setStatusRow(typing: false, label: "")
         card.hideMenu()
         #expect(card.fittingHeight == 61)
     }
 
-    @Test(arguments: keys) func theFrameHasTheCornersAndTheTailTheThemeAsksFor(_ key: String) {
-        let t = Themes.all.first { $0.key == key }!, dpr = 2.0
-        let img = Bitmap(Chrome.frame(t, size: CGSize(width: 340, height: 200), dpr: dpr, hue: t.hue)!)
-        #expect(img.width == 680 && img.height == 400)
-        #expect(img.alpha(170, 100, dpr: dpr) >= Int(0.9 * 255) - 2)  // glass: never more see-through than 10 %
-        #expect(img.alpha(1, 1, dpr: dpr) == 0)  // outside everything
-        if t.corner > 0 { #expect(img.alpha(7, 7, dpr: dpr) < 40) } else { #expect(img.alpha(8, 8, dpr: dpr) >= 200) }  // chamfered or rounded: the very corner is empty
-        // the frame's bottom edge is at y = 190.5; the tail is a notch under it, centred
-        #expect(img.alpha(170, 195, dpr: dpr) >= 200 && img.alpha(170, 198, dpr: dpr) > 0)
-        #expect(img.alpha(185, 195, dpr: dpr) < 40 && img.alpha(155, 195, dpr: dpr) < 40)
-        #expect(img.alpha(100, 197, dpr: dpr) == 0)  // below the frame, away from the tail
+    @Test func theGlassPaneSitsInsideTheMarginsAndShortOfTheBottomByTheGap() {
+        let card = makeCard()
+        fitted(card)
+        #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 340 - 12, height: card.frame.height - 6 - 9))
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")  // taller card: the pane follows
+        #expect(card.fittingHeight == 123)
+        card.setFrameSize(NSSize(width: 340, height: card.fittingHeight))
+        #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 328, height: 123 - 15))
+        #expect(card.glass.isFlipped)
     }
 
-    @Test(arguments: keys) func theFillIsTheThemesGlass(_ key: String) {
-        let t = Themes.all.first { $0.key == key }!
-        let p = Bitmap(Chrome.frame(t, size: CGSize(width: 340, height: 200), dpr: 1, hue: t.hue)!).at(170, 175)  // under the content, past the sheen
-        let want = Themes.rgba(t.bgBot)
-        #expect(abs(p.r - Int(want.r)) < 40 && abs(p.g - Int(want.g)) < 40 && abs(p.b - Int(want.b)) < 40)
-        let lightness = (max(p.r, p.g, p.b) + min(p.r, p.g, p.b)) / 2
-        #expect((lightness > 150) == !t.dark)
-    }
-
-    @Test func theFrameFollowsTheHueAndTheGlowStaysInsideItsMargin() {
-        let a = Bitmap(Chrome.frame(Themes.cyan, size: CGSize(width: 340, height: 200), dpr: 1, hue: 188)!)
-        let b = Bitmap(Chrome.frame(Themes.cyan, size: CGSize(width: 340, height: 200), dpr: 1, hue: 356)!)  // error: red
-        let arm = { (i: Bitmap) in i.at(20, 6) }  // on the top left corner bracket
-        #expect(arm(a).b > 200 && 200 > arm(a).r && arm(b).r > 200 && 200 > arm(b).b)
-        for img in [a, b] {  // nothing painted in the outermost pixels except the tail's dot
-            let edge = [0, 339].flatMap { x in (0..<190).map { img.alpha(Double(x), Double($0)) } } + (0..<340).map { img.alpha(Double($0), 0) }
-            #expect(edge.max() == 0)
+    @Test func theGlassIsTheFirstSubviewBehindEverythingTheCardDraws() {
+        let card = makeCard()
+        #expect(card.subviews.first === card.glass)
+        let others = card.subviews.dropFirst()
+        #expect(others.count == 8 && !others.contains { $0 === card.glass })
+        let order = { (v: NSView) in card.subviews.firstIndex { $0 === v }! }
+        for column in [card.chips, card.quote, card.statusRow, card.reply, card.footer, card.approval, card.caret] as [NSView] {
+            #expect(order(card.header) > order(column) && order(column) > order(card.glass))
         }
     }
 
-    @Test func theAuroraBorderEndsOnPinkForEveryMoodAndAnErrorStaysRed() {
-        let aurora = Themes.aurora
-        for (activity, emotion) in [(Activity.idle, "neutral"), (.talking, "happy"), (.idle, "proud"), (.idle, "playful"), (.idle, "concerned"), (.idle, "sad"), (.error, "neutral")] {
-            let hue = Themes.hueFor(aurora, activity: activity.rawValue, emotion: emotion, base: FaceParams.target(activity, emotion).hue)
-            let edge = Bitmap(Chrome.frame(aurora, size: CGSize(width: 340, height: 200), dpr: 1, hue: hue)!).hue(333, 130)  // the right edge, past the sweep's 90 %
-            #expect(angle(edge, 330) < 75, "\(emotion) at \(hue) ended on \(edge)")  // not yellow or green
+    @Test func theGlassIsTheSystemsGlassOnMacOS26() {
+        if #available(macOS 26, *) {
+            #expect(makeCard().glass.subviews.first is NSGlassEffectView)
+        } else {
+            #expect(makeCard().glass.subviews.first is NSVisualEffectView)
         }
+    }
+
+    @Test func theCardDrawsNothingItselfOnlyTheMarksOnTheGlass() {
+        let card = makeCard()
+        #expect(!card.isOpaque)
+        card.glass.isHidden = true
+        let img = Bitmap(snap(card))
+        #expect(img.alpha(5, 5) == 0 && img.alpha(339, 199) == 0)
+        #expect(img.alpha(170, 195) == 0 && img.alpha(6, 195) == 0 && img.alpha(333, 195) == 0)  // the gap strip under the pane
+        let header = NSRect(x: 6, y: 6, width: 328, height: 26)  // the only thing showing is the header
+        let outside = img.pixels.filter { !header.contains(NSPoint(x: Double($0.x) + 0.5, y: Double($0.y) + 0.5)) && $0.a > 0 }
+        #expect(outside.isEmpty, "\(outside.count) pixels outside the header, first at \(outside.first.map { "\($0.x),\($0.y)" } ?? "")")
+        card.header.isHidden = true
+        #expect(Bitmap(snap(card)).pixels.allSatisfy { $0.a == 0 })
     }
 }
 
-// MARK: the cache
+// MARK: the hue
 
 @Suite @MainActor struct CardCacheTests {
-    @Test func theFrameImageIsRebuiltOnlyWhenWhatItShowsChanges() {
-        let card = makeCard()
-        let first = card.frameImage(dpr: 2)!
-        #expect(card.frameImage(dpr: 2) === first && card.frameBuilds == 1)  // a hit
-        #expect(card.setHue(card.hue + 0.6) == false && card.frameImage(dpr: 2) === first)  // same 2 degree step
-        card.setTheme(card.theme)  // nothing new
-        #expect(card.frameImage(dpr: 2) === first)
-        #expect(card.setHue(card.hue + 40) == true)
-        let hueStep = card.frameImage(dpr: 2)!
-        #expect(hueStep !== first && card.frameImage(dpr: 2) === hueStep)
-        card.setTheme(Themes.matrix)
-        let themed = card.frameImage(dpr: 2)!
-        #expect(themed !== hueStep)
-        card.setFrameSize(NSSize(width: 340, height: 260))
-        let resized = card.frameImage(dpr: 2)!
-        #expect(resized !== themed && resized.size.height == 260)
-        card.setTheme(Themes.matrix.with { $0.glow = 0 })  // a user token: a new revision
-        #expect(card.frameImage(dpr: 2) !== resized)
-        let before = card.frameBuilds
-        _ = card.frameImage(dpr: 1)  // another pixel ratio is another image
-        #expect(card.frameBuilds == before + 1)
-    }
-
     @Test func hueIsFollowedInTwoDegreeStepsAndWraps() {
         let card = makeCard()
         card.setHue(359.2)
@@ -170,22 +173,62 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(Chrome.quantised(-1) == 0 || Chrome.quantised(-1) == 358)
     }
 
-    @Test func aHueChangeRestylesEveryWidgetInTheTree() {
+    @Test func aHueStepRepaintsAndASameStepDoesNot() {
+        let card = makeCard()
+        #expect(card.setHue(card.hue + 0.6) == false)  // the same 2 degree step
+        #expect(card.setHue(card.hue + 40) == true)
+        #expect(card.setHue(card.hue) == false)
+    }
+
+    @Test func aHueChangeRestylesEveryWidgetInTheTreeThatFollowsIt() {
         let card = makeCard()
         card.setHue(300)
         #expect(card.header.hue == 300 && card.quote.background.hue == 300 && card.statusRow.dots.hue == 300 && card.caret.hue == 300)
-        for l in [card.quote.label, card.quote.followUp, card.statusRow.label, card.approval.label, card.picker.label] { #expect(l.hue == 300) }
-        card.setTheme(Themes.aurora)
-        #expect(card.header.theme == Themes.aurora && card.caret.theme == Themes.aurora && card.statusRow.dots.theme == Themes.aurora)
-        #expect(card.picker.label.text == "THEME ▸ VIOLET AURORA")
-        #expect(card.header.hue == 300)  // the theme change leaves the live hue to the window
+        let themed = Themes.glass.with { $0.botName = "pixel"; $0.caretMs = 400 }
+        card.setTheme(themed)
+        #expect(card.header.theme == themed && card.caret.theme == themed && card.statusRow.dots.theme == themed && card.quote.background.theme == themed)
+        #expect(card.header.hue == 300 && card.hue == 300)  // the theme change leaves the live hue to the window
     }
 
-    @Test func theCardStartsInItsOwnThemeAndRestingHue() {
-        for t in Themes.all {
-            let card = makeCard(t)
-            #expect(card.header.theme.key == t.key && card.hue == Chrome.quantised(t.hue))
-        }
+    @Test func aHueChangeRepaintsTheMarksThatFollowIt() {
+        let card = makeCard()
+        card.setLights(link: .ok, mic: .ok)
+        card.setHue(40)
+        let before = Bitmap(snap(card.header, scale: 2)).bytes
+        card.setHue(250)
+        #expect(Bitmap(snap(card.header, scale: 2)).bytes != before)  // the orb is the accent
+    }
+
+    @Test(arguments: hues) func theCardStartsInItsOwnThemeAndRestingHue(_ hue: Double) {
+        let t = Themes.glass.with { $0.hue = hue }
+        let card = makeCard(t)
+        #expect(card.header.theme == t && card.hue == Chrome.quantised(hue) && card.header.hue == card.hue)
+    }
+
+    @Test func theGlassIsTintedWithTheAccentAndAHueStepChangesTheTint() {
+        guard #available(macOS 26, *) else { return }
+        let card = makeCard()
+        let pane = card.glass.subviews.first as! NSGlassEffectView
+        #expect(CardView.tint == 0.10)
+        #expect(same(pane.tintColor, Chrome.accent(card.theme, card.hue, CardView.tint)))  // from the first frame
+        #expect(card.setHue(card.hue + 40))
+        #expect(same(pane.tintColor, Chrome.accent(card.theme, card.hue, CardView.tint)))
+        card.setHue(40)
+        let a = components(pane.tintColor)
+        card.setHue(250)
+        #expect(components(pane.tintColor) != a && same(pane.tintColor, Chrome.accent(card.theme, 250, CardView.tint)))
+    }
+
+    @Test func aHueInTheSameStepLeavesTheTintAlone() {
+        guard #available(macOS 26, *) else { return }
+        let card = makeCard()
+        let pane = card.glass.subviews.first as! NSGlassEffectView
+        card.setHue(100)
+        card.glass.tint(.systemRed)  // a marker no hue step would produce
+        #expect(card.setHue(100.6) == false)
+        #expect(same(pane.tintColor, .systemRed))  // same step: untouched
+        #expect(card.setHue(104))
+        #expect(same(pane.tintColor, Chrome.accent(card.theme, 104, CardView.tint)))
     }
 }
 
@@ -259,8 +302,25 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(dot(.ok) > 200 && dot(.unknown) < 80 && dot(.off) < 80)  // empty in the middle
     }
 
+    @Test func theDotsOfTheLightsAreTheSystemsGreenOrangeRedAndTheAccentWhenListening() {
+        func dot(_ link: LedState, _ mic: LedState = .ok) -> (r: Int, g: Int, b: Int, a: Int) {
+            let card = makeCard(Themes.glass.with { $0.hue = 188 })
+            card.setLights(link: link, mic: mic)
+            let img = Bitmap(snap(card.header, scale: 2))
+            return img.straight(card.header.linkX + 7, 13, dpr: 2)
+        }
+        let ok = dot(.ok), warn = dot(.warn), bad = dot(.bad)
+        #expect(ok.a > 200 && ok.g > ok.r && ok.g > ok.b)  // green
+        #expect(warn.a > 200 && warn.r > warn.b + 60 && warn.g > warn.b)  // orange (lit at phase 0)
+        #expect(bad.a > 200 && bad.r > bad.g + 60 && bad.r > bad.b + 60)  // red
+        let card = makeCard(Themes.glass.with { $0.hue = 188 })
+        card.setLights(link: .ok, mic: .hot)
+        let listening = Bitmap(snap(card.header, scale: 2)).straight(card.header.micX + 7, 13, dpr: 2)
+        #expect(listening.a > 150 && listening.b > listening.r)  // the accent at 188 degrees is cyan, not green
+    }
+
     @Test func theHeaderShowsTheNameTheChipAndNothingOverlaps() {
-        let card = makeCard(Themes.cyan.with { $0.botName = "pixel"; $0.modelChip = "gpt-5" })
+        let card = makeCard(Themes.glass.with { $0.botName = "pixel"; $0.modelChip = "gpt-5" })
         let h = card.header
         #expect(h.chip != nil && h.chip!.maxX <= h.bounds.width - 12)
         #expect(h.chip!.minX > h.micX + h.mic.width)
@@ -268,20 +328,21 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theChipDefaultsToTheConfiguredModelAndABlankOneHidesIt() {
-        let card = makeCard(Themes.cyan, model: "claude-sonnet-5.5")
+        let card = makeCard(Themes.glass, model: "claude-sonnet-5.5")
         #expect(card.header.chipText == "sonnet-5.5" && card.header.chip != nil)
-        card.setTheme(Themes.cyan.with { $0.modelChip = "   " })
+        card.setTheme(Themes.glass.with { $0.modelChip = "   " })
         #expect(card.header.chip == nil)
-        card.setTheme(Themes.cyan)
+        card.setTheme(Themes.glass)
         #expect(card.header.chip != nil)
     }
 
     @Test(arguments: ["ROBO", "WWWWWWWWWWWW", "iiiiiiiiiiii"], [(LedState.ok, LedState.ok), (.bad, .hot), (.unknown, .off)])
     func theChipGivesWayBeforeTheNameAndTheLights(_ name: String, _ states: (LedState, LedState)) {
-        let card = makeCard(Themes.cyan.with { $0.botName = name; $0.modelChip = "a-very-long-model" })
+        let card = makeCard(Themes.glass.with { $0.botName = name; $0.modelChip = "a-very-long-model" })
         card.setLights(link: states.0, mic: states.1)
         let h = card.header
-        #expect(h.micX + h.mic.width <= h.bounds.width - 12)  // the lights always fit
+        #expect(h.micX + h.mic.width <= h.bounds.width - 12)  // the lights always fit: a long name is elided before they move
+        #expect(h.shownName == h.displayName || h.shownName.hasSuffix("…"))
         if let chip = h.chip {  // else hidden, which is the fallback
             #expect(chip.width >= 40 && chip.minX >= h.micX + h.mic.width && chip.maxX <= h.bounds.width - 12)
         }
@@ -291,7 +352,16 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         let img = Bitmap(snap(card.header, scale: 1))
         let row = (0..<328).map { img.at(Double($0), 13) }
-        #expect(Set(row.map { "\($0.r),\($0.g),\($0.b),\($0.a)" }).count > 8)  // diamond, name, lights, chip
+        #expect(Set(row.map { "\($0.r),\($0.g),\($0.b),\($0.a)" }).count > 8)  // orb, name, lights, chip
+    }
+
+    @Test func theHeaderHasAHairlineUnderItAndAChipCapsuleWithoutAStroke() {
+        let card = makeCard(Themes.glass.with { $0.modelChip = "gpt-5" })
+        let h = card.header, img = Bitmap(snap(h, scale: 2))
+        #expect(img.alpha(100, 25.5, dpr: 2) > 0 && img.alpha(2, 25.5, dpr: 2) == 0)  // from x = 8 to 8 short of the right edge
+        let chip = h.chip!
+        #expect(img.alpha(chip.minX + 1.5, chip.midY, dpr: 2) > 0)  // the capsule's fill, inside its end
+        #expect(img.alpha(chip.minX - 3, chip.midY, dpr: 2) == 0 && img.alpha(chip.midX, chip.minY - 2, dpr: 2) == 0)  // and nothing around it
     }
 }
 
@@ -311,36 +381,54 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     @Test func theQuoteIsAsTallAsItsTextUpToANinetyPixelCapThenScrolls() {
         let card = makeCard()
         card.setHeard("what is due", followUp: false)
-        #expect(card.quote.text.frame.height == 17 && card.quote.height == 12 + 2 + 17 + 7)  // one line of 12 px italic, plus 2
+        let one = card.quote.text
+        #expect(one.frame.height == CGFloat(Int(one.documentHeight)) + 2 && one.frame.height > 2)  // one line of 12 px italic, plus 2
+        #expect(card.quote.height == 12 + 2 + one.frame.height + 7)
+        let single = one.frame.height
+        card.setHeard("what is due this week in the lab and the other class, and when " + String(repeating: "and more ", count: 6), followUp: false)
+        #expect(card.quote.text.frame.height > single && card.quote.text.frame.height < CardView.heardMax)  // wraps to more lines: taller
         card.setHeard(String(repeating: "a very long question ", count: 40), followUp: false)
         #expect(card.quote.text.frame.height == CardView.heardMax && card.quote.text.overflows)
     }
 
     @Test func theQuotePaintsItsAccentBarAndAFadingHairline() {
-        let quote = QuoteView(theme: Themes.cyan)
+        let quote = QuoteView(theme: Themes.glass)
         quote.frame = NSRect(x: 0, y: 0, width: 300, height: 60)
         let img = Bitmap(snap(quote, scale: 2))
-        let bar = img.at(0.5, 10, dpr: 2), want = Themes.accent(Themes.cyan, Themes.cyan.hue)  // the live accent
+        let bar = img.at(0.5, 10, dpr: 2), want = Themes.accent(Themes.glass, Themes.glass.hue)  // the live accent
         #expect(abs(bar.r - Int(want.r)) < 30 && abs(bar.b - Int(want.b)) < 30)
-        #expect(img.alpha(150, 59.5, dpr: 2) > 0)  // the hairline at the foot
-        #expect(img.alpha(290, 59.5, dpr: 2) < 10)  // fades out to the right
+        // the hairline at the foot is the system's separator: painted at the start, fading out to the right
+        let near = img.alpha(30, 59.5, dpr: 2), middle = img.alpha(150, 59.5, dpr: 2), far = img.alpha(290, 59.5, dpr: 2)
+        #expect(near > 0 && middle > 0 && near > middle && middle > far && far < 10)
     }
 
-    @Test func aMicroLabelPaintsItselfInTheLabelColour() {
-        let label = MicroLabel("YOU ▸", theme: Themes.cyan)
+    @Test func theQuoteBarFollowsTheHue() {
+        let quote = QuoteView(theme: Themes.glass)
+        quote.frame = NSRect(x: 0, y: 0, width: 300, height: 60)
+        for hue in [10.0, 120, 250] {
+            quote.hue = hue
+            let bar = Bitmap(snap(quote, scale: 2)).at(0.5, 10, dpr: 2), want = Themes.accent(Themes.glass, hue)
+            #expect(abs(bar.r - Int(want.r)) < 30 && abs(bar.g - Int(want.g)) < 30 && abs(bar.b - Int(want.b)) < 30, "hue \(hue)")
+        }
+    }
+
+    @Test func aMicroLabelPaintsItsTextInTheSystemInkOfItsTone() {
+        let label = MicroLabel("YOU ▸")
         #expect(label.text == "YOU ▸")
         label.text = "searching the web…"
         #expect(label.fitting.width > 60)
-        label.frame = NSRect(origin: .zero, size: label.fitting)
-        let img = Bitmap(snap(label, scale: 2)), want = Double(NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hueComponent)
-        _ = want
-        let target = Double(Themes.labelColour(Themes.cyan, Themes.cyan.hue).ns.hueComponent) * 360
-        let found = (0..<img.width).contains { x in (0..<img.height).contains { y in img.at(Double(x), Double(y)).a > 250 && angle(img.hue(Double(x), Double(y)), target) < 12 } }
-        #expect(found)
-        let warn = MicroLabel("APPROVAL ▸", theme: Themes.cyan, tone: .warn)
-        warn.frame = NSRect(origin: .zero, size: warn.fitting)
-        let w = Bitmap(snap(warn, scale: 2)), warnHue = Double(Chrome.color(Themes.cyan.ledWarn).hueComponent) * 360
-        #expect((0..<w.width).contains { x in (0..<w.height).contains { y in w.at(Double(x), Double(y)).a > 250 && angle(w.hue(Double(x), Double(y)), warnHue) < 12 } })
+        func painted(_ l: MicroLabel) -> [(x: Int, y: Int, r: Int, g: Int, b: Int, a: Int)] {
+            l.frame = NSRect(origin: .zero, size: l.fitting)
+            return Bitmap(snap(l, scale: 2)).pixels.filter { $0.a > 20 }  // the dim tone is the system's tertiary label: about 25 % ink
+        }
+        let lab = painted(label), warn = painted(MicroLabel("APPROVAL ▸", tone: .warn)), dim = painted(MicroLabel("↳ FOLLOW-UP", tone: .dim))
+        #expect(!lab.isEmpty && !warn.isEmpty && !dim.isEmpty)  // each tone paints visible pixels
+        #expect(lab.allSatisfy { abs($0.r - $0.b) < 20 })  // the secondary label is a grey, not the accent
+        #expect(warn.contains { $0.r > $0.b + 60 && $0.g > $0.b })  // the warning orange
+        #expect(dim.allSatisfy { abs($0.r - $0.b) < 20 })
+        let a = Bitmap(snap(MicroLabel("YOU ▸", tone: .lab).withFrame(), scale: 2)).bytes, b = Bitmap(snap(MicroLabel("YOU ▸", tone: .warn).withFrame(), scale: 2)).bytes
+        let c = Bitmap(snap(MicroLabel("YOU ▸", tone: .dim).withFrame(), scale: 2)).bytes
+        #expect(a != b && a != c && b != c)  // the three inks differ
     }
 
     @Test func theStatusRowShowsTheDotsAndTheLabelOnlyWhileTheyAreOn() {
@@ -350,15 +438,20 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         card.setStatusRow(typing: false, label: "")
         #expect(fits == 0 && card.statusRow.isHidden)
         card.setStatusRow(typing: true, label: "searching the web…")
-        #expect(fits == 1 && !card.statusRow.isHidden && card.statusRow.height == 16)
+        #expect(fits == 1 && !card.statusRow.isHidden && card.statusRow.height == max(16, card.statusRow.label.fitting.height))
         card.setStatusRow(typing: true, label: "reading a page…")  // the same pair is no change
         #expect(fits == 1 && card.statusRow.label.text == "reading a page…")
         card.setStatusRow(typing: false, label: "listening")
-        #expect(fits == 2 && card.statusRow.dots.isHidden && !card.statusRow.label.isHidden && card.statusRow.height == 15)
+        #expect(fits == 2 && card.statusRow.dots.isHidden && !card.statusRow.label.isHidden && card.statusRow.height == card.statusRow.label.fitting.height)
         card.setStatusRow(typing: false, label: "")
         #expect(fits == 3 && card.statusRow.isHidden)
         #expect(card.fittingHeight == 61)
     }
+}
+
+private extension MicroLabel {
+    /// This label sized to its text, for a snapshot.
+    func withFrame() -> MicroLabel { frame = NSRect(origin: .zero, size: fitting); return self }
 }
 
 // MARK: the typing dots
@@ -370,24 +463,29 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theDotsHopInTheAccentColourWithoutAPill() {
-        let dots = TypingDotsView(theme: Themes.cyan)
+        let dots = TypingDotsView(theme: Themes.glass)
         dots.clock = { 0 }
         #expect(dots.frame.size == NSSize(width: 32, height: 16))
-        let img = Bitmap(snap(dots, scale: 2)), want = Themes.accent(Themes.cyan, Themes.cyan.hue)
+        let img = Bitmap(snap(dots, scale: 2)), want = Themes.accent(Themes.glass, Themes.glass.hue)
         #expect(img.alpha(31, 8, dpr: 2) == 0 && img.alpha(0, 15, dpr: 2) == 0)  // no pill
         let first = img.straight(5, 8, dpr: 2)  // the first dot's column: always inside its dot
         #expect(first.a > 100 && first.b > first.r && abs(first.g - Int(want.g)) < 40)
     }
 
-    @Test(arguments: keys) func theDotsTakeTheThemeAndTheLiveHue(_ key: String) {
-        let t = Themes.all.first { $0.key == key }!
-        let dots = TypingDotsView(theme: t)
+    @Test(arguments: hues) func theDotsTakeTheLiveHue(_ hue: Double) {
+        let dots = TypingDotsView(theme: Themes.glass)
         dots.clock = { 0 }
-        dots.theme = t; dots.hue = 356  // an error: red whatever the theme
+        dots.hue = hue
+        let p = Bitmap(snap(dots, scale: 2)).straight(5, 8, dpr: 2), want = Themes.accent(Themes.glass, hue)
+        #expect(p.a > 100 && abs(p.r - Int(want.r)) < 40 && abs(p.g - Int(want.g)) < 40 && abs(p.b - Int(want.b)) < 40, "hue \(hue): \(p)")
+    }
+
+    @Test func anErrorHueTurnsTheDotsRed() {
+        let dots = TypingDotsView(theme: Themes.glass)
+        dots.clock = { 0 }
+        dots.hue = Themes.errorHue
         let p = Bitmap(snap(dots, scale: 2)).at(5, 8, dpr: 2)
         #expect(p.r > p.g && p.r > p.b)
-        dots.hue = t.hue
-        #expect(dots.hue == t.hue)
     }
 
     @Test func theDotsOwnATimerOnlyWhileTheyAreShown() {
@@ -410,8 +508,8 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
 // MARK: the caret
 
 @Suite @MainActor struct CardCaretTests {
-    @Test(arguments: keys) func theCaretSitsInsideTheViewportAtTheEndOfTheText(_ key: String) {
-        let t = Themes.all.first { $0.key == key }!
+    @Test(arguments: [12, 14, 16, 18]) func theCaretSitsInsideTheViewportAtTheEndOfTheText(_ textPx: Int) {
+        let t = Themes.glass.with { $0.textPx = textPx }
         let card = makeCard(t)
         card.setReply(markdown: String(repeating: "Friday has the **lab report** due and a meeting with the professor. ", count: 6), hiddenTail: 0)
         card.reply.scrollValue = card.reply.scrollMaximum
@@ -430,12 +528,12 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     @Test func theCaretIsKeptInsideEvenWhenTheLineIsNotVisibleYet() {
         let size = CGSize(width: 302, height: 120)
         for line in [CGRect(x: 5000, y: 9000, width: 1, height: 16), CGRect(x: -50, y: -90, width: 1, height: 16), CGRect(x: 299, y: 119, width: 1, height: 16)] {
-            #expect(CGRect(origin: .zero, size: size).contains(CaretView.box(for: line, theme: Themes.cyan, in: size)), "\(line)")
+            #expect(CGRect(origin: .zero, size: size).contains(CaretView.box(for: line, theme: Themes.glass, in: size)), "\(line)")
         }
     }
 
     @Test(arguments: ["block", "bar", "under"]) func theCaretIsABlockABarOrAnUnderline(_ style: String) {
-        let t = Themes.cyan.with { $0.caret = style }
+        let t = Themes.glass.with { $0.caret = style }
         let box = CaretView.box(for: CGRect(x: 10, y: 20, width: 1, height: 17), theme: t, in: CGSize(width: 302, height: 120))
         let caret = CaretView(theme: t)
         caret.frame = CGRect(origin: .zero, size: box.size)
@@ -449,7 +547,15 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(marks(caret) == [false, false, false])
     }
 
-    @Test func theCaretTakesNoClicks() { #expect(CaretView(theme: Themes.cyan).hitTest(NSPoint(x: 1, y: 1)) == nil) }
+    @Test(arguments: hues) func theCaretIsPaintedInTheAccentOfTheLiveHue(_ hue: Double) {
+        let caret = CaretView(theme: Themes.glass)
+        caret.frame = CGRect(x: 0, y: 0, width: 10, height: 18)
+        caret.hue = hue
+        let p = Bitmap(snap(caret)).straight(5, 9), want = Themes.accent(Themes.glass, hue)
+        #expect(p.a > 200 && abs(p.r - Int(want.r)) < 20 && abs(p.g - Int(want.g)) < 20 && abs(p.b - Int(want.b)) < 20, "hue \(hue): \(p)")
+    }
+
+    @Test func theCaretTakesNoClicks() { #expect(CaretView(theme: Themes.glass).hitTest(NSPoint(x: 1, y: 1)) == nil) }
 
     @Test func theCaretShowsAndBlinksOnRequest() {
         let card = makeCard()
@@ -472,101 +578,61 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 }
 
-// MARK: the picker and the menu
+// MARK: the menu
 
 @Suite @MainActor struct CardMenuTests {
-    @Test func thePickerHasFiveSwatchesAndSaysWhichThemeIsCurrent() {
-        let card = makeCard(Themes.matrix)
-        #expect(card.picker.swatches.map(\.key) == keys && keys.count == 5)
-        #expect(card.picker.label.text == "THEME ▸ MATRIX")
-        #expect(card.picker.swatches.map(\.view.current) == keys.map { $0 == "matrix" })
-        card.setTheme(Themes.amber)
-        #expect(card.picker.label.text == "THEME ▸ AMBER CRT")
-        #expect(card.picker.swatches.filter(\.view.current).map(\.key) == ["amber"])
-        #expect(card.picker.subviews.count == 6)  // the label and one swatch each
-    }
-
-    @Test func aClickOnASwatchSaysWhichThemeWasPicked() {
-        let card = makeCard()
-        var got: [String] = []
-        card.onPickTheme = { got.append($0) }
-        card.picker.swatches.first { $0.key == "aurora" }!.view.onClick?()
-        card.picker.swatches.first { $0.key == "daylight" }!.view.onClick?()
-        #expect(got == ["aurora", "daylight"])
-    }
-
-    @Test func swatchesAreMiniatureCardsInTheirOwnColours() {
-        var shots: [[UInt8]] = []
-        for t in Themes.all {
-            let s = SwatchView(t)
-            #expect(s.frame.size == NSSize(width: 54, height: 34) && s.toolTip == t.label && s.accessibilityLabel() == t.label)
-            let img = Bitmap(snap(s))
-            shots.append(img.bytes)
-            let px = img.at(45, 8), want = Themes.rgba(t.bgTop)  // the card's own glass, top right
-            #expect(abs(px.r - Int(want.r)) < 30 && abs(px.b - Int(want.b)) < 30, "\(t.key)")
-            let dot = img.at(54 - 10, 34 - 9), a = Themes.accent(t, t.hue)  // the accent dot at the bottom right
-            #expect(abs(dot.r - Int(a.r)) < 40 && abs(dot.g - Int(a.g)) < 40, "\(t.key)")
-        }
-        #expect(Set(shots).count == 5)
-    }
-
-    @Test func theCurrentSwatchIsRinged() {
-        let s = SwatchView(Themes.matrix)
-        let plain = Bitmap(snap(s))
-        s.current = true
-        let ringed = Bitmap(snap(s))
-        #expect(plain.bytes != ringed.bytes)
-        #expect(ringed.alpha(2, 17) > 200 && ringed.at(2, 17).g > plain.at(2, 17).g)  // the stroke on the left edge
-    }
-
-    @Test func theMenuIsThreeByTwoAndWithoutAWatcherThemeAndQuitTakeThreeEach() {
+    @Test func theMenuIsThreeByTwoAndWithoutAWatcherQuitTakesTheWholeSecondRow() {
         func grid(_ card: CardView) -> [String: [Int]] {
             Dictionary(uniqueKeysWithValues: card.chips.cells.map { ($0.0.title.split(separator: " ").last.map(String.init)!, [$0.1, $0.2, $0.3]) })
         }
-        #expect(grid(makeCard()) == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Theme": [1, 0, 3], "Quit": [1, 3, 3]])  // row, column, columns
+        #expect(makeCard().chips.buttons.count == 5 && makeCard().chips.subviews.count == 5)  // digest, type, stay, watch, quit
+        #expect(grid(makeCard()) == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Quit": [1, 0, 6]])  // row, column, columns
         let watched = grid(makeCard(watch: true))
-        #expect(watched["Watch"] == [1, 0, 2] && watched["Theme"] == [1, 2, 2] && watched["Quit"] == [1, 4, 2] && watched.count == 6)
+        #expect(watched == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Watch": [1, 0, 3], "Quit": [1, 3, 3]])
     }
 
     @Test func theMenuChipsFillTheColumnInSixEqualColumns() {
         let card = makeCard(watch: true)
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        let rects = card.chips.buttons.map { $0.frame }
-        #expect(rects.map(\.width) == [97, 96, 97, 97, 96, 97] && rects.map(\.minY) == [0, 0, 0, 34, 34, 34])
-        #expect(rects[0].minX == 0 && rects[2].maxX == 302 && rects[1].minX - rects[0].maxX == 6)
+        let rects = card.chips.buttons.map { $0.frame }  // digest, type, stay, watch, quit
+        #expect(rects.map(\.width) == [97, 96, 97, 148, 148] && rects.map(\.minY) == [0, 0, 0, 34, 34])  // six columns of 45 1/3 and a gap of 6, edges rounded
+        #expect(rects.map(\.height) == [28, 28, 28, 28, 28] && card.chips.height == 62 && card.chips.frame.height == 62)
+        #expect(rects[0].minX == 0 && rects[2].maxX == 302 && rects[1].minX - rects[0].maxX == 6 && rects[2].minX - rects[1].maxX == 6)
+        #expect(rects[3].minX == 0 && rects[4].maxX == 302 && rects[4].minX - rects[3].maxX == 6)  // watch | quit, three columns each
         let bare = makeCard()
         bare.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        #expect(bare.chips.watch.isHidden && bare.chips.themer.frame.width == 148 && bare.chips.quit.frame.maxX == 302)
+        #expect(bare.chips.watch.isHidden && bare.chips.quit.frame == NSRect(x: 0, y: 34, width: 302, height: 28))  // quit alone across all six
     }
 
-    @Test func theThemeChipOpensTheSwatchesAndTheMenuStaysOpen() {
-        let card = makeCard()
-        var themed = 0
-        card.onTheme = { themed += 1 }
+    @Test(arguments: [true, false]) func theMenuButtonsStayInsideTheColumnAndNeverOverlap(_ watch: Bool) {
+        let card = makeCard(watch: watch)
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        #expect(card.picker.isHidden && card.chips.themer.title == "🎨 Theme")
-        card.chips.themer.onClick?()
-        #expect(!card.picker.isHidden && !card.chips.isHidden && themed == 1)  // the menu did not close
-        #expect(card.bounds.contains(card.picker.frame.offsetBy(dx: 0, dy: 0)) || card.fittingHeight >= card.picker.frame.maxY + 19)
-        #expect(card.picker.label.text == "THEME ▸ CYAN HUD")
-        card.chips.themer.onClick?()
-        #expect(card.picker.isHidden)
-        card.chips.themer.onClick?()
-        card.hideMenu()  // closing the menu takes the swatches with it
-        #expect(card.picker.isHidden && card.chips.isHidden)
+        let shown = card.chips.buttons.filter { !$0.isHidden }
+        #expect(shown.count == (watch ? 5 : 4))
+        let column = NSRect(x: 0, y: 0, width: 302, height: 62)
+        for (i, a) in shown.enumerated() {
+            #expect(column.contains(a.frame), "\(a.title)")
+            for b in shown[(i + 1)...] { #expect(!a.frame.intersects(b.frame), "\(a.title) over \(b.title)") }
+        }
+        #expect(card.chips.frame.width == 302 && card.chips.subviews.count == 5)
     }
 
     @Test func aMenuEntryHidesTheMenuBeforeItIsReported() {
-        let card = makeCard()
+        let card = makeCard(watch: true)
         var got: [(MenuAction, Bool)] = []
-        card.onMenu = { got.append(($0, card.chips.isHidden && card.picker.isHidden)) }
+        card.onMenu = { got.append(($0, card.chips.isHidden)) }
         card.showMenu(stay: "🧭 Wander", watch: "▶ Watch")
-        #expect(card.chips.stay.title == "🧭 Wander")
-        card.togglePicker()
+        #expect(card.chips.stay.title == "🧭 Wander" && card.chips.watch.title == "▶ Watch")
         card.chips.stay.onClick?()
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        card.chips.digest.onClick?(); card.chips.type.onClick?(); card.chips.quit.onClick?()
-        #expect(got.map(\.0) == [.stay, .digest, .type, .quit] && got.allSatisfy(\.1))
+        card.chips.digest.onClick?()
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
+        card.chips.type.onClick?()
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
+        card.chips.watch.onClick?()
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
+        card.chips.quit.onClick?()
+        #expect(got.map(\.0) == [.stay, .digest, .type, .watch, .quit] && got.allSatisfy(\.1))
     }
 
     @Test func buttonsAreButtonsForAccessibilityAndClickWhenReleasedInside() {
@@ -576,6 +642,31 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         card.chips.digest.onClick = { clicks += 1 }
         _ = card.chips.digest.accessibilityPerformPress()
         #expect(clicks == 1)
+
+        let button = ButtonView("Allow", kind: .allow)
+        button.frame = NSRect(x: 0, y: 0, width: 100, height: 28)
+        button.onClick = { clicks += 1 }
+        func release(at p: NSPoint) {
+            button.mouseUp(with: NSEvent.mouseEvent(with: .leftMouseUp, location: p, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!)
+        }
+        release(at: NSPoint(x: 50, y: 14))
+        #expect(clicks == 2)  // released inside
+        release(at: NSPoint(x: 400, y: 14))
+        #expect(clicks == 2)  // released outside: no click
+    }
+
+    @Test func theButtonKindsPaintAWashAnAccentFillAndAnOutline() {
+        func shot(_ kind: ButtonView.Kind) -> Bitmap {
+            let b = ButtonView("OK", kind: kind)
+            b.frame = NSRect(x: 0, y: 0, width: 100, height: 28)
+            return Bitmap(snap(b))
+        }
+        let plain = shot(.plain), allow = shot(.allow), deny = shot(.deny)
+        #expect(plain.alpha(14, 14) > 5 && plain.alpha(14, 14) < 60)  // a quiet wash
+        #expect(allow.alpha(14, 14) > 200)  // the system accent
+        #expect(deny.alpha(14, 14) == 0 && deny.alpha(50, 0) > 0)  // outline only: empty inside, a hairline on the edge
+        #expect(plain.alpha(1, 1) == 0)  // capsule: the corner is empty
+        #expect(plain.bytes != allow.bytes && allow.bytes != deny.bytes)
     }
 
     @Test func theFitCallbackWrapsEveryChangeOfHeight() {
@@ -583,12 +674,11 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         var fits = 0, heights: [CGFloat] = []
         card.fit = { change in fits += 1; change(); heights.append(card.fittingHeight) }
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        card.togglePicker()
         card.setApproval("ok?")
         card.setApproval(nil)
         card.hideMenu()
         card.hideMenu()  // already hidden: nothing to fit
-        #expect(fits == 5 && heights.first == 42 + 62 + 19 && heights.last == 61)
+        #expect(fits == 4 && heights.first == 42 + 62 + 19 && heights.last == 61)
     }
 }
 
@@ -623,7 +713,8 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         card.setFooter("📓 In Obsidian: Plan")
         #expect(card.footer.isHidden && card.fittingHeight == 61)
         card.showFooter()
-        #expect(!card.footer.isHidden && card.footer.text == "📓 In Obsidian: Plan" && card.fittingHeight >= 81)
+        #expect(!card.footer.isHidden && card.footer.text == "📓 In Obsidian: Plan" && card.fittingHeight == 42 + card.footer.height(for: 302) + 19)
+        #expect(card.fittingHeight >= 81)
         card.clearReply()
         #expect(card.footer.isHidden && card.footer.text == "")
         card.setFooter("")
@@ -636,6 +727,22 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         card.setFooter("one\ntwo\nthree")
         card.showFooter()
         #expect(card.footer.frame.height == card.footer.height(for: 302) && card.footer.height(for: 302) >= 7 + 3 * 13)
+    }
+
+    @Test func theApprovalAndFooterPaintOnlyTheirOwnMarksOnTheGlass() {
+        let approval = ApprovalView()
+        approval.well.text = "Run: ls -la"
+        approval.frame = NSRect(x: 0, y: 0, width: 302, height: approval.height(for: 302))
+        approval.place()
+        let img = Bitmap(snap(approval))
+        #expect(img.alpha(0.5, approval.well.frame.midY) > 200)  // the well's orange bar
+        #expect(img.at(0.5, approval.well.frame.midY).r > img.at(0.5, approval.well.frame.midY).b)
+        #expect(img.alpha(150, approval.well.frame.minY + 2) > 0)  // and the wash inside the well
+        let footer = WrapLabelView(.footer)
+        footer.text = "📓 In Obsidian: Plan"
+        footer.frame = NSRect(x: 0, y: 0, width: 302, height: footer.height(for: 302))
+        let f = Bitmap(snap(footer))
+        #expect(f.alpha(150, 0) > 0 && f.alpha(150, 2) == 0)  // the hairline above the text
     }
 }
 
@@ -714,9 +821,9 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
             var sizes = Array(stride(from: 1, through: 400, by: 7)); sizes += sizes.reversed()  // growing, then shrinking
             for n in sizes {
                 let md = words.prefix(n).joined(separator: " ")
-                kept.setContent(Markdown.attributed(md, theme: Themes.cyan))
+                kept.setContent(Markdown.attributed(md, theme: Themes.glass))
                 let fresh = TextBox(width: 302)
-                fresh.setContent(Markdown.attributed(md, theme: Themes.cyan))
+                fresh.setContent(Markdown.attributed(md, theme: Themes.glass))
                 let a = kept.wantedHeight(cap: cap), b = fresh.wantedHeight(cap: cap)
                 #expect(a == b && kept.overflows == fresh.overflows, "\(n) words, cap \(cap): kept \(a) \(kept.overflows), fresh \(b) \(fresh.overflows)")
             }
@@ -762,7 +869,7 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
         #expect(card.reply.string == "")  // what was waiting belongs to the old exchange
         card.setReply(markdown: "fresh", hiddenTail: 0)
-        card.setTheme(Themes.matrix)  // the window renders again at once in the new look
+        card.setTheme(Themes.glass.with { $0.textPx = 16 })  // the window renders again at once in the new look
         card.setReply(markdown: "fresh again", hiddenTail: 0)
         #expect(card.reply.string == "fresh again")
     }
@@ -787,12 +894,14 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     @Test func aReplyInTheCardPaintsItsTextAndItsCodeBox() {
         let card = makeCard()
         card.setReply(markdown: "plain\n\n```\ncode\n```", hiddenTail: 0)
-        card.setFrameSize(NSSize(width: 340, height: card.fittingHeight))
-        card.relayout()
+        fitted(card)
+        card.glass.isHidden = true  // only what the card itself draws
         let img = Bitmap(snap(card, scale: 1))
-        let box = img.at(160, card.reply.frame.maxY - 8)  // inside the code box, right of the text
-        let want = Themes.rgba(card.theme.codeBg)
-        #expect(abs(box.r - Int(want.r)) < 12 && abs(box.b - Int(want.b)) < 12)
+        let inBox = img.alpha(160, card.reply.frame.maxY - 8)  // inside the code box, right of the text
+        #expect(inBox > 5 && inBox < 60)  // the box is a quiet wash of the label colour (7 %), whichever appearance
+        #expect(img.alpha(160, card.reply.frame.minY + 8) == 0)  // the first line, right of its text: nothing
+        let text = img.pixels.filter { $0.a > 200 && $0.y < Int(card.reply.frame.minY) + 20 && $0.x >= 19 && $0.x < 60 }
+        #expect(!text.isEmpty)  // and the letters
     }
 
     @Test func aClickOnTheReplySkipsOnlyWhenItIsAPlainClick() {
@@ -847,7 +956,7 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
 
     /// CLAUDE.md: a typing tick costs about 3 ms in Qt (`setMarkdown`), 30 times a second for a few seconds.
     @Test func aTypingStepIsCheap() {
-        let card = makeCard(Themes.matrix)
+        let card = makeCard()
         let reply = String(repeating: "## This week\n\n- *Linear Algebra* set - due Thursday\n- Physics lab report\n\nThe chain rule: `d/dx f(g(x))`.\n\n```python\ndef chain(f, g, x):\n    return f(g(x))\n```\n\nSee [the notes](https://example.com/notes).\n\n", count: 7)
         #expect(reply.count > 1400 && reply.count < 1700)
         var best = 1.0
@@ -861,40 +970,4 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func isUnderMouseIsFalseWithoutAWindow() { #expect(!makeCard().isUnderMouse) }
-}
-
-// MARK: a live theme switch is the same as a fresh build
-
-@Suite @MainActor struct CardThemeSwitchTests {
-    private let md = "## Plan\n\nYou have **three** things due: *lab*, `CS 240` and [the notes](https://x.io).\n\n- one\n- two\n\n```python\nx = 1\n```\n\nDone."
-
-    private func filled(_ t: Theme) -> CardView {
-        let card = makeCard(t)
-        card.setHeard("What's due this week?", followUp: true)
-        card.setFooter("📓 In Obsidian: Plan")
-        card.setReply(markdown: md, hiddenTail: 0)
-        card.showFooter()
-        card.setLights(link: .ok, mic: .ok)
-        card.setHue(t.hue)
-        card.setFrameSize(NSSize(width: 340, height: card.fittingHeight))
-        card.relayout()
-        return card
-    }
-
-    @Test(arguments: [("cyan", "matrix"), ("aurora", "daylight"), ("daylight", "amber")])
-    func switchingThemeLivePaintsWhatAFreshBuildPaints(_ src: String, _ dst: String) {
-        let from = Themes.all.first { $0.key == src }!, to = Themes.all.first { $0.key == dst }!
-        let live = filled(from)
-        live.setTheme(to)
-        live.setHue(to.hue)  // what the window does as the face settles on the new theme's hue
-        live.setReply(markdown: md, hiddenTail: 0)  // and renders the reply again
-        live.setFrameSize(NSSize(width: 340, height: live.fittingHeight))
-        live.relayout()
-        let fresh = filled(to)
-        #expect(live.frame.size == fresh.frame.size)
-        let a = Bitmap(snap(live, scale: 2)).bytes, b = Bitmap(snap(fresh, scale: 2)).bytes
-        #expect(a.count == b.count)
-        let mean = zip(a, b).reduce(0.0) { $0 + abs(Double($1.0) - Double($1.1)) } / Double(a.count)
-        #expect(mean < 0.5, "\(src) -> \(dst): \(mean)")  // of 255
-    }
 }

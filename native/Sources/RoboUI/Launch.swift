@@ -64,14 +64,16 @@ public enum RoboApp {
         let app = NSApplication.shared
         app.mainMenu = mainMenu()
         app.setActivationPolicy(.accessory)  // no Dock icon and no menu bar: a pet, not a program
+        let hotkey = Hotkey()  // Ctrl+Q wakes robo; if the system refuses it, robo wakes by name as before
+        let byKey = !dev.noVoice && hotkey.register()
         let window = RoboWindow(
             hermes: HermesClient(baseURL: connection.url, key: connection.key),
             digest: DigestClock(path: dataDir.appendingPathComponent("robo_state.json")),
             persona: profile.personaStamp(),
             listener: dev.noVoice ? nil : { onWake, onText, onNote in
-                Listener(onWake: onWake, onText: onText, onNote: onNote)
+                Listener(onWake: onWake, onText: onText, onNote: onNote, nameWake: !byKey)
             },
-            watcher: watcher, health: connection.url, machine: Machine(home: profile.home))
+            watcher: watcher, health: connection.url, hotkey: byKey ? hotkey : nil, machine: Machine(home: profile.home))
         let delegate = RoboAppDelegate(window)
         app.delegate = delegate
         window.show()
