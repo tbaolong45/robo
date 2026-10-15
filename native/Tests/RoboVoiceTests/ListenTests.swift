@@ -214,20 +214,20 @@ final class Log<T> {
 }
 
 func listener(_ events: Events, mic: @escaping () throws -> AudioSource, stt: @escaping () throws -> Transcribe,
-              quick: (() throws -> Transcribe)? = nil, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime })
-    -> Listener {
+              quick: (() throws -> Transcribe)? = nil, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
+              nameWake: Bool = true) -> Listener {
     Listener(onWake: { events.put(.wake) }, onText: { events.put(.text($0)) }, onNote: { events.put(.note($0)) },
-             mic: mic, transcriber: stt, quick: quick, clock: clock)
+             mic: mic, transcriber: stt, quick: quick, clock: clock, nameWake: nameWake)
 }
 
 /// A started listener on `mic` and `stt`; `noStall` for tests that jump a hand-driven clock while no
 /// frames arrive (which looks like a dead mic).
-func start(_ mic: FakeMic, _ stt: FakeStt, clock: Clock? = nil, quick: FakeStt? = nil, noStall: Bool = false)
-    -> (Listener, Events) {
+func start(_ mic: FakeMic, _ stt: FakeStt, clock: Clock? = nil, quick: FakeStt? = nil, noStall: Bool = false,
+           nameWake: Bool = true) -> (Listener, Events) {
     let events = Events()
     let quick = quick ?? FakeStt()
     let lis = listener(events, mic: { mic }, stt: { stt.callAsFunction }, quick: { quick.callAsFunction },
-                       clock: clock.map { c in { c.t } } ?? { ProcessInfo.processInfo.systemUptime })
+                       clock: clock.map { c in { c.t } } ?? { ProcessInfo.processInfo.systemUptime }, nameWake: nameWake)
     if noStall { lis.micStallS = 1e9 }
     #expect(lis.start())
     return (lis, events)
@@ -306,6 +306,60 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
     clock.t = Listen.noSpeechS + 1
     #expect(events.get() == .text(""))
     lis.stop()
+}
+
+// MARK: - Push to talk
+
+@Test func holdingTheKeyRecordsThroughPausesAndNeedsNoName() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let stt = FakeStt("what time is it in Tokyo")
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.hold()
+    clock.t = 5  // a real press, not a tap
+    mic.feed(frames(0, 8) + frames(8, 14, speech) + frames(14, 60) + frames(60, 66, speech))  // a 3.7 s pause inside
+    drained(mic)
+    #expect(events.isEmpty)  // still held: nothing is cut off at a pause
+    lis.release()
+    #expect(events.get() == .text("what time is it in Tokyo"))
+    lis.stop()
+    #expect(tags(stt.heard[0]).first == 0 && tags(stt.heard[0]).contains(65))  // the whole press, pause included
+}
+
+@Test func aPressWithNothingSaidAnswersWithNothing() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let stt = FakeStt()
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.hold()
+    clock.t = 5
+    mic.feed(frames(0, 20))
+    drained(mic)
+    lis.release()
+    #expect(events.get() == .text(""))
+    lis.stop()
+    #expect(stt.heard.isEmpty)
+}
+
+@Test func aTapIsAClickAndTheNextSentenceIsTaken() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let (lis, events) = start(mic, FakeStt("what's due"), clock: clock, noStall: true, nameWake: false)
+    lis.hold()
+    clock.t = Listen.tapS / 2  // let go at once
+    lis.release()
+    mic.feed(sentence(0))
+    #expect([events.get(), events.get()] == [.wake, .text("what's due")])
+    lis.stop()
+}
+
+@Test func withTheKeyOnSpeechNobodyAskedForIsNotTranscribed() {
+    let mic = FakeMic(sentence(0) + sentence(30))
+    let stt = FakeStt("Robo, what time is it?")
+    let (lis, events) = start(mic, stt, nameWake: false)
+    drained(mic)
+    lis.stop()
+    #expect(events.isEmpty && stt.heard.isEmpty)
 }
 
 @Test func bareNameThenTheRequest() {
