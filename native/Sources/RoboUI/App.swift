@@ -492,12 +492,14 @@ extension RoboWindow {
         }
     }
 
-    /// Show the shade: the glass and the ink at its level (the system's own look while the backdrop is not known), easing at
+    /// Show the shade: the glass and the ink at its level (a light card in light mode and a dark one in dark mode while the
+    /// backdrop is not known: the ink is always explicit, so it can never be black on a glass that came out dark), easing at
     /// 30 Hz while it moves. Reduce Motion goes straight there.
     func applyShade() {
         guard shade.known else {
             stopShading()
-            card.setShade(level: nil, ink: nil)
+            let level = machine.systemDark() ? 0.0 : 1.0
+            card.setShade(level: level, ink: level)
             return
         }
         if machine.reduceMotion() { shade.snap() }

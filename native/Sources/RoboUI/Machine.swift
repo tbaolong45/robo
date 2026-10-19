@@ -74,6 +74,9 @@ struct Machine {
     var backdropLuma: (_ rect: NSRect, _ done: @escaping (Double?) -> Void) -> Void = { Backdrop.shared.luma(behind: $0, done: $1) }
     var askScreenAccess: () -> Void = { Backdrop.shared.requestAccess() }
     var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Whether the system is in dark mode: the card's look while it cannot read what is behind it (it must still pick a light or a
+    /// dark card, or the text colour and the glass can disagree).
+    var systemDark: () -> Bool = { NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 
     init(home: URL) {
         outputDir = home.appendingPathComponent("Robo")

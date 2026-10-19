@@ -326,6 +326,21 @@ func aFollowUpWindowWakesRoboOnlyForRealSpeech(loud: Int, wakes: Bool) {
     lis.stop()
 }
 
+/// Found live 2026-10-19: a noise of a few frames woke the window, wiped the reply being read and left "listening" on.
+@Test(arguments: ["", "Yeah.", "Uh", "   "])
+func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
+    let mic = FakeMic()
+    let stt = FakeStt(noise, "and tomorrow?")
+    let (lis, events) = start(mic, stt, clock: Clock(), noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    mic.feed(sentence(0))  // loud enough to be transcribed, and heard as no words
+    drained(mic)  // that recording is over before the next sentence starts (else they would be one)
+    mic.feed(sentence(100))  // the window is still open for the real sentence
+    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])  // so the first one changed nothing
+    #expect(lis.handsFree && stt.heard.count == 2)
+    lis.stop()
+}
+
 @Test func closingTheFollowUpWindowIgnoresTheNextSentence() {
     let mic = FakeMic()
     let stt = FakeStt("and tomorrow?")
@@ -619,7 +634,7 @@ final class Gate {
     #expect(events.isEmpty)  // one wake per sentence
 }
 
-@Test func anExpectedSentenceWakesRoboAtOnce() {
+@Test func aFollowUpSentenceWakesRoboOnceItsWordsAreRead() {
     let order = Log<String>(), done = Events(), mic = FakeMic()
     let lis = Listener(onWake: { order.append("wake") }, onText: { done.put(.text($0)) }, onNote: { _ in },
                        mic: { mic }, transcriber: { { _ in order.append("final"); return "and tomorrow?" } },
@@ -629,7 +644,7 @@ final class Gate {
     mic.feed(sentence(0))
     #expect(done.get() == .text("and tomorrow?"))
     lis.stop()
-    #expect(order.all == ["wake", "final"])  // robo showed it was listening before transcribing
+    #expect(order.all == ["final", "wake"])  // robo shows the request once its words are known: sound alone must not wipe the reply
     #expect(lis.handsFree)
 }
 

@@ -880,12 +880,30 @@ import RoboVoice
         }
     }
 
-    @Test func withoutAReadableBackdropTheCardKeepsTheSystemsLook() {
-        let r = opened(nil)
+    @Test func withoutAReadableBackdropTheCardFollowsTheSystemsMode() {
+        for (dark, level) in [(true, 0.0), (false, 1.0)] {
+            let r = Rig()
+            defer { r.close() }
+            r.systemDark = dark
+            r.backdrop = nil
+            r.window.open()
+            steps(r, 60)
+            // explicit either way (never the system's label colours on a glass that may have come out the other way round)
+            #expect(!r.window.shade.known && Chrome.ink == level && r.window.card.glass.level == level && r.window.shadeTimer == nil, "dark \(dark)")
+            #expect(r.looks.count > 3)  // it keeps looking: the permission may be granted
+        }
+    }
+
+    @Test func theSystemsModeChangingIsFollowedWhileTheBackdropIsUnknown() {
+        let r = Rig()
         defer { r.close() }
-        steps(r, 60)
-        #expect(!r.window.shade.known && Chrome.ink == nil && r.window.card.glass.level == nil && r.window.shadeTimer == nil)
-        #expect(r.looks.count > 3)  // it keeps looking: the permission may be granted
+        r.backdrop = nil
+        r.window.open()
+        steps(r, 12)
+        #expect(Chrome.ink == 0)  // dark mode: a dark card, light ink
+        r.systemDark = false
+        steps(r, 12)
+        #expect(Chrome.ink == 1 && r.window.card.glass.level == 1)  // the next look picks up the light mode
     }
 
     @Test func aBackdropThatStopsBeingReadableGivesTheSystemsLookBackAfterAFewMisses() {
@@ -894,7 +912,7 @@ import RoboVoice
         #expect(Chrome.ink == 1)
         r.backdrop = nil
         steps(r, 90)
-        #expect(!r.window.shade.known && Chrome.ink == nil && r.window.card.glass.level == nil && r.window.shadeTimer == nil)
+        #expect(!r.window.shade.known && Chrome.ink == 0 && r.window.card.glass.level == 0 && r.window.shadeTimer == nil)  // the rig's system is dark
         r.backdrop = 1.0  // and it is read again
         steps(r, 30)
         #expect(r.window.shade.known && Chrome.ink == 0)

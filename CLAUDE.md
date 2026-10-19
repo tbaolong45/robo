@@ -64,8 +64,11 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `finishedTyping()` (not at run end: typing at 55 cps and reading used to eat the old 10 s; `followDue` is set
   in `ended()` and cleared by `clearReply()`/`closeBubble()`, which also send `ear.followUp(0)`, so errors, `say()`
   lines, mic notes and a new question never arm or keep it). The MIC light pulses LISTENING while it is open
-  (`CardView.micState(..., following:)`). In `Listener` a window with `asked == false` wakes robo only after
-  `minSpeechFrames` loud frames (a knock used to clear the reply and leave "listening" on). `Listener.handsFree`
+  (`CardView.micState(..., following:)`). In `Listener` a window with `asked == false` wakes robo only when
+  the transcript has two words or more (`heard`): the first version woke it after `minSpeechFrames` loud frames and a noise in
+  the room cleared the reply being read within seconds of a live reply (found 2026-10-19 on the live app); sound that
+  transcribes to nothing, or to one word like "yeah", changes nothing and the window stays open. The price: no "listening"
+  feedback until the words are read (the MIC light already pulses LISTENING while the window is open). `Listener.handsFree`
   marks text spoken inside such a window; `onHeard` refuses it when `Intent.changesThings` (send, reply, delete,
   book, pay..., Vietnamese gửi/trả lời/xóa, or a sentence that is only "yes"/"ok"/"go ahead": the digest proposes
   and waits for a yes) and says to hold Ctrl+Q; a held key or a click is never filtered. Spoken text is never an

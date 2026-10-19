@@ -183,6 +183,7 @@ extension CardView {
     var held: [(Double?) -> Void] = []
     var screenAsks = 0
     var reduceMotion = false
+    var systemDark = true  // what the machine says about the system's mode
     /// The app that had the keyboard before robo took it, whether robo's app is active, who got it back.
     var frontmost: NSRunningApplication? = NSWorkspace.shared.runningApplications.first {
         $0.processIdentifier != getpid() && $0.activationPolicy == .regular
@@ -232,6 +233,7 @@ extension CardView {
         }
         m.askScreenAccess = { [weak self] in self?.screenAsks += 1 }
         m.reduceMotion = { [weak self] in self?.reduceMotion ?? false }
+        m.systemDark = { [weak self] in self?.systemDark ?? true }
         Chrome.ink = nil  // a card that knew its backdrop in an earlier test must not colour this one
         m.focus = Focus(frontmost: { [weak self] in self?.frontmost }, appIsActive: { [weak self] in self?.appActive ?? false },
                         activate: { [weak self] in self?.activated.append($0) })

@@ -191,8 +191,8 @@ public typealias Transcribe = ([Float]) throws -> String
 /// `onWake()` when robo is called by name, then `onText(request)`. A request ends after
 /// `patientSilenceS` of quiet. A sentence also counts without the name while robo expects one:
 /// after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`), after
-/// `followUp(seconds:)` (it just answered; `onWake` waits there for `minSpeechFrames` loud frames, so a knock
-/// changes nothing, and `handsFree` is true while that text is delivered), or right after a bare "robo". A mic that stops
+/// `followUp(seconds:)` (it just answered; `onWake` waits there for the words themselves, two at least, so a knock or a
+/// hum changes nothing and the reply stays, and `handsFree` is true while that text is delivered), or right after a bare "robo". A mic that stops
 /// delivering is reopened; one that only gives silence is reported through `onNote`, like every
 /// other message for the user.
 ///
@@ -391,8 +391,8 @@ public final class Listener {
                     continue
                 }
                 inflight.wait()  // the last sentence's verdict decides whether robo expects this one
-                // robo expects this sentence: show it now. A follow-up window (not asked) waits for real speech
-                // first (`record`): a knock must not wipe the reply and leave robo "listening".
+                // robo expects this sentence: show it now. A follow-up window (not asked) waits for the words first
+                // (`heard`): a knock, a cough or a hum must not wipe the reply and leave robo "listening".
                 let (woke, inWindow) = lock.withLock { () -> (Bool, Bool) in
                     let open = clock() < openUntil
                     return (open, open && !asked)
@@ -402,7 +402,7 @@ public final class Listener {
                     continue
                 }
                 if woke && !inWindow { onWake() }
-                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, inWindow: inWindow, quick: quick)
+                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, quick: quick)
                 preRoll.removeAll()
                 if u.loud >= Listen.minSpeechFrames {
                     let audio = u.frames.flatMap { $0 }
@@ -453,7 +453,15 @@ public final class Listener {
     private func heard(_ text: String, woke: Bool, handsFree: Bool) {
         if stopping.isSet { return }
         guard let request = woke ? withoutName(text) : addressed(text) else { return }  // TV, other people
-        if !woke { onWake() }
+        if handsFree {
+            // A follow-up window is open to any sound, so sound alone must not wake robo: a cough, a door or a hum would wipe
+            // the reply being read. Only words do (two at least: a lone "yeah" is what a recogniser makes of noise), and the
+            // window stays open for the real sentence.
+            guard request.split(whereSeparator: \.isWhitespace).count >= 2 else { return }
+            onWake()
+        } else if !woke {
+            onWake()
+        }
         lock.withLock { openUntil = 0; asked = false }
         if request.isEmpty {  // just "robo" (or nothing intelligible): the request follows
             open(Listen.noSpeechS, asked: true)
@@ -486,9 +494,8 @@ public final class Listener {
     struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool }
 
     /// Frames until the sentence ends (or stop()), how many were above the gate, and whether robo
-    /// woke up (a quick early check found its name at the start). `inWindow`: a follow-up window
-    /// expects this sentence, and robo shows it is listening once `minSpeechFrames` are loud.
-    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool, inWindow: Bool,
+    /// woke up (a quick early check found its name at the start).
+    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool,
                         quick: Transcribe) throws -> Utterance {
         var u = Utterance(frames: first, loud: 1, woke: woke)
         var ep = Endpointer(gate: gate)
@@ -503,10 +510,7 @@ public final class Listener {
             }
             u.frames.append(frame)
             let level = rms(frame)
-            if level > gate {
-                u.loud += 1
-                if inWindow && u.loud == Listen.minSpeechFrames { onWake() }
-            }
+            if level > gate { u.loud += 1 }
             if ep.feed(level) { break }
             if !u.woke && u.frames.count - start == Listen.earlyFrames {
                 u.woke = addressed(try infer.sync { try quick(u.frames.flatMap { $0 }) }) != nil
