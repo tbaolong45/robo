@@ -697,7 +697,9 @@ class RoboWindow(QWidget):
 
     def _roam(self) -> None:
         engaged = self.press is not None or self.moving  # the user has it: freeze
-        called = self.busy or not self.panel.isHidden()  # it walks to a corner and stays
+        # it walks to a corner and stays; the right-click menu opens the bubble too, but it must
+        # not leave before the user can press Stay
+        called = self.busy or (not self.panel.isHidden() and self.menu.isHidden())
         x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged, called)
         if (x, y) != (self.x(), self.y()):
             self.move(x, y)
@@ -772,8 +774,7 @@ class RoboWindow(QWidget):
             self.theme_stamp = themes.stamp()
             self.apply_theme(themes.load())
         self.stay.setText(
-            "🧭 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
-            else "📌 Stay")
+            "🧭 Wander" if self.roamer and self.roamer.stays(time.monotonic()) else "📌 Stay")
         self.watch.setText("▶ Watch" if self.watcher_ and self.watcher_.paused else "⏸ Watch")
         self.watch.setVisible(bool(self.watcher_))
         self._fit(self.menu.show)
@@ -847,7 +848,7 @@ class RoboWindow(QWidget):
     def _toggle_stay(self) -> None:
         if not self.roamer:
             return
-        stay = self.roamer.held_until > time.monotonic() + 3600
+        stay = self.roamer.stays(time.monotonic())
         self.roamer.hold(time.monotonic(), (self.x(), self.y()), seconds=0 if stay else 10**9)
 
     def _escape(self) -> None:

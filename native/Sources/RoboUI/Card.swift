@@ -233,12 +233,43 @@ final class CardView: NSView {
         quote.text.setContent(Markdown.plain(heardText, font: .systemFont(ofSize: 12).italic, colour: Chrome.textDim))
     }
 
+    // MARK: the shade
+
+    private var bakedInk = Chrome.ink  // the ink the text in the boxes was last built with
+
+    /// The card's turn over what is behind it: `level` (nil = the system's look) for the glass, `ink` for what is drawn on it
+    /// (`Chrome.ink`). The marks repaint at once; the text, whose colour is part of its attributed string, is built again only
+    /// when the ink moved by 0.02 or more (a render is about 0.7 ms at 1000 characters).
+    func setShade(level: Double?, ink: Double?) {
+        glass.setShade(level)
+        guard ink != Chrome.ink else { return }
+        Chrome.ink = ink
+        repaint(self)
+        let moved: Bool
+        switch (bakedInk, ink) {
+        case (nil, nil): moved = false
+        case let (old?, new?): moved = abs(old - new) >= 0.02
+        default: moved = true
+        }
+        guard moved else { return }
+        bakedInk = ink
+        applyTheme()
+        if let (markdown, hiddenTail) = shownReply { render(markdown, hiddenTail) }
+    }
+
+    /// Everything but the glass draws with `Chrome`'s colours.
+    private func repaint(_ view: NSView) {
+        view.needsDisplay = true
+        for sub in view.subviews where sub !== glass { repaint(sub) }
+    }
+
     // MARK: header
 
-    /// The MIC light: nil = no listener (voice off), `activity` the mind's, `noted` that the listener reported a problem.
-    static func micState(listenerReady: Bool?, activity: Activity, noted: Bool) -> LedState {
+    /// The MIC light: nil = no listener (voice off), `activity` the mind's, `noted` that the listener reported a problem,
+    /// `following` that the key-less follow-up window is open (robo is listening for a reply).
+    static func micState(listenerReady: Bool?, activity: Activity, noted: Bool, following: Bool) -> LedState {
         guard let ready = listenerReady else { return .off }
-        if activity == .listening { return .hot }
+        if activity == .listening || following { return .hot }
         if noted { return .bad }
         return ready ? .ok : .loading
     }
@@ -280,6 +311,7 @@ final class CardView: NSView {
     var now: () -> Double = { ProcessInfo.processInfo.systemUptime }
     private var resumeAt = 0.0
     private var pending: (markdown: String, hiddenTail: Int)?
+    private var shownReply: (markdown: String, hiddenTail: Int)?  // what is on screen, to build again in another ink
     private var resume: Timer?
 
     /// The whole of `_render`: the Markdown of the typed prefix with its last `hiddenTail` UTF-16 units laid out but
@@ -312,6 +344,7 @@ final class CardView: NSView {
     private func dropPending() { pending = nil; resume?.invalidate(); resume = nil; resumeAt = 0 }
 
     private func render(_ markdown: String, _ hiddenTail: Int) {
+        shownReply = (markdown, hiddenTail)
         let keep = reply.scrollValue
         let atEnd = keep >= reply.scrollMaximum - 4  // not scrolled up by the reader
         let text = Markdown.attributed(markdown, theme: theme, hidden: hiddenTail)
@@ -324,6 +357,7 @@ final class CardView: NSView {
     /// A new exchange: nothing of the last reply stays (text, caret, footer).
     func clearReply() {
         dropPending()
+        shownReply = nil
         reply.setContent(NSAttributedString())
         caretBox = nil
         caret.isHidden = true
@@ -369,9 +403,10 @@ final class CardView: NSView {
 
     // MARK: approval and menu
 
-    /// nil hides the approval; text shows it (the window grows for the buttons).
-    func setApproval(_ text: String?) {
+    /// nil hides the approval; text shows it (the window grows for the buttons). `more` other asks wait behind this one.
+    func setApproval(_ text: String?, more: Int = 0) {
         if let text {
+            approval.label.text = more > 0 ? "APPROVAL ▸ +\(more) MORE" : "APPROVAL ▸"
             approval.well.text = text
             refit { approval.isHidden = false }
         } else if !approval.isHidden {

@@ -16,6 +16,7 @@ import Testing
 
 @MainActor private func makeCard(_ t: Theme = Themes.glass, watch: Bool = false, model: String = "") -> CardView {
     _ = NSApplication.shared
+    Chrome.ink = nil  // a test that gave the card an ink must not colour the next one
     let card = CardView(theme: t, hasWatch: watch, model: model)
     card.renderBudget = .infinity  // a slow machine must not make a test skip a render
     card.setFrameSize(NSSize(width: CardView.width, height: max(200, card.fittingHeight)))
@@ -232,6 +233,124 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 }
 
+// MARK: the shade: what the card does about its backdrop
+
+@Suite @MainActor struct CardShadeTests {
+    /// The (white, alpha) of the colour an attributed string carries at `at`.
+    private func carried(_ box: TextBox, _ at: Int) -> (white: CGFloat, alpha: CGFloat) {
+        let c = components(box.textView.textStorage!.attribute(.foregroundColor, at: at, effectiveRange: nil) as? NSColor)
+        return (c[0], c[3])
+    }
+
+    @Test func withoutAShadeTheColoursAreTheSystemsOwn() {
+        Chrome.ink = nil
+        #expect(Chrome.text.isEqual(NSColor.labelColor) && Chrome.textDim.isEqual(NSColor.secondaryLabelColor))
+        #expect(Chrome.faint.isEqual(NSColor.tertiaryLabelColor) && Chrome.hairline.isEqual(NSColor.separatorColor))
+        #expect(same(Chrome.wash(0.07), NSColor.labelColor.withAlphaComponent(0.07)))
+    }
+
+    @Test(arguments: [0.0, 0.25, 0.5, 1.0]) func theInkRunsFromNearWhiteToNearBlackWithTheSystemsAlphas(_ ink: Double) {
+        defer { Chrome.ink = nil }
+        Chrome.ink = ink
+        let white = 0.96 + (0.07 - 0.96) * ink
+        for (colour, alpha) in [(Chrome.text, 1.0), (Chrome.textDim, 0.6), (Chrome.faint, 0.3), (Chrome.hairline, 0.18), (Chrome.wash(0.08), 0.08)] {
+            let c = components(colour)
+            #expect(c.count == 4 && c[0...2].allSatisfy { abs($0 - white) < 0.005 } && abs(c[3] - alpha) < 0.005, "ink \(ink): \(c)")
+        }
+    }
+
+    /// Ink 1 = dark ink on a light card, 0 = light ink on a dark one; the glass is hidden (as in the other pixel tests) so only what the
+    /// card draws itself is looked at.
+    @Test(arguments: [0.0, 1.0]) func theReplyAndTheHairlineAreDrawnInTheInk(_ ink: Double) {
+        defer { Chrome.ink = nil }
+        let card = makeCard()
+        card.setReply(markdown: "Hello **there** friend, MMMM", hiddenTail: 0)
+        card.setShade(level: 1 - ink, ink: ink)
+        fitted(card)
+        card.glass.isHidden = true
+        let want = Int((0.96 + (0.07 - 0.96) * ink) * 255 + 0.5)
+        let box = card.reply.frame
+        let letters = Bitmap(snap(card, scale: 2)).pixels.filter {
+            $0.a > 240 && (box.minX * 2..<box.maxX * 2).contains(Double($0.x)) && (box.minY * 2..<box.maxY * 2).contains(Double($0.y))
+        }
+        #expect(!letters.isEmpty)
+        #expect(letters.allSatisfy { abs($0.r - want) < 8 && abs($0.g - want) < 8 && abs($0.b - want) < 8 }, "want \(want), first \(letters.first.map { "\($0.r),\($0.g),\($0.b)" } ?? "")")
+        let line = Bitmap(snap(card.header, scale: 2)).straight(100, 25.5, dpr: 2)  // the hairline under the header: 18 % ink
+        #expect(abs(line.a - 46) < 6 && abs(line.r - want) < 14 && abs(line.b - want) < 14, "\(line)")
+    }
+
+    @Test func theTextIsBuiltAgainInTheNewInkOnlyWhenItMovedByTwoHundredths() {
+        defer { Chrome.ink = nil }
+        let card = makeCard()
+        card.setHeard("what is due", followUp: false)
+        card.setReply(markdown: "Hello wonderful world", hiddenTail: 5)
+        let height = card.fittingHeight
+        card.setShade(level: 1, ink: 1)
+        #expect(abs(carried(card.reply, 0).white - 0.07) < 0.003 && carried(card.reply, 0).alpha == 1)
+        #expect(abs(carried(card.quote.text, 0).white - 0.07) < 0.003 && abs(carried(card.quote.text, 0).alpha - 0.6) < 0.003)
+        #expect(carried(card.reply, 20).alpha == 0)  // the hidden tail is still hidden
+        card.setShade(level: 0.99, ink: 0.99)
+        #expect(Chrome.ink == 0.99 && abs(carried(card.reply, 0).white - 0.07) < 0.003)  // under 0.02: the marks follow, the text is left
+        card.setShade(level: 0.9, ink: 0.9)
+        #expect(carried(card.reply, 0).white > 0.12)  // over: built again
+        card.setShade(level: 0, ink: 0)
+        #expect(abs(carried(card.reply, 0).white - 0.96) < 0.003 && abs(carried(card.quote.text, 0).white - 0.96) < 0.003)
+        card.setShade(level: nil, ink: nil)
+        #expect(Chrome.ink == nil)
+        #expect((card.reply.textView.textStorage!.attribute(.foregroundColor, at: 0, effectiveRange: nil) as! NSColor).isEqual(NSColor.labelColor))
+        #expect(card.reply.string == "Hello wonderful world" && card.fittingHeight == height && carried(card.reply, 20).alpha == 0)  // only colours changed
+    }
+
+    @Test func theGlassIsOneSystemGlassUntilItHasAShadeAndGoesBackToIt() {
+        guard #available(macOS 26, *) else { return }
+        let card = makeCard()
+        let light = card.glass.subviews[0] as! NSGlassEffectView, dark = card.glass.subviews[1] as! NSGlassEffectView
+        #expect(card.glass.level == nil && light.appearance == nil && light.alphaValue == 1 && !light.isHidden && dark.isHidden)
+        card.setShade(level: 0.5, ink: 0.5)
+        #expect(!dark.isHidden && light.appearance?.name == .aqua)
+        card.setShade(level: nil, ink: nil)
+        #expect(card.glass.level == nil && light.appearance == nil && light.alphaValue == 1 && !light.isHidden && dark.isHidden)
+    }
+
+    @Test func theLightGlassIsBelowAndTheDarkOneFadesOutAboveItAsTheLevelRises() {
+        guard #available(macOS 26, *) else { return }
+        let card = makeCard()
+        let light = card.glass.subviews[0] as! NSGlassEffectView, dark = card.glass.subviews[1] as! NSGlassEffectView
+        #expect(dark.appearance?.name == .darkAqua)
+        func show(_ level: Double) -> (light: Bool, dark: Bool) {
+            card.glass.setShade(level)
+            return (!light.isHidden, !dark.isHidden)
+        }
+        #expect(show(1) == (true, false) && light.appearance?.name == .aqua && light.alphaValue == 1)  // at rest only the light card shows
+        #expect(show(0) == (false, true) && dark.alphaValue == 1)  // and only the dark one
+        #expect(show(0.25) == (true, true) && light.alphaValue == 1 && dark.alphaValue == 0.75)
+        #expect(show(0.5) == (true, true) && dark.alphaValue == 0.5)
+        #expect(show(0.75) == (true, true) && dark.alphaValue == 0.25)
+        #expect(show(1.7) == (true, false) && show(-3) == (false, true))  // out of range is the nearest end
+        #expect(card.glass.subviews.firstIndex { $0 === light }! < card.glass.subviews.firstIndex { $0 === dark }!)  // light below
+    }
+
+    @Test func theTintReachesBothGlasses() {
+        guard #available(macOS 26, *) else { return }
+        let card = makeCard()
+        card.setHue(250)
+        let tints = card.glass.subviews.prefix(2).map { ($0 as! NSGlassEffectView).tintColor }
+        #expect(tints.count == 2 && tints.allSatisfy { same($0, Chrome.accent(card.theme, 250, CardView.tint)) })
+        card.setShade(level: 0.4, ink: 0.4)
+        card.setHue(40)
+        #expect(card.glass.subviews.prefix(2).allSatisfy { same(($0 as! NSGlassEffectView).tintColor, Chrome.accent(card.theme, 40, CardView.tint)) })
+    }
+
+    @Test func theVeilIsOffWhileItsStrengthIsZeroAndLayoutIsUntouched() {
+        let card = makeCard()
+        fitted(card)
+        card.setShade(level: 0.5, ink: 0.5)
+        #expect(card.glass.subviews.last!.isHidden == (GlassSurface.veilStrength == 0))
+        #expect(card.glass.subviews.allSatisfy { $0.frame == card.glass.bounds })  // every layer of the glass fills the pane
+        #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 328, height: card.frame.height - 6 - 9))
+    }
+}
+
 // MARK: lights and header
 
 @Suite @MainActor struct CardHeaderTests {
@@ -252,15 +371,21 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(LedState.allCases.count == 7)
     }
 
-    @Test func micStateReadsTheListenerTheMindAndTheNote() {
-        #expect(CardView.micState(listenerReady: nil, activity: .idle, noted: false) == .off)
-        #expect(CardView.micState(listenerReady: nil, activity: .listening, noted: false) == .off)  // no listener: nothing is listening
-        #expect(CardView.micState(listenerReady: false, activity: .idle, noted: false) == .loading)
-        #expect(CardView.micState(listenerReady: true, activity: .idle, noted: false) == .ok)
-        #expect(CardView.micState(listenerReady: true, activity: .listening, noted: false) == .hot)
-        #expect(CardView.micState(listenerReady: true, activity: .idle, noted: true) == .bad)
-        #expect(CardView.micState(listenerReady: false, activity: .idle, noted: true) == .bad)
-        #expect(CardView.micState(listenerReady: true, activity: .listening, noted: true) == .hot)  // the next wake clears it
+    @Test func micStateReadsTheListenerTheMindTheNoteAndTheFollowUpWindow() {
+        func mic(_ ready: Bool?, _ activity: Activity, noted: Bool = false, following: Bool = false) -> LedState {
+            CardView.micState(listenerReady: ready, activity: activity, noted: noted, following: following)
+        }
+        #expect(mic(nil, .idle) == .off)
+        #expect(mic(nil, .listening) == .off)  // no listener: nothing is listening
+        #expect(mic(nil, .idle, following: true) == .off)
+        #expect(mic(false, .idle) == .loading)
+        #expect(mic(true, .idle) == .ok)
+        #expect(mic(true, .listening) == .hot)
+        #expect(mic(true, .idle, noted: true) == .bad)
+        #expect(mic(false, .idle, noted: true) == .bad)
+        #expect(mic(true, .listening, noted: true) == .hot)  // the next wake clears it
+        #expect(mic(true, .idle, following: true) == .hot)  // waiting for a reply without its name: "LISTENING"
+        #expect(mic(true, .idle, noted: true, following: true) == .hot)
     }
 
     @Test func theHeaderLaysOutAgainWhenALabelGrows() {
@@ -697,6 +822,18 @@ private extension MicroLabel {
         #expect(card.approval.isHidden)
     }
 
+    @Test func theApprovalSaysHowManyMoreWaitWithoutChangingTheLayout() {
+        let card = makeCard()
+        card.setApproval("Run: ls", more: 2)
+        #expect(card.approval.label.text == "APPROVAL ▸ +2 MORE" && card.approval.well.text == "Run: ls")
+        let height = card.fittingHeight
+        card.setApproval("Run: ls")  // the last one: back to the plain label
+        #expect(card.approval.label.text == "APPROVAL ▸" && card.fittingHeight == height)
+        #expect(card.approval.label.fitting.width < CardView.columnWidth)  // the longer label fits its row
+        card.setApproval("Run: ls", more: 12)
+        #expect(card.approval.label.fitting.width < CardView.columnWidth)
+    }
+
     @Test func theApprovalGrowsWithItsWrappedText() {
         let card = makeCard()
         card.setApproval("ls")
@@ -929,6 +1066,7 @@ private extension MicroLabel {
     func aLinkToTheWebOrMailOpensInTheDefaultBrowser(_ link: String) {
         let card = makeCard()
         var opened: [URL] = []
+        card.reply.textView.confirmLink = { _, _ in true }  // the alert is asked in its own tests
         card.reply.textView.openLink = { opened.append($0) }
         card.setReply(markdown: "see [the notes](\(link))", hiddenTail: 0)
         card.reply.textView.clicked(onLink: URL(string: link)!, at: 5)
@@ -936,16 +1074,50 @@ private extension MicroLabel {
         #expect(card.reply.string == "see the notes")  // the link is not typed into the text
     }
 
+    /// The reply is a model's text built from mail: `[grades](https://evil.example/?d=SECRET)` must not leave on one click. A click
+    /// asks first, with the full address and the words that showed it, and only "Open" opens.
+    @Test func aLinkAsksWithItsFullAddressAndItsWordsAndOpensOnlyOnOpen() {
+        let card = makeCard()
+        let address = "https://evil.example/collect?d=SECRET&more=1#frag"
+        var asked: [(url: URL, words: String)] = [], opened: [URL] = [], answer = false
+        card.reply.textView.confirmLink = { asked.append(($0, $1)); return answer }
+        card.reply.textView.openLink = { opened.append($0) }
+        card.setReply(markdown: "see [your grades](\(address)) now", hiddenTail: 0)
+        card.reply.textView.clicked(onLink: URL(string: address)!, at: 6)  // Cancel
+        #expect(asked.count == 1 && asked[0].url.absoluteString == address && asked[0].words == "your grades")
+        #expect(opened.isEmpty)
+        answer = true  // Open
+        card.reply.textView.clicked(onLink: URL(string: address)!, at: 6)
+        #expect(asked.count == 2 && opened == [URL(string: address)!])
+    }
+
+    @Test func theWordsAskedWithAreWhatTheReaderSawOrNothing() {
+        let card = makeCard()
+        var words: [String] = []
+        card.reply.textView.confirmLink = { words.append($1); return false }
+        card.setReply(markdown: "go to <https://example.com/a> or [x](mailto:a@b.c)", hiddenTail: 0)
+        card.reply.textView.clicked(onLink: URL(string: "https://example.com/a")!, at: 8)
+        card.reply.textView.clicked(onLink: URL(string: "mailto:a@b.c")!, at: 0)  // no link text at 0: no words
+        #expect(words == ["https://example.com/a", ""])
+    }
+
+    /// With no running app (every test) the default asks nothing and says no, so a test that forgets to replace it opens nothing.
+    @Test func theDefaultAnswerWithoutARunningAppIsNo() throws {
+        try #require(!NSApplication.shared.isRunning)
+        #expect(!BoxTextView.askToOpen(URL(string: "https://example.com/")!, "example"))
+    }
+
     /// The reply is a model's text built from mail, Teams and Moodle: a link in it may not open a file, a share or an app.
     @Test(arguments: ["file:///etc/passwd", "smb://host/share", "javascript:alert(1)", "robo://x", "ftp://host/f", "x-apple.systempreferences:com.apple.preference.security",
                       "tel:123", "data:text/html,hi", "/relative/path", "example.com", "vnc://host", "FILE:///Users"])
     func aLinkToAnythingElseDoesNothing(_ link: String) {
         let card = makeCard()
-        var opened: [URL] = []
+        var opened: [URL] = [], asked = 0
+        card.reply.textView.confirmLink = { _, _ in asked += 1; return true }
         card.reply.textView.openLink = { opened.append($0) }
         card.reply.textView.clicked(onLink: URL(string: link)!, at: 0)
         card.reply.textView.clicked(onLink: link, at: 0)  // the link can come as a string too
-        #expect(opened.isEmpty)
+        #expect(opened.isEmpty && asked == 0)  // not even asked about
     }
 
     @Test func theReplyIsSelectableButNeverEditable() {

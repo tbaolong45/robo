@@ -242,13 +242,58 @@ import RoboVoice
         for _ in 0..<400 { r.clock.advance(0.05); r.window.roam() }
         let roamer = r.window.roamer
         #expect(roamer.mode == .come && roamer.pos == roamer.goal && roamer.pos == r.window.windowTopLeft)
-        #expect([24.0, 1280.0].contains(roamer.goal.x))  // a left or right corner of the 1440 pt display
+        // the bottom-left corner of the 1440x875 usable area (25 pt menu bar) for a face dropped at (600, 500)
+        #expect(roamer.goal == Vec(24, 25 + 875 - roamer.size.y - 24))
         roamer.pos = Vec(600, 500)  // and now the user takes hold of the face
         r.window.move(to: roamer.pos)
         at(r, r.overFace)
         r.window.faceMouse(.press)
         for _ in 0..<40 { r.clock.advance(0.05); r.window.roam() }
         #expect(roamer.mode == .present && roamer.pos == Vec(600, 500))
+    }
+
+    @Test func aRequestAfterADropWalksItToTheCornerNearestTheDrop() async {
+        let r = Rig()
+        defer { r.close() }
+        let roamer = r.window.roamer
+        roamer.hold(now: r.clock.now(), pos: Vec(1100, 150))  // dropped by the user: held for 10 minutes
+        r.window.move(to: roamer.pos)
+        r.window.busy = true
+        for _ in 0..<100 { r.clock.advance(0.05); r.window.roam() }
+        #expect(roamer.mode == .come && roamer.pos == roamer.goal && roamer.pos == r.window.windowTopLeft)
+        #expect(roamer.goal == Vec(1440 - roamer.size.x - 24, 25 + 24))  // top-right, not the bottom-right bed
+    }
+
+    /// The right-click menu opens the card, but it must not send robo off before Stay can be pressed.
+    @Test func theRightClickMenuDoesNotSendItToACorner() async {
+        let r = Rig()
+        defer { r.close() }
+        let w: RoboWindow = r.window
+        w.roamer.pos = Vec(600, 500)
+        w.move(to: w.roamer.pos)
+        w.faceMouse(.rightPress)
+        #expect(!w.card.isHidden && !w.card.chips.isHidden)
+        let here = w.roamer.pos  // the window grew around the face
+        for _ in 0..<100 { r.clock.advance(0.05); w.roam() }  // 5 s, before the card closes by itself
+        #expect(w.roamer.mode != .come && w.roamer.pos == here && w.windowTopLeft == here)
+        w.card.hideMenu()  // a chip was pressed (or the menu was dismissed) and the card is still up
+        for _ in 0..<100 { r.clock.advance(0.05); w.roam() }
+        #expect(w.roamer.mode == .come && w.roamer.pos == w.roamer.goal && w.roamer.pos == w.windowTopLeft)
+    }
+
+    @Test func stayPressedInTheMenuKeepsItInPlaceWhileTheCardIsUp() async {
+        let r = Rig()
+        defer { r.close() }
+        let w: RoboWindow = r.window
+        w.roamer.pos = Vec(600, 500)
+        w.move(to: w.roamer.pos)
+        w.faceMouse(.rightPress)
+        w.menu(.stay)
+        w.card.hideMenu()  // the chip hides the menu; the card stays up for a few seconds
+        let here = w.roamer.pos
+        w.busy = true  // and a request on top of it
+        for _ in 0..<100 { r.clock.advance(0.05); w.roam() }
+        #expect(w.roamer.mode == .held && w.roamer.pos == here && w.windowTopLeft == here)
     }
 
     /// Dragging from the main display across the seam onto the built-in one: no snap-back, straddling is
@@ -685,5 +730,240 @@ import RoboVoice
         r.clock.advance(RoboWindow.roamFast)
         w.roam()
         #expect(w.roamer.pos == w.roamer.goal && w.roamInterval == RoboWindow.roamSlow)
+    }
+}
+
+// MARK: - the backdrop: what is behind the card, and the card turning light over a dark one and dark over a light one
+
+@Suite struct BackdropTests {
+    let space = ScreenSpace(userLayout)!
+
+    /// `rect` (AppKit, y up) becomes points from the display's own top-left, the way `sourceRect` reads them.
+    @Test func theRectangleIsInTheDisplaysOwnTopLeftSpace() {
+        // main display: 1440 - (1000 + 300) = 140 from its top
+        #expect(Backdrop.sourceRect(for: CGRect(x: 100, y: 1000, width: 328, height: 300), on: mainDisplay.frame, space: space) == CGRect(x: 100, y: 140, width: 328, height: 300))
+        // the built-in display to the left (x from -1800) and shorter: its top is at 271 in the y-down plane
+        #expect(Backdrop.sourceRect(for: CGRect(x: -1000, y: 500, width: 328, height: 300), on: builtInDisplay.frame, space: space) == CGRect(x: 800, y: 369, width: 328, height: 300))
+        #expect(Backdrop.sourceRect(for: CGRect(x: 0, y: 1140, width: 10, height: 300), on: mainDisplay.frame, space: space) == CGRect(x: 0, y: 0, width: 10, height: 300))  // flush with the top
+    }
+
+    @Test func aRectangleHangingOffTheDisplayIsCutToIt() {
+        #expect(Backdrop.sourceRect(for: CGRect(x: 2400, y: 500, width: 328, height: 100), on: mainDisplay.frame, space: space) == CGRect(x: 2400, y: 840, width: 160, height: 100))
+        #expect(Backdrop.sourceRect(for: CGRect(x: 5000, y: 500, width: 328, height: 100), on: mainDisplay.frame, space: space) == nil)  // none of it there
+        #expect(Backdrop.sourceRect(for: CGRect(x: 2559.5, y: 500, width: 328, height: 100), on: mainDisplay.frame, space: space) == nil)  // under a point
+    }
+
+    private func solid(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, left: CGFloat? = nil) -> CGImage {
+        let ctx = CGContext(data: nil, width: 8, height: 4, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(srgbRed: r, green: g, blue: b, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 4))
+        if let left {  // the left half in another grey
+            ctx.setFillColor(CGColor(srgbRed: left, green: left, blue: left, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        return ctx.makeImage()!
+    }
+
+    @Test func aPictureBecomesItsMeanLumaWithTheChannelsInTheRightOrder() {
+        #expect(Backdrop.luma(of: solid(0, 0, 0)) == 0)
+        #expect(Backdrop.luma(of: solid(1, 1, 1))! > 0.999)
+        #expect(abs(Backdrop.luma(of: solid(1, 1, 1, left: 0))! - 0.5) < 0.01)
+        #expect(abs(Backdrop.luma(of: solid(1, 0, 0))! - 0.2126) < 0.01)  // red, green and blue weigh differently: B, G, R is the order
+        #expect(abs(Backdrop.luma(of: solid(0, 1, 0))! - 0.7152) < 0.01)
+        #expect(abs(Backdrop.luma(of: solid(0, 0, 1))! - 0.0722) < 0.01)
+    }
+}
+
+@MainActor @Suite(.serialized) struct WindowShadeTests {
+    private func steps(_ r: Rig, _ n: Int) { for _ in 0..<n { r.step() } }
+
+    /// Open the card over a backdrop of `luma` and let the first look arrive: the card is known and at rest.
+    private func opened(_ luma: Double?) -> Rig {
+        let r = Rig()
+        r.backdrop = luma
+        r.window.open()
+        return r
+    }
+
+    @Test func nothingLooksWhileTheCardIsHiddenAndNothingAfterItClosed() {
+        let r = Rig()
+        defer { r.close() }
+        r.backdrop = 0.0
+        steps(r, 60)
+        #expect(r.looks.isEmpty && r.window.shadeTimer == nil && !r.window.sampling)
+        r.window.open()
+        #expect(r.looks.count == 1)  // the first look is at once, not a tick later
+        steps(r, 30)  // a second
+        #expect((3...5).contains(r.looks.count - 1), "\(r.looks.count - 1) looks in a second")  // about 4 Hz
+        r.window.closeBubble()
+        let n = r.looks.count
+        steps(r, 90)
+        #expect(r.looks.count == n && r.window.shadeTimer == nil)
+    }
+
+    @Test func theRectangleIsTheGlassOnTheScreenAndFollowsThePet() {
+        let r = opened(0.0)
+        defer { r.close() }
+        let rect = r.looks[0], card = r.window.card
+        #expect(r.frame.contains(rect) && rect.width == 328 && rect.height == card.frame.height - 6 - 9)
+        #expect(rect.minX == r.frame.minX + 10 && rect.maxY == r.frame.maxY - 10)  // the window's 4 and the pane's 6 in from the top and the side
+        r.window.move(to: Vec(300, 300))
+        steps(r, 12)
+        #expect(r.looks.last != rect && r.looks.last!.minX == r.frame.minX + 10 && r.looks.last!.maxY == r.frame.maxY - 10)
+    }
+
+    @Test func theFirstLookArrivesAtOnceNothingEasesFromTheSystemLook() {
+        let r = opened(0.0)  // a dark backdrop: a light card
+        defer { r.close() }
+        #expect(r.window.shade.known && r.window.shade.level == 1 && r.window.shadeTimer == nil)
+        #expect(Chrome.ink == 1 && r.window.card.glass.level == 1)
+    }
+
+    @Test func aDarkBackdropTurnsTheCardLightThroughSeveralFrames() {
+        let r = opened(1.0)  // bright: a dark card, at rest
+        defer { r.close() }
+        #expect(Chrome.ink == 0 && r.window.card.glass.level == 0)
+        r.backdrop = 0.0
+        var levels: [Double] = [], glass: [Double?] = []
+        for _ in 0..<60 {
+            r.step()
+            levels.append(r.window.shade.level)
+            glass.append(r.window.card.glass.level)
+        }
+        #expect(Set(levels).count >= 5, "\(Set(levels).count) different levels")
+        #expect(levels == levels.sorted() && levels.last == 1)  // up, never back
+        #expect(glass.compactMap { $0 } == levels)  // the glass shows every level it is given
+        #expect(Chrome.ink == 1 && r.window.shadeTimer == nil && r.window.card.glass.level == 1)  // arrived: the timer is gone
+    }
+
+    @Test func aBrightBackdropTurnsTheCardDark() {
+        let r = opened(0.0)  // dark: a light card
+        defer { r.close() }
+        r.backdrop = 1.0
+        var levels: [Double] = []
+        var timers = 0
+        for _ in 0..<60 {
+            r.step()
+            levels.append(r.window.shade.level)
+            if r.window.shadeTimer != nil { timers += 1 }
+        }
+        #expect(Set(levels).count >= 5 && levels == levels.sorted(by: >) && levels.last == 0)
+        #expect(Chrome.ink == 0 && r.window.shadeTimer == nil && timers > 5 && timers < 30)  // the 30 Hz timer ran for the turn only
+    }
+
+    @Test func theInkFlipsWithinAFrameOrTwoOfTheTurn() {
+        let r = opened(1.0)
+        defer { r.close() }
+        r.backdrop = 0.0
+        var inks: [Double] = []
+        for _ in 0..<60 { r.step(); inks.append(Chrome.ink ?? -1) }
+        #expect(inks.first! >= 0 && inks.last == 1 && inks == inks.sorted())
+        #expect(inks.filter { $0 > 0 && $0 < 1 }.count <= 3)  // not a slow fade through a grey that reads on neither glass
+    }
+
+    @Test func aBackdropAroundTheMiddleKeepsWhatTheCardHas() {
+        let r = opened(0.0)  // a light card
+        defer { r.close() }
+        for luma in [0.5, 0.45, 0.55, 0.42, 0.58] {
+            r.backdrop = luma
+            steps(r, 12)
+            #expect(r.window.shade.level == 1 && r.window.shade.target == 1 && r.window.shadeTimer == nil, "luma \(luma)")
+        }
+        r.backdrop = 0.9
+        steps(r, 60)
+        #expect(r.window.shade.level == 0)
+        for luma in [0.5, 0.57, 0.43] {
+            r.backdrop = luma
+            steps(r, 12)
+            #expect(r.window.shade.level == 0, "luma \(luma)")  // and the dark card stays dark
+        }
+    }
+
+    @Test func withoutAReadableBackdropTheCardKeepsTheSystemsLook() {
+        let r = opened(nil)
+        defer { r.close() }
+        steps(r, 60)
+        #expect(!r.window.shade.known && Chrome.ink == nil && r.window.card.glass.level == nil && r.window.shadeTimer == nil)
+        #expect(r.looks.count > 3)  // it keeps looking: the permission may be granted
+    }
+
+    @Test func aBackdropThatStopsBeingReadableGivesTheSystemsLookBackAfterAFewMisses() {
+        let r = opened(0.0)
+        defer { r.close() }
+        #expect(Chrome.ink == 1)
+        r.backdrop = nil
+        steps(r, 90)
+        #expect(!r.window.shade.known && Chrome.ink == nil && r.window.card.glass.level == nil && r.window.shadeTimer == nil)
+        r.backdrop = 1.0  // and it is read again
+        steps(r, 30)
+        #expect(r.window.shade.known && Chrome.ink == 0)
+    }
+
+    @Test func reduceMotionGoesStraightToTheOtherLook() {
+        let r = Rig()
+        defer { r.close() }
+        r.reduceMotion = true
+        r.backdrop = 1.0
+        r.window.open()
+        r.backdrop = 0.0
+        var levels = Set<Double>()
+        var timer = false
+        for _ in 0..<60 {
+            r.step()
+            levels.insert(r.window.shade.level)
+            timer = timer || r.window.shadeTimer != nil
+        }
+        #expect(levels == [0, 1] && !timer && Chrome.ink == 1)  // no frame in between, no timer
+    }
+
+    @Test func theScreenAccessIsAskedForOncePerLaunchOnTheFirstCard() {
+        let r = Rig()
+        defer { r.close() }
+        #expect(r.screenAsks == 0)
+        r.window.open()
+        #expect(r.screenAsks == 1)
+        r.window.closeBubble(); r.window.open()
+        r.window.open()
+        r.window.closeBubble(); r.window.open()
+        #expect(r.screenAsks == 1)
+    }
+
+    @Test func oneLookIsInFlightAtATimeAndTheNextOneWaitsForTheAnswer() {
+        let r = Rig()
+        defer { r.close() }
+        r.holdLooks = true
+        r.window.open()
+        steps(r, 90)  // three seconds with the first look unanswered
+        #expect(r.looks.count == 1 && r.window.sampling && !r.window.shade.known)
+        r.answerLooks(0.0)
+        #expect(!r.window.sampling && r.window.shade.known && Chrome.ink == 1)
+        steps(r, 12)
+        #expect(r.looks.count == 2 && r.window.sampling)  // the next one went out, and is again alone
+        steps(r, 90)
+        #expect(r.looks.count == 2)
+    }
+
+    @Test func anAnswerThatArrivesAfterTheCardClosedChangesNothing() {
+        let r = Rig()
+        defer { r.close() }
+        r.holdLooks = true
+        r.window.open()
+        r.window.closeBubble()
+        r.answerLooks(0.0)
+        #expect(!r.window.sampling && !r.window.shade.known && Chrome.ink == nil && r.window.shadeTimer == nil)
+    }
+
+    @Test func closingTheCardMidTurnStopsTheTimerAndTheNextOpenGoesOn() {
+        let r = opened(1.0)
+        defer { r.close() }
+        r.backdrop = 0.0
+        while r.window.shadeTimer == nil && r.clock.now() < 1100 { r.step() }
+        #expect(r.window.shadeTimer != nil && r.window.shade.moving)
+        r.window.closeBubble()
+        #expect(r.window.shadeTimer == nil)
+        r.window.open()  // the look at once, and the turn goes on from where it was
+        steps(r, 60)
+        #expect(r.window.shade.level == 1 && Chrome.ink == 1 && r.window.shadeTimer == nil)
     }
 }

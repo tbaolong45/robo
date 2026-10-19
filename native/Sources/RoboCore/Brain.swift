@@ -95,9 +95,12 @@ public final class HermesClient: Sendable {
         _ = try await send("POST", "/v1/runs/\(runId)/stop")
     }
 
-    /// Answer a pending approval.
-    public func approve(_ runId: String, _ choice: ApprovalChoice) async throws {
-        _ = try await send("POST", "/v1/runs/\(runId)/approval", ["choice": choice.rawValue])
+    /// Answer a pending approval. `requestId` (from the `approval.request` event) names the request; without it Hermes
+    /// answers the oldest one it has pending, which is not always the one the user saw.
+    public func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String = "") async throws {
+        var body = ["choice": choice.rawValue]
+        if !requestId.isEmpty { body["request_id"] = requestId }
+        _ = try await send("POST", "/v1/runs/\(runId)/approval", body)
     }
 
     /// The run's events; always ends with exactly one `.runEnded` and never throws.
@@ -161,10 +164,10 @@ public final class HermesClient: Sendable {
                 var sse = SSEParser()
                 for try await byte in bytes {
                     guard let frame = sse.feed(byte) else { continue }
-                    let event = try Self.parse(frame.data)
+                    let events = try Self.parse(frame.data)
                     if let id = frame.id, !id.isEmpty { last = id }
-                    if let event { out.yield(event) }
-                    if case .runEnded? = event { return }
+                    events.forEach { out.yield($0) }
+                    if case .runEnded? = events.last { return }
                 }
                 failure = "Hermes stream ended without a result"
             } catch let e as BrainError {  // an error response: retrying would get the same
@@ -222,9 +225,20 @@ public final class HermesClient: Sendable {
         throw BrainError("Hermes error \(r.statusCode): \(detail)")
     }
 
-    static func parse(_ json: String) throws -> Event? {
+    /// The events of one frame: a `run.completed` that reports its usage gives `.usage` first, then `.runEnded`.
+    static func parse(_ json: String) throws -> [Event] {
         guard let d = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { throw Malformed() }
-        return parse(d)
+        return [usage(d).map { .usage($0) }, parse(d)].compactMap { $0 }
+    }
+
+    /// The tokens and the model of a `run.completed` frame (`usage`: input_tokens, output_tokens, total_tokens, cache_read_tokens,
+    /// cache_write_tokens; `runtime`: provider, model); nil for any other frame, or one without a `usage` object.
+    static func usage(_ d: [String: Any]) -> UsageRecord? {
+        guard d["event"] as? String == "run.completed", let u = d["usage"] as? [String: Any], !u.isEmpty else { return nil }
+        let (input, output) = (u["input_tokens"] as? Int ?? 0, u["output_tokens"] as? Int ?? 0)
+        return UsageRecord(model: (d["runtime"] as? [String: Any])?["model"] as? String ?? "", input: input, output: output,
+                           total: u["total_tokens"] as? Int ?? input + output, cacheRead: u["cache_read_tokens"] as? Int ?? 0,
+                           cacheWrite: u["cache_write_tokens"] as? Int ?? 0)
     }
 
     /// Map one Hermes run event to a robo event (nil for ones robo ignores).
@@ -241,8 +255,10 @@ public final class HermesClient: Sendable {
             let what = d["description"] as? String ?? ""
             var command = d["command"] as? String ?? ""
             if command.hasSuffix("(plugin approval rule)") { command = "" }  // robo-guard's sentence says it all
+            // desktop = the DESCRIPTION is Hermes' own fixed sentence (tools/computer_use `Allow computer_use to perform ...`).
+            // robo-guard's asks (also computer_use steps in Outlook or Teams) all begin "Robo wants to", so they never match.
             return .approvalNeeded(!what.isEmpty && !command.isEmpty ? "\(what): \(command)" : what.isEmpty ? command : what,
-                                   desktop: what.hasPrefix("Allow computer_use"))
+                                   desktop: what.hasPrefix("Allow computer_use"), id: d["request_id"] as? String ?? "")
         case _ where terminal.contains(name):
             return .runEnded(status: String(name.dropFirst("run.".count)), output: d["output"] as? String ?? "",
                              error: d["error"] as? String ?? "")

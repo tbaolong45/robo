@@ -91,14 +91,6 @@ def test_present_slides_the_bubble_on_screen():
     assert r.step(0.0, "idle", True) == (300, 200)
 
 
-def test_sleep_glides_to_the_bottom_right_corner_and_stays():
-    r = Roamer(SCREENS, FACE, seed=4, start=(0, 0))
-    path = run(r, 0.0, 120, "asleep")
-    bed = (1920 - 120 - EDGE, 1080 - 120 - EDGE)
-    assert path[-1][1] == bed and r.mode == "sleep"
-    assert {p for _, p in run(r, 120, 60, "asleep")} == {bed}
-
-
 def test_hold_stays_put_then_wanders_from_there():
     r = Roamer(SCREENS, FACE, seed=5)
     r.step(0.0, "idle", False)
@@ -222,10 +214,10 @@ def test_a_drop_on_the_second_screen_stays():
     assert r.step(0.0, "idle", False) == (3000, 500)
 
 
-def test_it_sleeps_in_the_corner_of_the_screen_it_is_on():
+def test_it_sleeps_in_the_nearest_corner_of_the_screen_it_is_on():
     r = Roamer(BOTH, FACE, seed=4, start=(3000, 500))
-    path = run(r, 0.0, 200, "asleep")
-    assert path[-1][1] == (RIGHT.x + RIGHT.w - 120 - EDGE, RIGHT.y + RIGHT.h - 120 - EDGE)
+    path = run(r, 0.0, 200, "asleep")  # the right screen's top-left, not the main screen's corner
+    assert path[-1][1] == (RIGHT.x + EDGE, RIGHT.y + EDGE)
 
 
 def test_it_wanders_onto_every_screen_and_never_off_them():
@@ -278,11 +270,32 @@ def test_pressing_it_freezes_the_walk():
     assert r.mode == "present"
 
 
-def test_a_spot_the_user_chose_wins_over_a_call():
+def test_a_stay_wins_over_a_call():
+    r = Roamer(SCREENS, FACE, seed=5)
+    r.hold(0.0, (500, 300), seconds=10**9)  # the menu's Stay
+    assert r.stays(0.0)
+    assert {p for _, p in run(r, 0.0, 20, called=True)} == {(500, 300)} and r.mode == "held"
+    assert {p for _, p in run(r, HOLD, 20, called=True)} == {(500, 300)}  # past a drop's 600 s
+    r.hold(HOLD + 20, (500, 300), seconds=0)  # Wander
+    assert not r.stays(HOLD + 20)
+    assert run(r, HOLD + 20, 20, called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)
+
+
+def test_a_call_wins_over_a_drop_and_ends_its_hold():
     r = Roamer(SCREENS, FACE, seed=5)
     r.hold(0.0, (500, 300))
-    assert {p for _, p in run(r, 0.0, 20, called=True)} == {(500, 300)} and r.mode == "held"
-    assert run(r, HOLD, 20, called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)  # the hold is over
+    assert not r.stays(0.0)  # a drop is not a Stay
+    assert run(r, 0.0, 20, called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE) and r.mode == "come"
+    assert r.held_until < 0  # so the corner is not the old spot held for 10 minutes
+
+
+def test_after_a_call_on_a_drop_it_rests_in_the_corner_then_drifts_on():
+    r = Roamer(SCREENS, FACE, seed=1)
+    r.hold(0.0, (500, 300))
+    corner = (LEFT_EDGE, TOP_EDGE)
+    assert run(r, 0.0, 10, called=True)[-1][1] == corner
+    assert {p for _, p in run(r, 10, REST[0] - 1)} == {corner} and r.mode == "rest"
+    assert any(p != corner for _, p in run(r, 10 + REST[0] - 1, REST[1] + 10))  # not held on
 
 
 def test_after_a_call_it_rests_in_the_corner_then_drifts_on():
@@ -300,8 +313,9 @@ def test_the_corner_is_one_of_the_screen_it_is_on():
 
 
 def test_a_call_wins_over_sleep():
-    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))  # bed: bottom-right; call: top-left
-    assert run(r, 0.0, 20, "asleep", called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)
+    r = Roamer(SCREENS, FACE, seed=1, start=(700, 300))  # both go top-left: only the pace tells
+    assert run(r, 0.0, 10, "asleep", called=True)[-1][1] == (LEFT_EDGE, TOP_EDGE)  # 3 s, not 18
+    assert r.mode == "come"
 
 
 def test_a_bigger_window_re_aims_the_walk():
@@ -309,3 +323,58 @@ def test_a_bigger_window_re_aims_the_walk():
     run(r, 0.0, 1, called=True)
     r.resize(BUBBLE)
     assert run(r, 1.0, 20, called=True)[-1][1] == (1920 - 400 - EDGE, 1080 - 300 - EDGE)
+
+
+@pytest.mark.parametrize(("start", "corner"), [
+    ((700, 300), (LEFT_EDGE, TOP_EDGE)),
+    ((1100, 300), (RIGHT_EDGE, TOP_EDGE)),
+    ((700, 700), (LEFT_EDGE, BOTTOM_EDGE)),
+    ((1100, 700), (RIGHT_EDGE, BOTTOM_EDGE)),
+])
+def test_sleep_glides_to_the_nearest_corner_and_stays(start, corner):
+    r = Roamer(SCREENS, FACE, seed=4, start=start)
+    assert run(r, 0.0, 120, "asleep")[-1][1] == corner and r.mode == "sleep"
+    assert {p for _, p in run(r, 120, 60, "asleep")} == {corner}
+
+
+def test_without_a_spot_it_starts_in_the_bottom_right_corner():
+    assert Roamer(SCREENS, FACE, seed=4).pos == (RIGHT_EDGE, BOTTOM_EDGE)
+
+
+# A window as tall as the card, on a 1920x1080 screen with a taller one to its left (unequal sizes,
+# negative x).
+CARD = (348, 420)
+PAIR = (LEFT, SCREEN)
+
+
+def corner_of(s, right, bottom, size=CARD):
+    """The corner of `s` the pet waits in: EDGE in from the given sides."""
+    return (s.x + s.w - size[0] - EDGE if right else s.x + EDGE,
+            s.y + s.h - size[1] - EDGE if bottom else s.y + EDGE)
+
+
+DROPS = [  # a drop at `spot` goes to the nearest of the four corners of the screen it is on
+    ((100, 100), corner_of(SCREEN, False, False)), ((1400, 90), corner_of(SCREEN, True, False)),
+    ((60, 560), corner_of(SCREEN, False, True)), ((1500, 600), corner_of(SCREEN, True, True)),
+    ((780, 325), corner_of(SCREEN, False, False)), ((790, 335), corner_of(SCREEN, True, True)),
+    ((-2000, 0), corner_of(LEFT, False, False)), ((-600, -100), corner_of(LEFT, True, False)),
+    ((-2400, 700), corner_of(LEFT, False, True)), ((-700, 500), corner_of(LEFT, True, True)),
+]
+
+
+@pytest.mark.parametrize(("spot", "corner"), DROPS)
+def test_a_call_after_a_drop_goes_to_the_nearest_of_the_four_corners(spot, corner):
+    r = Roamer(PAIR, CARD, seed=1)
+    r.hold(0.0, spot)
+    assert r.pos == spot  # a drop that fits is not moved
+    r.step(0.1, "idle", False, True)
+    assert r.goal == corner and r.mode == "come"  # aimed at once, from the spot it was dropped on
+    assert run(r, 0.1, 20, called=True)[-1][1] == corner
+
+
+@pytest.mark.parametrize(("spot", "corner"), DROPS)
+def test_a_sleeper_after_a_drop_goes_to_the_nearest_of_the_four_corners(spot, corner):
+    r = Roamer(PAIR, CARD, seed=1)
+    r.hold(0.0, spot)
+    assert {p for _, p in run(r, 0.0, HOLD - 1, "asleep", fps=4)} == {spot} and r.mode == "held"
+    assert run(r, HOLD, 120, "asleep")[-1][1] == corner and r.mode == "sleep"

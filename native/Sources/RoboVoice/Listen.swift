@@ -191,7 +191,8 @@ public typealias Transcribe = ([Float]) throws -> String
 /// `onWake()` when robo is called by name, then `onText(request)`. A request ends after
 /// `patientSilenceS` of quiet. A sentence also counts without the name while robo expects one:
 /// after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`), after
-/// `followUp(seconds:)` (it just answered), or right after a bare "robo". A mic that stops
+/// `followUp(seconds:)` (it just answered; `onWake` waits there for `minSpeechFrames` loud frames, so a knock
+/// changes nothing, and `handsFree` is true while that text is delivered), or right after a bare "robo". A mic that stops
 /// delivering is reopened; one that only gives silence is reported through `onNote`, like every
 /// other message for the user.
 ///
@@ -214,6 +215,7 @@ public final class Listener {
     private var generation = 0  // which start() the thread belongs to
     private var openUntil = 0.0  // a sentence without the name counts until then
     private var asked = false  // the open window came from a click or a bare "robo": end it with ""
+    private var handsFreeText = false  // the text `onText` last got was said in a follow-up window (no key, click or name)
     private var held = false  // the push-to-talk key is down
     private var heldAt = 0.0  // since when
     private var tapped = false  // the last press was a tap: release() opened a window, nothing to transcribe
@@ -241,6 +243,16 @@ public final class Listener {
 
     /// Running and the speech model is loaded: what you say is understood from now on.
     public var ready: Bool { lock.withLock { alive && loaded } }
+
+    /// The text `onText` is delivering (read it there) was said inside a follow-up window: no key, no click, no name,
+    /// so it may have come from the TV or the room. False for a held key, a click or tap, and a sentence with the name.
+    public var handsFree: Bool { lock.withLock { handsFreeText } }
+
+    /// Every `onText` goes through here, so `handsFree` is never left over from an earlier text.
+    private func deliver(_ text: String, handsFree: Bool = false) {
+        lock.withLock { handsFreeText = handsFree }
+        onText(text)
+    }
 
     /// Start listening and return at once (always true; Python returned false for a mic that would
     /// not open). The listener thread opens the mic, which can block for as long as the user takes to
@@ -325,8 +337,12 @@ public final class Listener {
         if tap { open(Listen.noSpeechS, asked: true) }
     }
 
-    /// Robo just answered: a reply in the next `seconds` needs no name.
-    public func followUp(seconds: Double) { open(seconds, asked: false) }
+    /// Robo just answered: a reply in the next `seconds` needs no name (0 closes the window). A window a click or
+    /// a bare "robo" opened is left to end itself: it owes the UI an `onText("")`.
+    public func followUp(seconds: Double) {
+        let until = clock() + seconds
+        lock.withLock { if !asked { openUntil = until } }
+    }
 
     private func open(_ seconds: Double, asked: Bool) {
         let until = clock() + seconds
@@ -353,7 +369,7 @@ public final class Listener {
                         if expired { asked = false }  // clicked (or said "robo"), then nothing: give up
                         return expired
                     }
-                    if gaveUp { onText("") }
+                    if gaveUp { deliver("") }
                 }
                 guard let frame = try read(mic!) else {
                     if clock() - lastAudio >= micStallS {
@@ -375,20 +391,25 @@ public final class Listener {
                     continue
                 }
                 inflight.wait()  // the last sentence's verdict decides whether robo expects this one
-                let woke = lock.withLock { clock() < openUntil }  // robo expects this sentence: show it now
+                // robo expects this sentence: show it now. A follow-up window (not asked) waits for real speech
+                // first (`record`): a knock must not wipe the reply and leave robo "listening".
+                let (woke, inWindow) = lock.withLock { () -> (Bool, Bool) in
+                    let open = clock() < openUntil
+                    return (open, open && !asked)
+                }
                 if !woke && !nameWake {  // nobody asked for it: not even transcribed
                     preRoll.append(frame)
                     continue
                 }
-                if woke { onWake() }
-                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, quick: quick)
+                if woke && !inWindow { onWake() }
+                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, inWindow: inWindow, quick: quick)
                 preRoll.removeAll()
                 if u.loud >= Listen.minSpeechFrames {
                     let audio = u.frames.flatMap { $0 }
                     infer.async(group: inflight) { [self] in
                         do {
                             let text = try transcribe(audio)
-                            heard(text, woke: u.woke)
+                            heard(text, woke: u.woke, handsFree: inWindow)
                         } catch { lock.withLock { failure = error } }
                     }
                 }
@@ -429,7 +450,7 @@ public final class Listener {
     }
 
     /// Decide whether a transcribed sentence was for robo (`woke`: robo already showed it).
-    private func heard(_ text: String, woke: Bool) {
+    private func heard(_ text: String, woke: Bool, handsFree: Bool) {
         if stopping.isSet { return }
         guard let request = woke ? withoutName(text) : addressed(text) else { return }  // TV, other people
         if !woke { onWake() }
@@ -437,7 +458,7 @@ public final class Listener {
         if request.isEmpty {  // just "robo" (or nothing intelligible): the request follows
             open(Listen.noSpeechS, asked: true)
         } else {
-            onText(request)
+            deliver(request, handsFree: handsFree)
         }
     }
 
@@ -455,18 +476,19 @@ public final class Listener {
             if rms(frame) > gate { loud += 1 }
         }
         if stopping.isSet || lock.withLock({ tapped }) { return }
-        guard loud >= Listen.minSpeechFrames else { return onText("") }
+        guard loud >= Listen.minSpeechFrames else { return deliver("") }
         let audio = frames.flatMap { $0 }
         infer.async(group: inflight) { [self] in
-            do { onText(withoutName(try transcribe(audio))) } catch { lock.withLock { failure = error } }
+            do { deliver(withoutName(try transcribe(audio))) } catch { lock.withLock { failure = error } }
         }
     }
 
     struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool }
 
     /// Frames until the sentence ends (or stop()), how many were above the gate, and whether robo
-    /// woke up (a quick early check found its name at the start).
-    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool,
+    /// woke up (a quick early check found its name at the start). `inWindow`: a follow-up window
+    /// expects this sentence, and robo shows it is listening once `minSpeechFrames` are loud.
+    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool, inWindow: Bool,
                         quick: Transcribe) throws -> Utterance {
         var u = Utterance(frames: first, loud: 1, woke: woke)
         var ep = Endpointer(gate: gate)
@@ -481,7 +503,10 @@ public final class Listener {
             }
             u.frames.append(frame)
             let level = rms(frame)
-            if level > gate { u.loud += 1 }
+            if level > gate {
+                u.loud += 1
+                if inWindow && u.loud == Listen.minSpeechFrames { onWake() }
+            }
             if ep.feed(level) { break }
             if !u.woke && u.frames.count - start == Listen.earlyFrames {
                 u.woke = addressed(try infer.sync { try quick(u.frames.flatMap { $0 }) }) != nil

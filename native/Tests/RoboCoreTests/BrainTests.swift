@@ -88,7 +88,8 @@ private func frame(_ seq: Int, _ name: String, _ fields: [String: Any] = [:]) ->
 }
 
 private let FULL: Data = {
-    let approval: [String: Any] = ["command": "rm -rf /tmp/x", "description": "recursive delete", "choices": ["once", "deny"]]
+    let approval: [String: Any] = ["command": "rm -rf /tmp/x", "description": "recursive delete", "choices": ["once", "deny"],
+                                   "request_id": "q1"]
     let frames: [Data] = [
         Data(": open\n\n".utf8),
         frame(0, "message.delta", ["delta": "[[feel:happy]] Hel"]),
@@ -125,7 +126,7 @@ struct BrainTests {
         let events = try await collect(client { _ in .sse(chunks: pieces(FULL, by: 7)) }.events("r1"))
         #expect(events == [
             .delta("[[feel:happy]] Hel"), .toolStarted("web_search"), .toolCompleted(tool: "web_search", error: false),
-            .approvalNeeded("recursive delete: rm -rf /tmp/x"), .delta("lo"),
+            .approvalNeeded("recursive delete: rm -rf /tmp/x", id: "q1"), .delta("lo"),
             .runEnded(status: "completed", output: "[[feel:happy]] Hello"),
         ])
     }
@@ -142,6 +143,48 @@ struct BrainTests {
     @Test func stopsReadingAfterTerminalEvent() async throws {
         let body = frame(0, "run.completed", ["output": "a"]) + frame(1, "message.delta", ["delta": "late"])
         #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [.runEnded(status: "completed", output: "a")])
+    }
+
+    // Hermes' run.completed: usage {input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens} and
+    // runtime {provider, model} (gateway/platforms/api_server_runs.py `_USAGE_FIELDS`, `_sanitize_runtime_metadata`).
+    private static let usage: [String: Any] = ["input_tokens": 1200, "output_tokens": 340, "total_tokens": 1540, "cache_read_tokens": 9000,
+                                               "cache_write_tokens": 15]
+    private static let runtime: [String: Any] = ["provider": "anthropic", "model": "claude-opus-4-5", "route_source": "global"]
+    private static let record = UsageRecord(model: "claude-opus-4-5", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15)
+
+    @Test func aCompletedRunReportsItsUsageJustBeforeItsEnd() async throws {
+        let body = frame(0, "message.delta", ["delta": "hi"]) + frame(1, "run.completed", ["output": "hi", "usage": Self.usage, "runtime": Self.runtime])
+        #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [
+            .delta("hi"), .usage(Self.record), .runEnded(status: "completed", output: "hi"),
+        ])
+    }
+
+    @Test func usageSurvivesAskInOrder() async throws {
+        let c = client { req in
+            req.method == "POST" ? .json(202, ["run_id": "r1"]) : .sse(frame(0, "message.delta", ["delta": "[[feel:happy]]Hi"]),
+                                                                       frame(1, "run.completed", ["output": "Hi", "usage": Self.usage, "runtime": Self.runtime]))
+        }
+        #expect(try await collect(c.ask("hi", sessionId: "s")) == [
+            .feeling("happy"), .delta("Hi"), .usage(Self.record), .runEnded(status: "completed", output: "Hi"),
+        ])
+    }
+
+    @Test func usageIsReadFromWhatHermesSendsAndOnlyOnACompletedRun() {
+        #expect(HermesClient.usage(["event": "run.completed", "usage": Self.usage]) == UsageRecord(
+            model: "", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15))  // no runtime: no model
+        #expect(HermesClient.usage(["event": "run.completed", "usage": ["input_tokens": 10, "output_tokens": 5]]) == UsageRecord(
+            input: 10, output: 5, total: 15))  // no total: input and output
+        #expect(HermesClient.usage(["event": "run.completed"]) == nil && HermesClient.usage(["event": "run.completed", "usage": [:]]) == nil)
+        for name in ["run.failed", "run.cancelled", "run.interrupted", "message.delta"] {  // none counts a run that did not complete
+            #expect(HermesClient.usage(["event": name, "usage": Self.usage]) == nil)
+        }
+    }
+
+    @Test func aRunWithoutUsageEndsWithoutAUsageEvent() async throws {
+        let body = frame(0, "run.completed", ["output": "hi", "usage": [:]])
+        #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [.runEnded(status: "completed", output: "hi")])
+        let failed = frame(0, "run.failed", ["error": "boom", "usage": Self.usage])
+        #expect(try await collect(client { _ in .sse(failed) }.events("r1")) == [.runEnded(status: "failed", error: "boom")])
     }
 
     @Test func lostStreamResumesOnceFromLastEventId() async throws {
@@ -273,8 +316,18 @@ struct BrainTests {
         try await c.approve("r1", choice)
         try await c.stop("r1")
         let (approve, stop) = (seen.all[0], seen.all[1])
-        #expect(approve.url == "http://h/p/v1/runs/r1/approval" && approve.json == ["choice": choice.rawValue])
+        #expect(approve.url == "http://h/p/v1/runs/r1/approval" && approve.json == ["choice": choice.rawValue])  // no id: Hermes answers the oldest
         #expect(stop.method == "POST" && stop.url == "http://h/p/v1/runs/r1/stop")
+    }
+
+    /// Two asks can be pending at once and Hermes answers the oldest unless told which: the answer names its request.
+    @Test(arguments: [ApprovalChoice.once, .session, .deny])
+    func approveNamesTheRequestItAnswers(choice: ApprovalChoice) async throws {
+        let seen = Log<Seen>()
+        let c = client(base: "http://h/p") { req in seen.add(req); return .json(200, [String: String]()) }
+        try await c.approve("r1", choice, requestId: "9f2c")
+        #expect(seen.all[0].url == "http://h/p/v1/runs/r1/approval")
+        #expect(seen.all[0].json == ["choice": choice.rawValue, "request_id": "9f2c"])
     }
 
     @Test func approvalHasNoAlways() {
@@ -349,10 +402,32 @@ struct BrainTests {
     @Test func desktopControlApprovalsAreMarked() {
         let ev = HermesClient.parse(["event": "approval.request", "description": "Allow computer_use to perform `click`?",
                                      "command": "computer_use: click (412, 300)"])
-        guard case .approvalNeeded(let description, let desktop)? = ev else { Issue.record("not an approval"); return }
+        guard case .approvalNeeded(let description, let desktop, _)? = ev else { Issue.record("not an approval"); return }
         #expect(desktop && description.contains("click"))
         #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
             == .approvalNeeded("recursive delete: rm -rf x"))
+    }
+
+    @Test func approvalsCarryTheirRequestId() {
+        #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
+                                    "command": "<browser_navigate> (plugin approval rule)", "request_id": "9f2c"])
+            == .approvalNeeded("Robo wants to open https://x.example/.", id: "9f2c"))
+        #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
+            == .approvalNeeded("recursive delete: rm -rf x", id: ""))  // none sent: the answer is the oldest one's
+    }
+
+    /// robo-guard's ask for a computer_use step in Outlook or Teams ("Robo wants to ..."): never marked as Hermes' own desktop
+    /// approval, so the app shows it. Hermes' own approval of the same step (which here names Outlook too) stays marked: the user
+    /// already answered the guard's ask for it and must not be asked twice.
+    @Test func guardAsksForOutlookAndTeamsAreNeverDesktopApprovals() {
+        for app in ["Microsoft Outlook", "Microsoft Teams", "com.microsoft.teams2"] {
+            #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to click in \(app) (computer_use).",
+                                        "command": "<computer_use> (plugin approval rule)", "request_id": "g1"])
+                == .approvalNeeded("Robo wants to click in \(app) (computer_use).", desktop: false, id: "g1"))
+        }
+        #expect(HermesClient.parse(["event": "approval.request", "description": "Allow computer_use to perform `focus_app`?",
+                                    "command": "computer_use: focus 'Microsoft Outlook'", "request_id": "h1"])
+            == .approvalNeeded("Allow computer_use to perform `focus_app`?: computer_use: focus 'Microsoft Outlook'", desktop: true, id: "h1"))
     }
 
     // MARK: the default session and a real socket

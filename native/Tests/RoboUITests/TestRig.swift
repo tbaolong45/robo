@@ -52,7 +52,7 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
     private var _script: [Step]
     private var _asked: [(text: String, session: String)] = []
     private var _stopped: [String] = []
-    private var _approved: [(run: String, choice: ApprovalChoice)] = []
+    private var _approved: [(run: String, choice: ApprovalChoice, id: String)] = []
     let gate = Gate()
     var fail: Error?
     var beforeStart: Gate?  // holds the run between "asked" and "started"
@@ -69,7 +69,7 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
     }
     var asked: [(text: String, session: String)] { lock.withLock { _asked } }
     var stopped: [String] { lock.withLock { _stopped } }
-    var approved: [(run: String, choice: ApprovalChoice)] { lock.withLock { _approved } }
+    var approved: [(run: String, choice: ApprovalChoice, id: String)] { lock.withLock { _approved } }
 
     func ask(_ text: String, sessionId: String, started: (@Sendable (String) -> Void)?) -> AsyncThrowingStream<Event, Error> {
         lock.withLock { _asked.append((text, sessionId)) }
@@ -93,15 +93,17 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
     }
 
     func stop(_ runId: String) async throws { lock.withLock { _stopped.append(runId) } }
-    func approve(_ runId: String, _ choice: ApprovalChoice) async throws { lock.withLock { _approved.append((runId, choice)) } }
+    func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String) async throws {
+        lock.withLock { _approved.append((runId, choice, requestId)) }
+    }
 }
 
 final class FakeEar: Ear {
     let onWake: () -> Void, onText: (String) -> Void, onNote: (String) -> Void
     let ok: Bool
-    var now = 0, follow = 0.0, stops = 0, holds = 0, releases = 0
+    var now = 0, follow = 0.0, follows: [Double] = [], stops = 0, holds = 0, releases = 0  // follow: the last, follows: every call
     var stopped: Bool { stops > 0 }
-    var running = true, ready = true
+    var running = true, ready = true, handsFree = false  // handsFree: a test sets it before `onText`, as the listener does
 
     init(_ w: @escaping () -> Void, _ t: @escaping (String) -> Void, _ n: @escaping (String) -> Void, ok: Bool = true) {
         (onWake, onText, onNote, self.ok) = (w, t, n, ok)
@@ -110,7 +112,7 @@ final class FakeEar: Ear {
     func listenNow() { now += 1 }
     func hold() { holds += 1 }
     func release() { releases += 1 }
-    func followUp(seconds: Double) { follow = seconds }
+    func followUp(seconds: Double) { follow = seconds; follows.append(seconds) }
     func stop(wait: Double) { stops += 1 }
 }
 
@@ -172,6 +174,15 @@ extension CardView {
     var files: [URL] = [], notes: [(url: URL, front: Bool)] = []
     var typers: [TypePanel] = [], ears: [FakeEar] = [], pollers: [FakePoller] = []
     var terminated = false
+    /// The backdrop: what the fake sampler reads (nil = no Screen Recording), the rectangles it was asked about, the answers held back
+    /// by `holdLooks` until `answerLooks`, how often the permission was asked for, and Reduce Motion. Nothing here captures the
+    /// screen or shows the system's dialog.
+    var backdrop: Double?
+    var looks: [NSRect] = []
+    var holdLooks = false
+    var held: [(Double?) -> Void] = []
+    var screenAsks = 0
+    var reduceMotion = false
     /// The app that had the keyboard before robo took it, whether robo's app is active, who got it back.
     var frontmost: NSRunningApplication? = NSWorkspace.shared.runningApplications.first {
         $0.processIdentifier != getpid() && $0.activationPolicy == .regular
@@ -185,6 +196,8 @@ extension CardView {
     var ear: FakeEar { ears[0] }
     var out: URL { dir.appendingPathComponent("Robo") }
     var vault: URL { dir.appendingPathComponent("Vault") }
+    var receipts: URL { window.machine.receiptsFile }
+    var usage: URL { window.machine.usageFile }
 
     /// `cps` is the typing speed of the theme (0 = at once); `digestDue` leaves today's digest to be asked.
     init(_ script: [FakeHermes.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
@@ -203,12 +216,23 @@ extension CardView {
         m.vaultDir = vault
         m.outputDir = out
         m.watchPausedFile = dir.appendingPathComponent("watch.paused")
+        m.receiptsFile = dir.appendingPathComponent("data/receipts.jsonl")  // never the real data folder
+        m.usageFile = dir.appendingPathComponent("data/usage.jsonl")
+        m.dailyTokens = 0  // whatever ROBO_DAILY_TOKENS the shell has
         m.displays = { [weak self] in self?.displays ?? Rig.single }
         m.pointer = { [weak self] in self?.pointer ?? .zero }
         m.openFile = { [weak self] in self?.files.append($0) }
         m.openNote = { [weak self] url, front in self?.notes.append((url, front)) }
         m.showTyper = { [weak self] in self?.typers.append($0) }
         m.terminate = { [weak self] in self?.terminated = true }
+        m.backdropLuma = { [weak self] rect, done in
+            guard let self else { return done(nil) }
+            looks.append(rect)
+            if holdLooks { held.append(done) } else { done(backdrop) }
+        }
+        m.askScreenAccess = { [weak self] in self?.screenAsks += 1 }
+        m.reduceMotion = { [weak self] in self?.reduceMotion ?? false }
+        Chrome.ink = nil  // a card that knew its backdrop in an earlier test must not colour this one
         m.focus = Focus(frontmost: { [weak self] in self?.frontmost }, appIsActive: { [weak self] in self?.appActive ?? false },
                         activate: { [weak self] in self?.activated.append($0) })
         window = RoboWindow(
@@ -231,8 +255,16 @@ extension CardView {
     func step() {
         clock.advance(1.0 / 30)
         if window.revealer != nil { window.reveal() }
+        if window.shadeTimer != nil { window.ease() }
         steps += 1
         if steps % 3 == 0 { window.tick() }
+    }
+
+    /// The held looks at the backdrop come back with `luma`.
+    func answerLooks(_ luma: Double?) {
+        let waiting = held
+        held = []
+        for done in waiting { done(luma) }
     }
 
     /// Step the clock until `until` holds, letting the main actor go between steps so the worker and the
@@ -261,7 +293,13 @@ extension CardView {
     func close() {
         window.panel.orderOut(nil)
         window.quit()
-        try? FileManager.default.removeItem(at: dir)
+        Chrome.ink = nil
+        // A stopped run's worker may be writing its usage line as the home goes: the delete then fails (not empty), so again.
+        for _ in 0..<20 {
+            try? FileManager.default.removeItem(at: dir)
+            if !FileManager.default.fileExists(atPath: dir.path) { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
     }
 
     var space: ScreenSpace { window.space }

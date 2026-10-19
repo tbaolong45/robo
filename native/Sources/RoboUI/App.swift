@@ -16,6 +16,11 @@ extension RoboWindow {
             stop()
             return
         }
+        let cap = machine.dailyTokens
+        if cap > 0 && Usage.todayTokens(file: machine.usageFile, now: machine.wall()) >= cap {  // no run starts: it would only cost more
+            say("Today's token budget (\(cap)) is used up. Set ROBO_DAILY_TOKENS higher or wait for tomorrow.")
+            return
+        }
         let day = today()
         lock.withLock {
             busy = true
@@ -24,6 +29,8 @@ extension RoboWindow {
             scanned = nil
         }
         reply = ""
+        runStart = now()
+        toolLabel = ""
         // One Hermes session per day and persona version (Setup persona stamp).
         sessionID = ["robo", day.iso, persona].filter { !$0.isEmpty }.joined(separator: "-")
         digestDay = text == RoboWindow.digestPrompt ? day : nil
@@ -35,14 +42,23 @@ extension RoboWindow {
         clearReply()
         onEvent(.userSent(text))
         let (session, since, output, vault) = (sessionID, startedAt, machine.outputDir, machine.vaultDir)
+        let (receipts, usageFile, clock, wall, began) = (machine.receiptsFile, machine.usageFile, machine.clock, machine.wall, runStart)
         Task.detached { [self] in
-            await work(text, session: session, waitNetwork: waitNetwork, scan: { Self.made(output: output, vault: vault, since: since) })
+            await work(text, session: session, waitNetwork: waitNetwork, finish: { status, reply, usage, steps in
+                var found = status == "completed" ? Self.made(output: output, vault: vault, since: since) : Made()
+                found.receipts = Receipt.lines(reply: reply, evidence: ReceiptLog.read(receipts, since: since))
+                Usage.append(Usage.line(usage, status: status, seconds: clock() - began, steps: steps, wall: wall()), to: usageFile)
+                return found
+            })
         }
     }
 
     /// The worker (any thread): everything it learns goes to the main thread through the bridge.
-    /// `scan` reads what the request made, here and not at the end of the run on the main thread: the folders\n    /// can hold tens of thousands of files.
-    func work(_ text: String, session: String, waitNetwork: Bool, scan: () -> Made) async {
+    /// `finish` (the run ended `status`, with this `reply`, `usage` and number of tool `steps`) reads what the request made and
+    /// what the guard recorded, and logs the run: here and not at the end of the run on the main thread, as the folders can
+    /// hold tens of thousands of files.
+    func work(_ text: String, session: String, waitNetwork: Bool,
+              finish: (_ status: String, _ reply: String, _ usage: UsageRecord?, _ steps: Int) -> Made) async {
         let emit = bridge.event
         if waitNetwork {
             let online = await withCheckedContinuation { c in
@@ -60,10 +76,17 @@ extension RoboWindow {
             return
         }
         do {
+            var streamed = "", steps = 0
+            var usage: UsageRecord?
             for try await ev in hermes.ask(text, sessionId: session, started: { [weak self] id in self?.started(id) }) {
-                if case .runEnded("completed", _, _) = ev {
-                    let found = scan()
+                switch ev {
+                case .delta(let t): streamed += t
+                case .toolStarted: steps += 1
+                case .usage(let u): usage = u
+                case .runEnded(let status, let output, _):
+                    let found = finish(status, output.isEmpty ? streamed : output, usage, steps)
                     lock.withLock { scanned = found }
+                default: break
                 }
                 emit(ev)
             }
@@ -95,9 +118,20 @@ extension RoboWindow {
         if running, let run { background { [hermes] in try await hermes.stop(run) } }
     }
 
+    /// A click on the card answers the ask it shows (the oldest), then the next one shows.
     func approve(_ choice: ApprovalChoice) {
-        card.setApproval(nil)
-        if let id = lock.withLock({ runID }) { background { [hermes] in try await hermes.approve(id, choice) } }
+        if !approvals.isEmpty { answer(choice, approvals.removeFirst().id) }
+        showApproval()
+    }
+
+    /// Tell Hermes what to do about one ask, by its id: without one it answers the oldest pending ask, which may be another.
+    func answer(_ choice: ApprovalChoice, _ id: String) {
+        if let run = lock.withLock({ runID }) { background { [hermes] in try await hermes.approve(run, choice, requestId: id) } }
+    }
+
+    /// The card shows the oldest ask and how many wait behind it; with none it hides.
+    func showApproval() {
+        card.setApproval(approvals.first?.text, more: max(0, approvals.count - 1))
     }
 
     /// The run's own stream reports what happened, so a failed call is ignored.
@@ -110,7 +144,10 @@ extension RoboWindow {
     func onHeard(_ text: String) {
         onEvent(.listening(false))
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !said.isEmpty {
+        if !said.isEmpty && ear?.handsFree == true && Intent.changesThings(said) {
+            // said in the follow-up window, without the key (the TV or the room may have said it): never act on it
+            say("That would change something, so hold Ctrl+Q and say it again.")
+        } else if !said.isEmpty {
             ask(said)
         } else if !busy {
             say("Sorry, I didn't catch that.")
@@ -153,17 +190,24 @@ extension RoboWindow {
         case .delta(let t):
             reply += t
             feed(reply)
-        case .approvalNeeded(_, desktop: true):
-            // The user lets robo drive the desktop freely ("all but irreversible"); "session" covers that
-            // kind of desktop step for the rest of this request only.
-            if let id = lock.withLock({ runID }) { background { [hermes] in try await hermes.approve(id, .session) } }
-            refresh()
-            return
-        case .approvalNeeded(let d, _):
+        case .toolStarted(let tool):
+            toolLabel = Mind.toolLabel(tool)
+        case .approvalNeeded(let d, let desktop, let id):
+            if autoDigest || desktop {
+                // The automatic digest only reads and nobody is looking: every ask is denied at once, none waits on a
+                // card (a digest from the menu is attended and asks). Otherwise this is Hermes' own approval of a desktop
+                // step; the user lets robo drive the desktop freely ("all but irreversible"), and "session" covers that
+                // kind of step for the rest of this request only. robo-guard's asks (irreversible steps, Outlook and Teams
+                // steps) are not `desktop`: they show the card.
+                answer(autoDigest ? .deny : .session, id)
+                refresh()
+                return
+            }
             let scalars = d.unicodeScalars
             let shown = scalars.count <= RoboWindow.approvalMax ? d
                 : String(String.UnicodeScalarView(scalars.prefix(RoboWindow.approvalMax - 1))) + "…"
-            card.setApproval(shown)  // room for the buttons: the window grows
+            approvals.append((id, shown))  // parallel tool calls ask together: in order, the oldest first
+            showApproval()  // room for the buttons: the window grows
             open()
         case .runEnded(let status, let output, let error):
             ended(status: status, output: output, error: error)
@@ -181,13 +225,16 @@ extension RoboWindow {
             defer { scanned = nil }
             return scanned
         }
-        card.setApproval(nil)
+        approvals.removeAll()  // a run that ended has nothing left to ask
+        showApproval()
+        toolLabel = ""
         var text = status == "completed" ? (output.isEmpty ? reply : output) : (error.isEmpty ? "Run \(status)." : error)
         if listening {  // interrupted by the user speaking: keep listening
             mind = mind.react(.listening(true), now: now())
         }
         if let day = digestDay, status == "completed" { try? digest.mark(day) }
         if status == "completed" { answeredAt = now() }
+        followDue = status == "completed" && pending.isEmpty && !listening  // a reply needs no "robo", once it is typed (finishedTyping)
         var lines: [String] = []
         if status == "completed" && !listening {
             let (notes, files) = (made?.notes ?? [], made?.files ?? [])
@@ -196,11 +243,11 @@ extension RoboWindow {
             if !notes.isEmpty { lines.append("📓 In Obsidian: " + notes.map { $0.deletingPathExtension().lastPathComponent }.joined(separator: ", ")) }
             if !files.isEmpty { lines.append("📂 Opened " + files.map(\.lastPathComponent).joined(separator: ", ")) }
         }
+        if !listening { lines += made?.receipts ?? [] }  // what the guard recorded, also under a failed or stopped run: a send may have happened
         if !listening && pending.isEmpty {
             card.setFooter(lines.joined(separator: "\n"))  // shown when the typing is done
             feed(text, end: true)
         }
-        if let ear, status == "completed", pending.isEmpty { ear.followUp(seconds: RoboWindow.followUpS) }  // a reply needs no "robo"
         digestDay = nil
         open(closeAfter: listening ? 0 : RoboWindow.closeAfter)
         if !pending.isEmpty {
@@ -223,6 +270,7 @@ extension RoboWindow {
             }
         }
         alive(now)
+        if !card.isHidden && now >= sampleAt { look() }  // nothing runs while the card is away
         refresh()
     }
 
@@ -252,13 +300,24 @@ extension RoboWindow {
         let activity: Activity = typing && (m.activity == .idle || m.activity == .talking) ? .talking : m.activity
         face.setState(activity: activity, emotion: m.emotion, talking: typing ? tw.revealing : m.talking)
         card.setHue(Themes.liveHue(theme, faceNow: face.params.hue, activity: m.activity.rawValue))
-        card.setLights(link: link, mic: CardView.micState(listenerReady: ear?.ready, activity: m.activity, noted: noted))
+        card.setLights(link: link, mic: CardView.micState(listenerReady: ear?.ready, activity: m.activity, noted: noted,
+                                                          following: now < followUntil && !busy))
         card.setPhase(now)
         caret(now)
         let listeningNow = m.activity == .listening
         let thinking = busy && reply.isEmpty && !listeningNow
-        let label = listeningNow ? "listening" : thinking ? m.label : ""  // e.g. "searching the web…" beside the dots
+        let label = listeningNow ? "listening" : thinking ? workingLabel(m, now) : ""  // e.g. "searching the web…" beside the dots
         card.setStatusRow(typing: thinking, label: label)
+    }
+
+    /// The line beside the dots while Hermes works: what the last tool does (it stays while the model thinks between tools),
+    /// "on it…" before the first one, and from 40 s on how long it has gone, every 20 s ("still working · 60 s"). Nothing
+    /// while the card asks the user something: the wait is theirs.
+    func workingLabel(_ m: Mind, _ now: Double) -> String {
+        if m.activity == .waiting { return "" }
+        let seconds = Int(max(0, now - runStart))
+        if seconds >= 40 { return "still working · \(seconds / 20 * 20) s" }
+        return m.label.isEmpty ? (toolLabel.isEmpty ? "on it…" : toolLabel) : m.label
     }
 
     /// Shown while the reply types and for `caretS` after: solid just after a letter, else blinking
@@ -284,7 +343,15 @@ extension RoboWindow {
         typed = false
         mouth = false
         closeAt = 0
+        endFollowUp()
         card.clearReply()
+    }
+
+    /// A new exchange, a local message or a closed card ends the key-less follow-up window and its MIC light.
+    func endFollowUp() {
+        followDue = false
+        followUntil = 0
+        ear?.followUp(seconds: 0)
     }
 
     /// Hand the typewriter the reply so far (`end`: that is all of it, as Hermes finished).
@@ -339,6 +406,13 @@ extension RoboWindow {
         typedAt = now()
         card.showFooter()
         if closeAfter != 0 && !busy { closeAt = typedAt + closeAfter }
+        if followDue && !busy {  // counted from the last letter: typing and reading must not eat the window
+            followDue = false
+            if let ear {
+                followUntil = typedAt + RoboWindow.followUpS
+                ear.followUp(seconds: RoboWindow.followUpS)
+            }
+        }
         refresh()
     }
 
@@ -367,6 +441,11 @@ extension RoboWindow {
         if card.isHidden {
             fit { card.isHidden = false }
             fadeIn()
+            if !askedScreen {
+                askedScreen = true
+                machine.askScreenAccess()  // the system's dialog, once per launch; the card and its typing do not wait for it
+            }
+            look()  // the card's first look now, not a tick later
         }
     }
 
@@ -383,6 +462,8 @@ extension RoboWindow {
 
     func closeBubble() {
         closeAt = 0
+        stopShading()
+        endFollowUp()
         fit {
             card.hideMenu()
             card.isHidden = true
@@ -390,11 +471,63 @@ extension RoboWindow {
         releaseKeyboard()
     }
 
+    // MARK: - the backdrop: the card turns light over a dark screen and dark over a light one
+
+    static let lookS = 0.25  // s between looks at what is behind the card while it shows (about 4 Hz)
+
+    /// Where the glass is on the screens (AppKit coordinates): what it blurs is what is measured, and the card moves with the pet.
+    var glassRect: CGRect { panel.convertToScreen(card.glass.convert(card.glass.bounds, to: nil)) }
+
+    /// A look at the backdrop, one at a time; what it reads decides the shade. The card must be showing.
+    func look() {
+        guard !sampling else { return }
+        sampling = true
+        sampleAt = now() + RoboWindow.lookS
+        machine.backdropLuma(glassRect) { [weak self] luma in
+            guard let self else { return }
+            sampling = false
+            guard !card.isHidden, !shutdownStarted else { return }  // the card went away while it looked
+            shade.see(luma: luma)
+            applyShade()
+        }
+    }
+
+    /// Show the shade: the glass and the ink at its level (the system's own look while the backdrop is not known), easing at
+    /// 30 Hz while it moves. Reduce Motion goes straight there.
+    func applyShade() {
+        guard shade.known else {
+            stopShading()
+            card.setShade(level: nil, ink: nil)
+            return
+        }
+        if machine.reduceMotion() { shade.snap() }
+        card.setShade(level: shade.level, ink: shade.ink)
+        if shade.moving && shadeTimer == nil {
+            lastShade = now()
+            shadeTimer = commonTimer(RoboWindow.typeS) { [weak self] in self?.ease() }
+        }
+    }
+
+    /// One step of the ease; the timer is gone once the shade has arrived.
+    func ease() {
+        let t = now()
+        let moving = shade.step(dt: min(t - lastShade, 0.1))
+        lastShade = t
+        card.setShade(level: shade.level, ink: shade.ink)
+        if !moving { stopShading() }
+    }
+
+    func stopShading() {
+        shadeTimer?.invalidate()
+        shadeTimer = nil
+    }
+
     // MARK: - what robo made opens by itself
 
-    /// What a finished request made: Obsidian notes and files in the output folder.
+    /// What a finished request made (Obsidian notes, files in the output folder) and what the guard recorded of it (footer lines).
     struct Made {
         var notes: [URL] = [], files: [URL] = []
+        var receipts: [String] = []
     }
 
     private static let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]

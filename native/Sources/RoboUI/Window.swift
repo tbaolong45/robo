@@ -17,7 +17,7 @@ final class RoboWindow {
     static let solidS = 0.5  // s the caret stays solid after a letter, then it blinks
     static let caretS = 1.6  // s the caret keeps blinking once the reply is all there
     static let openMax = 3  // notes and files opened after one request, together
-    static let followUpS = 10.0  // s after an answer when you can reply without saying "robo"
+    static let followUpS = 15.0  // s after the answer is typed when you can reply without saying "robo"
     static let drag = 6.0  // px of movement that turns a click on the face into a drag
     static let fidgets = ["curious", "happy", "playful", "calm"]  // what a bored robo shows now and then
     static let fidgetEvery = 40.0...120.0  // s between those moods while it idles
@@ -55,8 +55,11 @@ final class RoboWindow {
     var autoDigest = false  // that digest started by itself (start-up, wake), not from the menu
     var reply = ""
     var pending = ""  // a question asked during a run, asked when it ends
+    var approvals: [(id: String, text: String)] = []  // asks waiting for a click, oldest first (the card shows the first); cleared when the run ends
     var scanned: Made?  // what the worker found robo made, for `ended` (under `lock`)
     var startedAt = 0.0  // when the current request began (files made since then open)
+    var runStart = 0.0  // the same moment on the window's clock: "still working" counts from it
+    var toolLabel = ""  // what the last tool of this request was doing; stays up while the model thinks between tools
     var listening = false
     var closeAt = 0.0  // when the finished reply's card closes (0 = not scheduled)
     var closeAfter = 0.0  // s the card stays once the reply is typed (0 = until closed)
@@ -64,6 +67,8 @@ final class RoboWindow {
     var lastTick = -Double.infinity, lastChar = -Double.infinity, typedAt = -Double.infinity
     var mouth = false  // a letter showed, finished; the mouth moves (tw.revealing, last seen)
     var answeredAt = -Double.infinity  // when the last answer ended (the next question follows up)
+    var followDue = false  // a completed answer is being typed: the follow-up window opens when it is all there
+    var followUntil = 0.0  // the key-less follow-up window is open until then (the MIC light shows it)
     var link = LedState.unknown, noted = false  // Hermes light; the listener reported a problem
     var press: Vec?  // where the pointer went down on the face
     var dragged = false
@@ -75,6 +80,11 @@ final class RoboWindow {
     var poller: Polling?
     var wakeWatcher: WakeWatcher?
     var ticker: Timer?, roamTimer: Timer?, revealer: Timer?
+    var shade = Shade()  // what the card does about the backdrop: light over a dark screen, dark over a light one
+    var shadeTimer: Timer?  // 30 Hz, only while the shade is turning
+    var lastShade = 0.0  // when it last took a step
+    var sampleAt = 0.0, sampling = false  // when the card next looks at the backdrop; a look is in flight
+    var askedScreen = false  // Screen Recording was asked for (once per launch)
     var screenObserver: NSObjectProtocol?
     var previousApp: NSRunningApplication?  // who had the keyboard before the panel took it
     var idWait = 3.0  // s a run being created is given to get its id before the app ends
@@ -157,7 +167,7 @@ final class RoboWindow {
     }
 
     deinit {
-        for t in [ticker, roamTimer, revealer] { t?.invalidate() }
+        for t in [ticker, roamTimer, revealer, shadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
 
@@ -214,16 +224,18 @@ final class RoboWindow {
     // MARK: - roaming
 
     func roam() {
-        let called = busy || !card.isHidden  // it walks to a corner and stays
+        // it walks to a corner and stays; the right-click menu opens the card too, but it must not leave
+        // before the user can press Stay
+        let called = busy || (!card.isHidden && card.chips.isHidden)
         let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
         scheduleRoam()
     }
 
-    /// 30 steps a second only while something moves: walking, a sleeper on its way to its bed, or a call
-    /// on its way to a corner. Resting, held (10 minutes after a drop) and asleep in its corner, nothing
-    /// changes between two half seconds.
+    /// 30 steps a second only while something moves: walking, or a sleeper or a call on its way to a
+    /// corner. Resting, held (10 minutes after a drop) and asleep in its corner, nothing changes between
+    /// two half seconds.
     func scheduleRoam() {
         let travelling = (roamer.mode == .sleep || roamer.mode == .come) && roamer.pos != roamer.goal
         let moving = roamer.mode == .drift || travelling
@@ -309,7 +321,7 @@ final class RoboWindow {
             applyTheme(Themes.load(path: machine.themeFile))
         }
         let now = now()
-        card.showMenu(stay: roamer.heldUntil > now + 3600 ? "🧭 Wander" : "📌 Stay",
+        card.showMenu(stay: roamer.stays(now: now) ? "🧭 Wander" : "📌 Stay",
                       watch: watcher?.paused == true ? "▶ Watch" : "⏸ Watch")
         open(closeAfter: 8)
     }
@@ -326,7 +338,7 @@ final class RoboWindow {
 
     func toggleStay() {
         let now = now()
-        let stay = roamer.heldUntil > now + 3600
+        let stay = roamer.stays(now: now)
         roamer.hold(now: now, pos: windowTopLeft, seconds: stay ? 0 : 1e9)
     }
 
@@ -427,7 +439,7 @@ final class RoboWindow {
         shutdownStarted = true
         panel.orderOut(nil)
         typer?.close()
-        for t in [ticker, roamTimer, revealer] { t?.invalidate() }
+        for t in [ticker, roamTimer, revealer, shadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         let wasBusy = lock.withLock { () -> Bool in
             cancel = busy

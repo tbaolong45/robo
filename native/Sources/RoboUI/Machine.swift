@@ -10,7 +10,7 @@ import RoboVoice
 protocol HermesAPI: AnyObject {
     func ask(_ text: String, sessionId: String, started: (@Sendable (String) -> Void)?) -> AsyncThrowingStream<Event, Error>
     func stop(_ runId: String) async throws
-    func approve(_ runId: String, _ choice: ApprovalChoice) async throws
+    func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String) async throws
 }
 extension HermesClient: HermesAPI {}
 
@@ -18,6 +18,7 @@ extension HermesClient: HermesAPI {}
 protocol Ear: AnyObject {
     var running: Bool { get }
     var ready: Bool { get }
+    var handsFree: Bool { get }  // the text being delivered was spoken in a key-less follow-up window
     func start() -> Bool
     func listenNow()
     func hold()
@@ -62,15 +63,25 @@ struct Machine {
     var vaultDir: URL
     var themeFile: URL
     var watchPausedFile: URL  // exists = watching paused
+    var receiptsFile: URL  // what robo-guard recorded of Hermes' state-changing steps (the footer's "✓ sent")
+    var usageFile: URL  // one line per finished run: tokens, seconds, steps
+    var dailyTokens = Usage.cap(ProcessInfo.processInfo.environment)  // ROBO_DAILY_TOKENS; 0 = no cap
     var showTyper: (TypePanel) -> Void = { $0.present() }
     var terminate: () -> Void = { NSApp.terminate(nil) }
     var focus = Focus()
+    /// The mean luma (0...1) of the screen behind a rectangle (AppKit coordinates), nil when it cannot be read; `done` runs on the
+    /// main thread. And the one-time request for the Screen Recording permission it needs.
+    var backdropLuma: (_ rect: NSRect, _ done: @escaping (Double?) -> Void) -> Void = { Backdrop.shared.luma(behind: $0, done: $1) }
+    var askScreenAccess: () -> Void = { Backdrop.shared.requestAccess() }
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     init(home: URL) {
         outputDir = home.appendingPathComponent("Robo")
         vaultDir = Vault.dir(home: home)
         themeFile = Themes.configPath()
         watchPausedFile = ActivityLog.dataDir.appendingPathComponent("watch.paused")
+        receiptsFile = ActivityLog.dataDir.appendingPathComponent("receipts.jsonl")
+        usageFile = ActivityLog.dataDir.appendingPathComponent("usage.jsonl")
         openFile = { try? Host.spawn(["open", $0.path]) }
         openNote = { note, front in try? Vault.openNote(note, home: home, front: front) }
     }

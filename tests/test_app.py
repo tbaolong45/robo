@@ -418,6 +418,36 @@ def test_the_roam_tick_walks_it_to_a_corner_when_called_and_freezes_it_on_a_pres
     win.press, win.busy = None, False
 
 
+def test_the_right_click_menu_does_not_call_it_to_a_corner_but_the_bubble_does(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    flags, real = [], win.roamer.step
+    win.roamer.step = lambda now, activity, engaged, called=False: (
+        flags.append(called) or real(now, activity, engaged, called))
+    win._show_menu()  # opens the bubble with the menu in it, closing by itself after 8 s
+    win._roam()
+    assert not win.panel.isHidden() and not win.menu.isHidden()
+    assert flags[-1] is False and win.roamer.mode != "come"  # it may be about to press Stay
+    win._hide_menu()  # a button was pressed and the bubble stays up
+    win._roam()
+    assert flags[-1] is True and win.roamer.mode == "come"
+    win._close_bubble()
+
+
+def test_a_request_after_a_drop_ends_the_hold_but_a_stay_outlasts_it(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.roamer.hold(time.monotonic(), (200, 200))  # dropped by the user
+    win.busy = True
+    win._roam()
+    assert win.roamer.mode == "come" and win.roamer.held_until < 0  # it walks to the nearest corner
+    win.busy = False
+    win._toggle_stay()  # the menu's Stay
+    assert win.roamer.stays(time.monotonic())
+    win.busy = True
+    win._roam()
+    assert win.roamer.mode == "held"
+    win.busy = False
+
+
 def test_roaming_follows_the_monitors_that_are_plugged_in(tmp_path, monkeypatch):
     from robo.roam import Rect
 

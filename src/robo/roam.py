@@ -11,7 +11,7 @@ SPEED = 40.0  # px/s average travel speed (ease-in-out peaks at 1.5x)
 CALL_SPEED = 240.0  # px/s: the walk to a corner when called; a drift's pace would take a minute
 REST = (20.0, 60.0)  # s to rest between drifts
 MARGIN = 160  # px: drift targets lie this close to the bottom, left or right edge
-EDGE = 24  # px gap from the bottom-right corner where it sleeps
+EDGE = 24  # px gap from the screen corner where it waits when called or asleep
 HOLD = 600.0  # s to stay where the user dropped it
 MAX_DT = 0.25  # s: a longer gap (a suspended laptop) counts as one capped frame
 
@@ -103,25 +103,32 @@ class Roamer:
         self.pos = fit(pos, self.size, self.screens)
         self.held_until = now + seconds
 
+    def stays(self, now: float) -> bool:
+        """The user chose "Stay" (a drop holds for HOLD, a Stay for a billion seconds)."""
+        return self.held_until > now + 3600
+
     def step(self, now: float, activity: str, engaged: bool,
              called: bool = False) -> tuple[int, int]:
         """Advance to `now`; return the window's top-left. `engaged`: the user has it by the
         mouse, so it freezes. `called`: a request or the card is up, so it walks to the nearest
-        corner and stays (a spot the user chose, `held`, wins)."""
+        corner and stays. Order: engaged > Stay > called > held (a drop) > asleep > wander. A
+        call ends a drop's hold, so after it the pet rests in the corner and drifts on; only a
+        Stay outlasts a call."""
         dt = 0.0 if self.last is None else min(max(now - self.last, 0.0), MAX_DT)
         self.last = now
         if engaged:
             self.mode = "present"
-        elif now < self.held_until:
+        elif self.stays(now) or (not called and now < self.held_until):
             self.mode = "held"
         elif called:
+            self.held_until = -math.inf
             if self.mode != "come" or self.goal != self._nearest_corner():
                 self._go(self._nearest_corner(), CALL_SPEED)
             self.mode = "come"
             self._travel(dt)
         elif activity == "asleep":
-            if self.mode != "sleep" or self.goal != self._bed():
-                self._go(self._bed())
+            if self.mode != "sleep" or self.goal != self._nearest_corner():
+                self._go(self._nearest_corner())
             self.mode = "sleep"
             self._travel(dt)
         else:
@@ -156,7 +163,7 @@ class Roamer:
                 ((left, top), (right, top), (left, bottom), (right, bottom))]
 
     def _bed(self) -> tuple[float, float]:
-        """The bottom-right corner, so a nap never needs a long walk."""
+        """The bottom-right corner: where it starts when the app gives no spot."""
         return self._corners()[3]
 
     def _nearest_corner(self) -> tuple[float, float]:

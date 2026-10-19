@@ -288,11 +288,122 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
     #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(lis.handsFree)  // said in the window, with no key, click or name
     clock.t = 30  // the window closed (and it was used once anyway)
     mic.feed(sentence(100))
     drained(mic)
     lis.stop()
     #expect(events.isEmpty)
+}
+
+@Test(arguments: [(Listen.minSpeechFrames - 1, false), (Listen.minSpeechFrames, true)])
+func aFollowUpWindowWakesRoboOnlyForRealSpeech(loud: Int, wakes: Bool) {
+    let mic = FakeMic()
+    let stt = FakeStt("and tomorrow?")
+    let (lis, events) = start(mic, stt, clock: Clock(), noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    mic.feed(frames(0, 8) + frames(8, 8 + loud, speech) + frames(8 + loud, 30))  // `loud` frames above the gate
+    if wakes {
+        #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    } else {
+        drained(mic)
+        #expect(events.isEmpty && stt.heard.isEmpty)  // a knock: no wake (the reply stays), nothing sent
+    }
+    lis.stop()
+}
+
+@Test func aKnockInAFollowUpWindowLeavesItOpenForARealSentence() {
+    let mic = FakeMic()
+    let stt = FakeStt("and tomorrow?")
+    let (lis, events) = start(mic, stt, clock: Clock(), noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    mic.feed(frames(0, 8) + frames(8, 10, speech) + frames(10, 30))
+    drained(mic)
+    #expect(events.isEmpty)
+    mic.feed(sentence(100))
+    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(lis.handsFree)
+    lis.stop()
+}
+
+@Test func closingTheFollowUpWindowIgnoresTheNextSentence() {
+    let mic = FakeMic()
+    let stt = FakeStt("and tomorrow?")
+    let (lis, events) = start(mic, stt, clock: Clock(), noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    lis.followUp(seconds: 0)  // a new question, or a closed card
+    mic.feed(sentence(0))
+    drained(mic)
+    lis.stop()
+    #expect(events.isEmpty && stt.heard.isEmpty)
+}
+
+@Test func aClickWindowIsNotClosedByTheUIsFollowUpCancel() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let (lis, events) = start(mic, FakeStt("what's due"), clock: clock, noStall: true, nameWake: false)
+    lis.listenNow()
+    lis.followUp(seconds: 0)  // what the window does when the click starts a new exchange
+    mic.feed(sentence(0))
+    #expect([events.get(), events.get()] == [.wake, .text("what's due")])
+    lis.listenNow()
+    lis.followUp(seconds: 0)
+    clock.t = Listen.noSpeechS + 1
+    #expect(events.get() == .text(""))  // it still owes the UI its "nothing was said"
+    lis.stop()
+}
+
+@Test func aKnockAfterAClickStillWakesAtOnceAndGivesUpLater() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let (lis, events) = start(mic, FakeStt(), clock: clock, noStall: true, nameWake: false)
+    lis.listenNow()
+    mic.feed(frames(0, 8) + frames(8, 10, speech) + frames(10, 30))
+    #expect(events.get() == .wake)  // asked: shown at once, as before
+    drained(mic)
+    #expect(events.isEmpty)
+    clock.t = Listen.noSpeechS + 1
+    #expect(events.get() == .text(""))
+    lis.stop()
+}
+
+@Test func handsFreeIsOnlyTrueForTextSaidInAFollowUpWindow() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let (lis, events) = start(mic, FakeStt("and tomorrow?", "what time is it in Tokyo", "what's due"), clock: clock, noStall: true,
+                              nameWake: false)
+    #expect(!lis.handsFree)
+    lis.followUp(seconds: 10)
+    mic.feed(sentence(0))
+    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(lis.handsFree)
+    lis.hold()  // a held key
+    clock.t = 5
+    mic.feed(frames(100, 108) + frames(108, 114, speech) + frames(114, 120))
+    drained(mic)
+    lis.release()
+    #expect(events.get() == .text("what time is it in Tokyo"))
+    #expect(!lis.handsFree)
+    lis.listenNow()  // a click
+    mic.feed(sentence(200))
+    #expect([events.get(), events.get()] == [.wake, .text("what's due")])
+    #expect(!lis.handsFree)
+    lis.stop()
+}
+
+@Test func aSentenceWithTheNameOutsideAWindowIsNotHandsFree() {
+    let clock = Clock()
+    let mic = FakeMic()
+    let (lis, events) = start(mic, FakeStt("and tomorrow?", "Robo, what time is it?"), clock: clock, noStall: true)
+    lis.followUp(seconds: 10)
+    mic.feed(sentence(0))
+    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(lis.handsFree)
+    clock.t = 30  // the window closed
+    mic.feed(sentence(100))
+    #expect([events.get(), events.get()] == [.wake, .text("what time is it?")])
+    #expect(!lis.handsFree)
+    lis.stop()
 }
 
 @Test func clickTakesTheNextSentenceOrGivesUp() {
@@ -302,9 +413,11 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
     lis.listenNow()
     mic.feed(sentence(0))
     #expect([events.get(), events.get()] == [.wake, .text("what's due")])
+    #expect(!lis.handsFree)
     lis.listenNow()
     clock.t = Listen.noSpeechS + 1
     #expect(events.get() == .text(""))
+    #expect(!lis.handsFree)
     lis.stop()
 }
 
@@ -517,6 +630,7 @@ final class Gate {
     #expect(done.get() == .text("and tomorrow?"))
     lis.stop()
     #expect(order.all == ["wake", "final"])  // robo showed it was listening before transcribing
+    #expect(lis.handsFree)
 }
 
 @Test func otherSpeechGetsOnlyTheQuickCheck() {

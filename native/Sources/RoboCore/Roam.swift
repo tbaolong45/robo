@@ -17,7 +17,7 @@ public enum Roam {
     public static let callSpeed = 240.0  // px/s: the walk to a corner when called; a drift's pace would take a minute
     public static let rest = 20.0...60.0  // s to rest between drifts
     public static let margin = 160.0  // px: drift targets lie this close to the bottom, left or right edge
-    public static let edge = 24.0  // px gap from the bottom-right corner where it sleeps
+    public static let edge = 24.0  // px gap from the screen corner where it waits when called or asleep
     public static let hold = 600.0  // s to stay where the user dropped it
     public static let maxDT = 0.25  // s: a longer gap (a suspended laptop) counts as one capped frame
 }
@@ -131,22 +131,27 @@ public final class Roamer {
         heldUntil = now + seconds
     }
 
+    /// The user chose "Stay" (a drop holds for `Roam.hold`, a Stay for a billion seconds).
+    public func stays(now: Double) -> Bool { heldUntil > now + 3600 }
+
     /// Advance to `now`; return the window's top-left. `engaged`: the user has it by the mouse, so it
-    /// freezes. `called`: a request or the card is up, so it walks to the nearest corner and stays (a
-    /// spot the user chose, `held`, wins).
+    /// freezes. `called`: a request or the card is up, so it walks to the nearest corner and stays.
+    /// Order: engaged > Stay > called > held (a drop) > asleep > wander. A call ends a drop's hold, so
+    /// after it the pet rests in the corner and drifts on; only a Stay outlasts a call.
     public func step(now: Double, asleep: Bool, engaged: Bool, called: Bool = false) -> IVec {
         let dt = last.map { min(max(now - $0, 0), Roam.maxDT) } ?? 0
         last = now
         if engaged {
             mode = .present
-        } else if now < heldUntil {
+        } else if stays(now: now) || (!called && now < heldUntil) {
             mode = .held
         } else if called {
+            heldUntil = -.infinity
             if mode != .come || goal != nearestCorner() { go(nearestCorner(), Roam.callSpeed) }
             mode = .come
             _ = travel(dt)
         } else if asleep {
-            if mode != .sleep || goal != bed() { go(bed()) }
+            if mode != .sleep || goal != nearestCorner() { go(nearestCorner()) }
             mode = .sleep
             _ = travel(dt)
         } else {
@@ -180,7 +185,7 @@ public final class Roamer {
         return [Vec(left, top), Vec(right, top), Vec(left, bottom), Vec(right, bottom)].map { clamp($0, size, s) }
     }
 
-    /// The bottom-right corner, so a nap never needs a long walk.
+    /// The bottom-right corner: where it starts when the app gives no spot.
     private func bed() -> Vec { corners()[3] }
 
     private func nearestCorner() -> Vec { corners().min { dist($0, pos) < dist($1, pos) }! }

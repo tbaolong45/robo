@@ -94,12 +94,19 @@ func presentFreezesMidDrift(asleep: Bool) {
     #expect(r.step(now: 0, asleep: false, engaged: true) == IVec(300, 200))
 }
 
-@Test func sleepGlidesToTheBottomRightCornerAndStays() {
-    let r = Roamer(screens: screens, size: face, seed: 4, start: Vec(0, 0))
-    let bed = IVec(1920 - 120 - Int(Roam.edge), 1080 - 120 - Int(Roam.edge))
-    #expect(run(r, 0, 120, asleep: true).last?.pos == bed)
+@Test(arguments: [
+    (Vec(700, 300), Vec(leftEdge, topEdge)), (Vec(1100, 300), Vec(rightEdge, topEdge)),
+    (Vec(700, 700), Vec(leftEdge, bottomEdge)), (Vec(1100, 700), Vec(rightEdge, bottomEdge)),
+])
+func sleepGlidesToTheNearestCornerAndStays(start: Vec, corner: Vec) {
+    let r = Roamer(screens: screens, size: face, seed: 4, start: start)
+    #expect(run(r, 0, 120, asleep: true).last?.pos == ivec(corner))
     #expect(r.mode == .sleep)
-    #expect(Set(run(r, 120, 60, asleep: true).map(\.pos)) == [bed])
+    #expect(Set(run(r, 120, 60, asleep: true).map(\.pos)) == [ivec(corner)])
+}
+
+@Test func withoutASpotItStartsInTheBottomRightCorner() {
+    #expect(Roamer(screens: screens, size: face, seed: 4).pos == Vec(rightEdge, bottomEdge))
 }
 
 @Test func holdStaysPutThenWandersFromThere() {
@@ -227,11 +234,10 @@ func presentFreezesMidDrift(asleep: Bool) {
     #expect(r.step(now: 0, asleep: false, engaged: false) == IVec(3000, 500))
 }
 
-@Test func itSleepsInTheCornerOfTheScreenItIsOn() {
+@Test func itSleepsInTheNearestCornerOfTheScreenItIsOn() {
     let r = Roamer(screens: both, size: face, seed: 4, start: Vec(3000, 500))
-    let last = run(r, 0, 200, asleep: true).last?.pos
-    #expect(last == IVec(Int(rightScreen.x + rightScreen.w) - 120 - Int(Roam.edge),
-                         Int(rightScreen.y + rightScreen.h) - 120 - Int(Roam.edge)))
+    let last = run(r, 0, 200, asleep: true).last?.pos  // the right screen's top-left, not the main screen's corner
+    #expect(last == IVec(Int(rightScreen.x + Roam.edge), Int(rightScreen.y + Roam.edge)))
 }
 
 @Test func itWandersOntoEveryScreenAndNeverOffThem() {
@@ -287,11 +293,68 @@ func calledWalksToTheNearestCornerAtCallSpeedAndStays(start: Vec, corner: Vec) {
     #expect(r.mode == .present)
 }
 
-@Test func aSpotTheUserChoseWinsOverACall() {
+@Test func aStayWinsOverACall() {
+    let r = Roamer(screens: screens, size: face, seed: 5)
+    r.hold(now: 0, pos: Vec(500, 300), seconds: 1e9)  // the menu's Stay
+    #expect(r.stays(now: 0))
+    #expect(Set(run(r, 0, 20, called: true).map(\.pos)) == [IVec(500, 300)] && r.mode == .held)
+    #expect(Set(run(r, Roam.hold, 20, called: true).map(\.pos)) == [IVec(500, 300)])  // even after a drop's 600 s
+    r.hold(now: Roam.hold + 20, pos: Vec(500, 300), seconds: 0)  // Wander
+    #expect(!r.stays(now: Roam.hold + 20))
+    #expect(run(r, Roam.hold + 20, 20, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))
+}
+
+@Test func aCallWinsOverADropAndEndsItsHold() {
     let r = Roamer(screens: screens, size: face, seed: 5)
     r.hold(now: 0, pos: Vec(500, 300))
-    #expect(Set(run(r, 0, 20, called: true).map(\.pos)) == [IVec(500, 300)] && r.mode == .held)
-    #expect(run(r, Roam.hold, 20, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))  // the hold is over
+    #expect(!r.stays(now: 0))  // a drop is not a Stay
+    #expect(run(r, 0, 20, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)) && r.mode == .come)
+    #expect(r.heldUntil < 0)  // so the corner is not the old spot held for 10 minutes
+}
+
+@Test func afterACallOnADropItRestsInTheCornerThenDriftsOn() {
+    let r = Roamer(screens: screens, size: face, seed: 1)
+    r.hold(now: 0, pos: Vec(500, 300))
+    let corner = ivec(Vec(leftEdge, topEdge))
+    #expect(run(r, 0, 10, called: true).last?.pos == corner)
+    #expect(Set(run(r, 10, Roam.rest.lowerBound - 1).map(\.pos)) == [corner] && r.mode == .rest)
+    #expect(run(r, 10 + Roam.rest.lowerBound - 1, Roam.rest.upperBound + 10).contains { $0.pos != corner })  // not held 590 s more
+}
+
+// A window as tall as the card, on a 1920x1080 screen with a taller one to its left (unequal sizes, negative x).
+private let card = Vec(348, 420)
+private let pair = [leftScreen, screen]
+
+/// The corner of `s` the pet waits in: `Roam.edge` in from the given sides.
+private func corner(_ s: Rect, right: Bool, bottom: Bool, _ size: Vec = card) -> Vec {
+    Vec(right ? s.x + s.w - size.x - Roam.edge : s.x + Roam.edge, bottom ? s.y + s.h - size.y - Roam.edge : s.y + Roam.edge)
+}
+
+/// Where a drop at `spot` goes when called: the nearest of the four corners of the screen it is on.
+private let drops: [(Vec, Vec)] = [
+    (Vec(100, 100), corner(screen, right: false, bottom: false)), (Vec(1400, 90), corner(screen, right: true, bottom: false)),
+    (Vec(60, 560), corner(screen, right: false, bottom: true)), (Vec(1500, 600), corner(screen, right: true, bottom: true)),
+    (Vec(780, 325), corner(screen, right: false, bottom: false)), (Vec(790, 335), corner(screen, right: true, bottom: true)),  // either side of the middle
+    (Vec(-2000, 0), corner(leftScreen, right: false, bottom: false)), (Vec(-600, -100), corner(leftScreen, right: true, bottom: false)),
+    (Vec(-2400, 700), corner(leftScreen, right: false, bottom: true)), (Vec(-700, 500), corner(leftScreen, right: true, bottom: true)),
+]
+
+@Test(arguments: drops)
+func aCallAfterADropGoesToTheNearestOfTheFourCorners(spot: Vec, corner: Vec) {
+    let r = Roamer(screens: pair, size: card, seed: 1)
+    r.hold(now: 0, pos: spot)
+    #expect(r.pos == spot)  // a drop that fits is not moved
+    _ = r.step(now: 0.1, asleep: false, engaged: false, called: true)
+    #expect(r.goal == corner && r.mode == .come)  // aimed at once, from the spot it was dropped on
+    #expect(run(r, 0.1, 20, called: true).last?.pos == ivec(corner))
+}
+
+@Test(arguments: drops)
+func aSleeperAfterADropGoesToTheNearestOfTheFourCorners(spot: Vec, corner: Vec) {
+    let r = Roamer(screens: pair, size: card, seed: 1)
+    r.hold(now: 0, pos: spot)
+    #expect(Set(run(r, 0, Roam.hold - 1, asleep: true, fps: 4).map(\.pos)) == [ivec(spot)] && r.mode == .held)
+    #expect(run(r, Roam.hold, 120, asleep: true).last?.pos == ivec(corner) && r.mode == .sleep)
 }
 
 @Test func afterACallItRestsInTheCornerThenDriftsOn() {
@@ -309,8 +372,9 @@ func calledWalksToTheNearestCornerAtCallSpeedAndStays(start: Vec, corner: Vec) {
 }
 
 @Test func aCallWinsOverSleep() {
-    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))  // bed: bottom-right; call: top-left
-    #expect(run(r, 0, 20, asleep: true, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))  // both go top-left: only the pace tells
+    #expect(run(r, 0, 10, asleep: true, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))  // 730 px: 3 s called, 18 s asleep
+    #expect(r.mode == .come)
 }
 
 @Test func aBiggerWindowReAimsTheWalk() {
