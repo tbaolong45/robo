@@ -301,15 +301,21 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(card.reply.string == "Hello wonderful world" && card.fittingHeight == height && carried(card.reply, 20).alpha == 0)  // only colours changed
     }
 
-    @Test func theGlassIsOneSystemGlassUntilItHasAShadeAndGoesBackToIt() {
+    @Test func theGlassShowsOneGlassOfTheSystemsModeUntilItHasAShadeAndNeverChangesAppearance() {
         guard #available(macOS 26, *) else { return }
         let card = makeCard()
         let light = card.glass.subviews[0] as! NSGlassEffectView, dark = card.glass.subviews[1] as! NSGlassEffectView
-        #expect(card.glass.level == nil && light.appearance == nil && light.alphaValue == 1 && !light.isHidden && dark.isHidden)
+        let systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        func oneSystemGlass() -> Bool {
+            card.glass.level == nil && light.alphaValue == 1 && dark.alphaValue == 1 && light.isHidden == systemDark && dark.isHidden == !systemDark
+        }
+        #expect(oneSystemGlass())
         card.setShade(level: 0.5, ink: 0.5)
-        #expect(!dark.isHidden && light.appearance?.name == .aqua)
+        #expect(!dark.isHidden && !light.isHidden)
         card.setShade(level: nil, ink: nil)
-        #expect(card.glass.level == nil && light.appearance == nil && light.alphaValue == 1 && !light.isHidden && dark.isHidden)
+        #expect(oneSystemGlass())
+        // changing a glass's appearance after it had rendered left it showing the old one on the live app: they are set once
+        #expect(light.appearance?.name == .aqua && dark.appearance?.name == .darkAqua)
     }
 
     @Test func theLightGlassIsBelowAndTheDarkOneFadesOutAboveItAsTheLevelRises() {

@@ -150,8 +150,13 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   fallback (blur flips appearance at 0.5) never ran here. Final measurement (final build, robo pinned with the menu's
   Stay over my own backdrop; WCAG contrast of the body text against the glass behind it): black 10.7:1, grey 0.25 12.2:1,
   grey 0.5 13.5:1 (inside the hysteresis band the card keeps the last look), grey 0.75 8.0:1, white 6.3:1; every one above 4.5:1.
-  One early run showed a dark card over black that did not come back in 7 later trials (same code); if it shows up, suspect a
-  stale `NSGlassEffectView` render after an appearance change or a capture that never returned (`Backdrop` has no timeout).
+  **Bug found on the live app 2026-10-19 (the user's "black words on a black card")**: over a black backdrop the card stayed
+  dark (glass luminance 0.11, i.e. dark glass under the white veil) although the shade said light, 4 of 4 trials, while fresh test
+  copies passed. Cause: `GlassSurface` created the light glass with no appearance and set `.aqua` later, and changing an
+  `NSGlassEffectView`'s `appearance` after it has rendered can leave it showing the old one. Both glasses now get `.aqua` /
+  `.darkAqua` once at creation and only which one shows (hidden/alpha) changes; verified live in both directions (light over
+  black, dark over white, 10.7:1 and 6.3:1; the flip is a ~0.5 s ramp through intermediate glass brightness). Test any glass
+  change on the INSTALLED app, not only on a fresh copy, and look at the picture, not only at the numbers.
   To test: launch a copy with `open -n` (so the permission is Robo's, not your shell's), put an opaque window of your own at
   level `.floating - 1` under it, pin the pet with Stay (it roams otherwise), capture only that region.
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the

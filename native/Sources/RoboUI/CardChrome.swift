@@ -111,7 +111,7 @@ final class GlassSurface: NSView {
     /// the contrast of the card by eye. To drop the idea, delete `Veil`, this and the lines that name `veil`.
     static let veilStrength: CGFloat = 0.22  // measured 2026-10-19: text contrast 4.48:1 (dark card) and 8.8:1 (light card) at 0
 
-    private let light: NSView  // the system's own look (appearance nil) until a shade is given
+    private let light: NSView  // the light glass (`.aqua`, below); before macOS 26 the one blur, which flips appearance
     private let dark: NSView?  // macOS 26 only
     private let veil = Veil()
     /// What `setShade` was given: nil = the system's look.
@@ -124,8 +124,10 @@ final class GlassSurface: NSView {
                 glass.style = .regular
                 glass.cornerRadius = Chrome.radius
             }
+            // Each glass keeps its appearance for life: changing it after the glass had rendered left it showing the old one
+            // (seen live 2026-10-19: a dark card over black although the shade said light). Only which one shows changes.
+            below.appearance = NSAppearance(named: .aqua)
             above.appearance = NSAppearance(named: .darkAqua)
-            above.isHidden = true
             (light, dark) = (below, above)
         } else {
             let blur = NSVisualEffectView()
@@ -141,6 +143,7 @@ final class GlassSurface: NSView {
         addSubview(light)
         if let dark { addSubview(dark) }
         addSubview(veil)
+        if let dark { showSystemLook(dark) }
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -169,16 +172,21 @@ final class GlassSurface: NSView {
             return
         }
         guard let level else {
-            light.appearance = nil
-            light.alphaValue = 1; light.isHidden = false
-            dark.isHidden = true
+            showSystemLook(dark)
             return
         }
         let l = min(max(level, 0), 1)
-        if light.appearance?.name != .aqua { light.appearance = NSAppearance(named: .aqua) }
         light.isHidden = l == 0  // the dark glass covers it
         dark.alphaValue = 1 - l
         dark.isHidden = l == 1  // and the light one is all there is
+    }
+
+    /// One glass, the one of the system's mode (the card before it knows its backdrop).
+    private func showSystemLook(_ dark: NSView) {
+        let isDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        light.alphaValue = 1; dark.alphaValue = 1
+        light.isHidden = isDark
+        dark.isHidden = !isDark
     }
 
     /// A flat veil over the glass, to tune the card's contrast: white at `level` x strength and black at (1 - level) x strength.
