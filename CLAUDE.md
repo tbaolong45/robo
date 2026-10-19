@@ -27,7 +27,9 @@ in text in the bubble. It never speaks, so don't add speech output.
   delete the `.playwright-mcp/` folder they leave in the repo.
 
 ## The machine is a live deployment
-Hermes runs robo with approvals off. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
+The config templates say `approvals.mode: manual` (timeout 120 s; it was `off` until 2026-10-19), but the
+live Hermes profile only changes when the user runs `robo setup`, so assume the old `off` until told
+otherwise. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
 skills' command) to point at the build it is run from: the Python checkout, or the Swift app
 (`~/Applications/Robo.app` is the one that runs at login since 2026-10-13). Don't run `setup` or
 `signin` while testing, and send Hermes nothing but a harmless prompt if a live check is needed.
@@ -58,6 +60,17 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   the key then is untested). The Python build still wakes by name (spec and fallback). Test the real key
   with the user's own press (checked live 2026-10-16: hold and tap both work); a synthetic Ctrl+Q posted
   with `CGEvent` goes to the system, whichever app is in front.
+- **Key-less follow-up window (Swift app, reworked 2026-10-19)**: `RoboWindow.followUpS` = 15 s, armed in
+  `finishedTyping()` (not at run end: typing at 55 cps and reading used to eat the old 10 s; `followDue` is set
+  in `ended()` and cleared by `clearReply()`/`closeBubble()`, which also send `ear.followUp(0)`, so errors, `say()`
+  lines, mic notes and a new question never arm or keep it). The MIC light pulses LISTENING while it is open
+  (`CardView.micState(..., following:)`). In `Listener` a window with `asked == false` wakes robo only after
+  `minSpeechFrames` loud frames (a knock used to clear the reply and leave "listening" on). `Listener.handsFree`
+  marks text spoken inside such a window; `onHeard` refuses it when `Intent.changesThings` (send, reply, delete,
+  book, pay..., Vietnamese gửi/trả lời/xóa, or a sentence that is only "yes"/"ok"/"go ahead": the digest proposes
+  and waits for a yes) and says to hold Ctrl+Q; a held key or a click is never filtered. Spoken text is never an
+  approval (it stops the run, which denies). TV or another voice can still fill the window with a read-only
+  request. The Python build keeps its 10 s from the end of the run.
 - **Speech gate floor** (`MIN_GATE` / `Listen.minGate` = 0.008, lowered from 0.02 on 2026-10-15). The
   user's "Robo" on the MacBook Pro mic has p99 0.020 and peak 0.032 per 80 ms frame (room floor 0.0012,
   room peaks ~0.005), so at 0.02 none of five calls reached the model; at 0.008 all five did, at 0.012
@@ -116,6 +129,39 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   Markdown look was tried and dropped: no gain. Typing is ~2 % of a core at 30 Hz; don't optimise it further
   without a new measurement.
   The Themes, Header lights and Face cost notes below describe the Python tree.
+- **Backdrop-adaptive card (Swift, 2026-10-19, user request: "black area -> white chat, white area -> dark chat,
+  smooth", and "the colour of the words has to contrast with the area it is in")**: `Backdrop` (ScreenCaptureKit
+  `SCScreenshotManager`, display minus Robo's own app, 16 px picture of the glass rectangle, `Shade.meanLuma`) is asked
+  about every 0.25 s while the card shows; `Shade` (pure, RoboCore) decides: luma < 0.42 -> light card, > 0.58 -> dark,
+  between keeps the last (hysteresis), eases with tau 0.12 s, `ink` = smoothstep(0.35, 0.65, level) so the text flips fast
+  instead of fading through a grey. `Chrome.text/textDim/faint/hairline/wash` read `Chrome.ink` (nil = the old system colours,
+  used until a look succeeded and after 3 failed ones). **Spike (scratch app, same panel flags): an NSGlassEffectView's
+  `appearance` decides light or dark; `tintColor` hardly matters; two stacked glasses (`.aqua` below, `.darkAqua` above at
+  alpha 1 - level) crossfade smoothly** (`GlassSurface`; only one renders at rest). `veilStrength` 0.22 (a white/black wash
+  over the glass) was set after measuring text contrast on real captures (WCAG, region of the body text): 8.8:1 light card
+  over black, 4.48:1 dark card over white at 0 veil (hence the veil). Needs **Screen Recording for Robo** (the user's one
+  click; `CGRequestScreenCaptureAccess` once per launch); without it the look is the system one. Verified with a test copy
+  launched via `open -n` over my own black/white backdrop window; a copy built *before* the grant did not see it until
+  rebuilt, so after a grant check with a fresh build. macOS may re-confirm capture access monthly (not seen yet). Pre-macOS-26
+  fallback (blur flips appearance at 0.5) never ran here. Final measurement (final build, robo pinned with the menu's
+  Stay over my own backdrop; WCAG contrast of the body text against the glass behind it): black 10.7:1, grey 0.25 12.2:1,
+  grey 0.5 13.5:1 (inside the hysteresis band the card keeps the last look), grey 0.75 8.0:1, white 6.3:1; every one above 4.5:1.
+  One early run showed a dark card over black that did not come back in 7 later trials (same code); if it shows up, suspect a
+  stale `NSGlassEffectView` render after an appearance change or a capture that never returned (`Backdrop` has no timeout).
+  To test: launch a copy with `open -n` (so the permission is Robo's, not your shell's), put an opaque window of your own at
+  level `.floating - 1` under it, pin the pet with Stay (it roams otherwise), capture only that region.
+- **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
+  answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
+  ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks
+  graded-work actions (Moodle quiz attempt URLs/labels, assignment submit, raw JS on school hosts, `/mod/quiz/` in a command)
+  and remote images/scripts in written notes, and asks for send/move/junk/invites/Outlook-Teams `computer_use`; the asks only
+  bite in `approvals.mode: manual`. It appends receipts to `~/.local/share/robo/receipts.jsonl`; the app shows "✓ sent · host"
+  or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (`ROBO_DAILY_TOKENS` = optional cap;
+  Hermes reports no usage for failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
+  v3 manifests expire within 24 h (Hermes has no handling), need a per-profile file, and the terminal/browser tools bypass it.
+- **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
+  `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;
+  SOUL.md "Learning first" (hints before answers, graded work is never done for the student).
 - **Themes (Python tree)**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
   follows the face's live hue in all five themes (the user chose this over one fixed colour);
   `hud.chrome` is cached on `Theme.rev` plus the quantised hue. Label contrast is tested at all
@@ -127,12 +173,19 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
   (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
   `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
-- **Called = corner** (`Roamer.step`, 2026-10-13): priority is `engaged` (mouse pressed: freeze) >
-  `held` (a drop or "Stay": it stays, even while you talk) > `called` (request or card up: walks to
-  the nearest corner of its screen at `CALL_SPEED` = 240 px/s, since a drift's 40 px/s takes a minute
-  across 2560 px, and stays) > `asleep` (bed) > wander. Before this it froze mid-drift at a random
-  spot. After the call it rests in the corner, then drifts. The branch draws no random numbers, so
-  seeded wander paths did not change. Swift's resting tick is 500 ms: a call can lag 0.5 s.
+- **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse
+  pressed: freeze) > Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) >
+  `called` (request or card up: walks to the nearest corner of its screen at `CALL_SPEED` = 240 px/s,
+  since a drift's 40 px/s takes a minute across 2560 px, and stays; it clears a *drop's* hold) > `held`
+  (a drop: 600 s) > `asleep` (walks to the *nearest* corner) > wander. Until 2026-10-19 a drop outranked
+  a call and a nap always went to the bottom-right bed, so a dragged robo "went to the same corner, not
+  the nearest" (the user's report); `bed()` is now only the initial placement. The right-click menu opens
+  the card but does not call (`card.chips.isHidden`; Python: `menu.isHidden()`), or dragging then
+  right-clicking for Stay would send it away. After the call it rests in the corner, then drifts. The
+  branch draws no random numbers, so seeded wander paths did not change. Nearest is measured by the
+  window's top-left, which is the face's up to a constant offset; with a tall card the face parks a
+  card-height under a *top* corner (the card needs room above it). Swift's resting tick is 500 ms: a
+  call can lag 0.5 s.
 - **Several monitors** (`roam.fit`): the window must lie inside the *union* of the screens and may
   straddle two that touch; a spot half over a dead corner between unequal monitors goes to the nearest
   single-screen clamp. Both drag paths must call `roamer.hold` on every move, or the 33 ms roam tick
