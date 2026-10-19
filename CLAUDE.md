@@ -202,7 +202,11 @@ the fallback: `~/robo-cutover-backup-20261013/ROLLBACK.md` restores the old logi
 - **Test with `native/test.sh`**, not `swift test` (the Command Line Tools ship the Testing macros
   but the default build system does not pass their folder). **Install a new build with
   `ROBO_SIGN_IDENTITY="Robo Local Signing" native/bundle.sh ~/Applications/Robo.app` (the path must
-  end in `.app`), then `launchctl kickstart -k gui/$(id -u)/ai.robo`.** That identity is a
+  end in `.app`), then `launchctl kickstart -k gui/$(id -u)/ai.robo`.** (2026-10-19, macOS 26.7: after replacing the
+  binary `kickstart` can fail with `last exit reason = OS_REASON_CODESIGNING`, `job state = spawn failed` and
+  `needs LWCR update` in `launchctl print gui/$(id -u)/ai.robo`; the binary itself runs. Re-register the same plist:
+  `launchctl bootout gui/$(id -u)/ai.robo; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.robo.plist`.
+  That is not `robo setup`: it rewrites nothing.) That identity is a
   self-signed certificate in `~/Library/Keychains/robo-signing.keychain-db` (empty password, in the
   search list, trusted for code signing); the designated requirement is the bundle id plus the
   certificate hash, so the microphone permission survives rebuilds. A build without
