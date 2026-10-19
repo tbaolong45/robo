@@ -1,8 +1,9 @@
 """robo-guard: robo may do anything on the laptop; only irreversible steps ask the user first.
 
-The user granted all permissions (approvals.mode off), and then Hermes approves every "ask" below
-by itself; the asks only take effect again if approvals are switched back on. The blocks always
-hold: they keep robo from rewriting its own setup and school skills.
+With approvals.mode off Hermes approves every "ask" below by itself, and only in mode manual does
+the user see it. The blocks always hold: they keep robo from rewriting its own setup and school
+skills, from doing graded work, and from planting remote content in a note. A regex guard is a
+speed bump (raw JS or a terminal can get around it); SOUL.md's graded-work rule is the main control.
 
 Hermes contract (hermes_cli/plugins.py `_get_pre_tool_call_directive_details`,
 `_resolve_block_from_details`): a pre_tool_call hook returning {"action": "approve", "message",
@@ -14,21 +15,31 @@ ask for the commands it flags as dangerous.
   the latest snapshot or labelled with an irreversible word (Send, Reply, Delete, Accept, Sign out,
   Join, Pay...); Enter, Space and send/call shortcuts, except Enter right after typing into a
   search box; page dialogs; the password vault; non-web URLs and URLs with side effects (sign-out,
-  compose, action=, OAuth redirect_uri...); a patch that deletes a file.
+  compose, action=, OAuth redirect_uri...); a patch that deletes a file; on a mail host Move and
+  Junk, and a Send (or a calendar Save with attendees) with the addresses typed in this task
+  ("recipients unknown" when none); computer_use steps in Outlook or Teams.
 - block: changing robo's installed school-*, study-* and robo-* skills (new skills of its own
   are fine: it learns), and anything touching robo's own Hermes setup (the hermes CLI,
-  ~/.hermes, also through symlinks, relative paths, a workdir or patch headers).
+  ~/.hermes, also through symlinks, relative paths, a workdir or patch headers); graded work:
+  Moodle quiz attempts, assignment submissions and forum posts (URL, button label, or any click,
+  type or key on a quiz-attempt page), raw JavaScript or DevTools on a school site, a terminal
+  or execute_code that names /mod/quiz/ or /mod/assign/; a Markdown note that holds a remote
+  image or active HTML (Obsidian loads it when the note opens: a leak without a click).
 - allow: everything else: any website, typing, toggles, reversible clicks (Like, Pin, Archive),
-  file and memory writes, fetches, ordinary commands, raw browser control (CDP, JavaScript).
+  file and memory writes, fetches, ordinary commands, raw browser control off school sites.
 Refs are read only outside quoted text, a ref listed twice is not trusted, and refs are forgotten
 after any click, key, back or screenshot. The rule_key names the tool and the exact action:
 without it Hermes uses the bare tool name, so one "always" would approve every later click.
+post_tool_call also keeps receipts: one line per state-changing call (no typed text, no page
+content) in ~/.local/share/robo/receipts.jsonl, for robo to say "sent" only with evidence.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -74,8 +85,45 @@ QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
 REF = re.compile(r"\[[^\]]*\bref=(e\d+)[^\]]*\]")  # [ref=e5] or [level=2, ref=e5]
 FORGET_AFTER = {"browser_click", "browser_press", "browser_back", "browser_vision"}
 
+GRADED = ("graded work is the student's own: never take, finish or submit it. Offer to explain the "
+          "topic, check their draft or write practice questions instead")
+QUIZ_ATTEMPT = re.compile(r"/mod/quiz/(?:startattempt|attempt|processattempt|summary)\.php",
+                          re.IGNORECASE)
+GRADED_URL = re.compile(  # a quiz attempt, an assignment submission, a forum post
+    QUIZ_ATTEMPT.pattern + r"|/mod/assign/view\.php\?(?:[^#]*&)?action=(?:submit|editsubmission"
+    r"|savesubmission)|/mod/forum/post\.php", re.IGNORECASE)
+GRADED_PATH = re.compile(r"/mod/(?:quiz|assign)/", re.IGNORECASE)  # named in a command or script
+# Starting an attempt is blocked too: a click opens the attempt page without any URL the guard sees.
+GRADED_LABEL = re.compile(
+    r"submit assignment|(?:add|edit) submission|finish attempt|submit all and finish"
+    r"|attempt quiz|start attempt|re-?attempt|continue (?:your|the last) attempt", re.IGNORECASE)
+SAVE_CHANGES = re.compile(r"save changes", re.IGNORECASE)  # the submission form's button
+SCHOOL_CLICKS = {"browser_click", "browser_type", "browser_press"}
+RAW_JS = {"browser_console", "browser_cdp", "browser_exec"}
+MAIL_HOSTS = ("outlook.office.com", "outlook.office365.com", "outlook.cloud.microsoft",
+              "outlook.live.com")
+SCHOOL_HOSTS = (*MAIL_HOSTS, "teams.microsoft.com", "teams.cloud.microsoft", "teams.live.com")
+BUTTON = re.compile(r"[-\s]*(?:button|menuitem)\b")  # a snapshot line that is an action
+MAIL_ACT = re.compile(r"\b(?:move|junk|spam)\b", re.IGNORECASE)  # Delete asks; Archive is free
+SENDS = re.compile(r"\b(?:send|gửi)\b", re.IGNORECASE)
+INVITES = re.compile(r"\b(?:save|done|create|schedule)\b", re.IGNORECASE)  # event with attendees
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+COMPUTER_APPS = re.compile(r"outlook|teams", re.IGNORECASE)  # names and com.microsoft.* bundle ids
+LOOK = {"capture", "list_apps", "list_windows", "wait", "scroll"}  # computer_use: no effect
+NOTE = re.compile(r"\.(?:md|markdown)$", re.IGNORECASE)  # not robo-make's .html pages
+REMOTE = re.compile(  # what Obsidian would fetch or run when the note opens
+    r"!\[[^\]]*\](?:\(\s*<?(?:https?:)?//|\[)"  # ![alt](http://x) and ![alt][ref]
+    r"|<\s*(?:iframe|script|object|embed)\b"
+    r"|<\s*(?:img|video|audio|source)\b[^>]*(?:https?:|[\"'=])//", re.IGNORECASE)
+RECEIPT_WORDS = re.compile(r"\b(?:save|move|junk|archive|done|create|schedule)\b", re.IGNORECASE)
+SEND_KEYS = {"control+enter", "meta+enter", "alt+s"}  # plain Enter may only be a search
+RECEIPTS = ".local/share/robo/receipts.jsonl"
+MAX_RECEIPTS = 2000
+
 _labels: dict[str, dict[str, str]] = {}  # task_id -> {"e5": snapshot line}
-_hosts: dict[str, str] = {}  # task_id -> host of the page last opened
+_pages: dict[str, str] = {}  # task_id -> URL of the page last opened
+_typed: dict[str, list[str]] = {}  # task_id -> addresses typed on a mail or Teams page
+_apps: dict[str, str] = {}  # task_id -> app of the last computer_use capture
 _searched: set[str] = set()  # tasks whose last browser action typed into a search box
 
 
@@ -91,6 +139,33 @@ def _label(line: str) -> str:
 
 def _ref(args: dict) -> str:
     return str(args.get("ref", "")).strip().lstrip("@")
+
+
+def _host(task: str) -> str:
+    return urlsplit(_pages.get(task, "")).hostname or ""
+
+
+def _on(host: str, *names: str) -> bool:
+    return any(host == name or host.endswith("." + name) for name in names if name)
+
+
+def _moodle() -> str:
+    """The user's Moodle host: MOODLE_BASE_URL from robo's profile .env, which Hermes puts in the
+    environment only for a single-profile gateway, so read the file beside the plugin as well."""
+    url = os.environ.get("MOODLE_BASE_URL", "")
+    if not url:
+        try:
+            env = (Path(__file__).resolve().parents[2] / ".env").read_text()
+        except OSError:
+            env = ""
+        found = re.search(r"^\s*MOODLE_BASE_URL\s*=\s*['\"]?([^'\"\s#]+)", env, re.MULTILINE)
+        url = found.group(1) if found else ""
+    return urlsplit(url).hostname or ""
+
+
+def _school(host: str) -> bool:
+    """Outlook, Teams or the user's Moodle."""
+    return _on(host, *SCHOOL_HOSTS, _moodle())
 
 
 def _key(key: object) -> str:
@@ -119,18 +194,48 @@ def _command(args: dict, task: str) -> tuple[str, str] | None:
     workdir = str(args.get("workdir") or "")
     if HERMES.search(plain) or (workdir and _inside_hermes(workdir, task)):
         return "block", "robo may not touch its own Hermes setup"
+    if GRADED_PATH.search(unquote(plain)):
+        return "block", GRADED
     words = {word.rsplit("/", 1)[-1] for word in WORDS.split(plain)}
     return ("approve", f"run: {command}") if words & DANGER_WORDS or DANGER.search(plain) else None
 
 
-def _write(args: dict, task: str) -> tuple[str, str] | None:
+def _ops(args: dict) -> list[tuple[str, str]]:
+    """(operation, path) of a write_file or patch call, V4A headers included."""
     ops = [("edit", str(args["path"]))] if args.get("path") else []
     for op, paths in V4A.findall(str(args.get("patch", ""))):
         ops += [(op.lower(), path.strip()) for path in paths.split("->")]
+    return ops
+
+
+def _write(args: dict, task: str) -> tuple[str, str] | None:
+    ops = _ops(args)
     if any(_inside_hermes(path, task) for _, path in ops):
         return "block", "robo may not change its own Hermes setup"
+    text = " ".join(str(args.get(key, "")) for key in ("content", "new_string", "patch"))
+    if any(NOTE.search(path) for _, path in ops) and REMOTE.search(text):
+        return "block", ("a note with a remote image or active HTML loads it when Obsidian opens "
+                         "the note, which can leak the user's data. Link the page as [text](url)")
     gone = [path for op, path in ops if op == "delete"]
     return ("approve", f"delete {_short(', '.join(gone), 120)}") if gone else None
+
+
+def _desktop(args: dict, task: str) -> str:
+    """The Outlook or Teams step a computer_use call takes ("click in Microsoft Outlook"), else ''.
+    Its clicks name an element index, so the app is the one of the task's last capture."""
+    app = str(args.get("app") or _apps.get(task, ""))
+    action = str(args.get("action", "")).lower()
+    if COMPUTER_APPS.search(app) and action not in LOOK:
+        return f"{action} in {_short(app, 40)}"
+    return ""
+
+
+def _who(task: str, text: str, page: str) -> str:
+    """For a click that mails or invites people: who gets it, as far as the typed addresses tell."""
+    typed = _typed.get(task)
+    if not (SENDS.search(text) or (typed and "/calendar" in page and INVITES.search(text))):
+        return ""
+    return f" (to {', '.join(typed)})" if typed else " (recipients unknown)"
 
 
 def _check(tool: str, args: dict, task: str) -> tuple[str, str] | None:
@@ -143,19 +248,39 @@ def _check(tool: str, args: dict, task: str) -> tuple[str, str] | None:
         return None
     if tool == "terminal" or tool.startswith("process"):
         return _command(args, task)
+    if tool == "execute_code":  # too free-form to judge: only keep it off graded work
+        return ("block", GRADED) if GRADED_PATH.search(unquote(str(args.get("code", "")))) else None
     if tool in ("write_file", "patch"):
         return _write(args, task)
+    if tool == "computer_use":
+        step = _desktop(args, task)
+        return ("approve", f"{step} (computer_use)") if step else None
+    host, page = _host(task), unquote(_pages.get(task, "")).lower()
     if tool == "browser_navigate":
-        if urlsplit(url).scheme.lower() in ("http", "https") and not BAD_URL.search(url):
+        scheme = urlsplit(url).scheme.lower()
+        if GRADED_URL.search(url):
+            return "block", GRADED
+        if scheme == "javascript" and _school(host):
+            return "block", f"no raw JavaScript on {host}: {GRADED}"
+        if scheme in ("http", "https") and not BAD_URL.search(url):
             return None
         return "approve", f"open {_short(url, 120)}"
+    if tool in RAW_JS and _school(host):
+        return "block", f"no raw JavaScript or DevTools on {host}: {GRADED}"
+    if tool in SCHOOL_CLICKS and QUIZ_ATTEMPT.search(page):
+        return "block", f"this page is a quiz attempt: {GRADED}"
     line = _labels.get(task, {}).get(_ref(args))
     target = f'"{_label(line)}"' if line else f"an unknown element (@{_short(_ref(args), 20)})"
-    host = _hosts.get(task)
     on = f" on {host}" if host else ""
+    mail = _on(host, *MAIL_HOSTS)
     if tool == "browser_click":
-        if line is None or IRREVERSIBLE.search(line):
-            return "approve", f"click {target}{on}"
+        text = line or ""
+        if GRADED_LABEL.search(text) or ("/mod/assign/" in page and SAVE_CHANGES.search(text)):
+            return "block", GRADED
+        who = _who(task, text, page) if mail else ""
+        if line is None or IRREVERSIBLE.search(text) or who or (
+                mail and BUTTON.match(text) and MAIL_ACT.search(text)):
+            return "approve", f"click {target}{on}{who}"
     elif tool == "browser_press":
         key = _key(args.get("key", ""))
         search = key in ("enter", "return", "numpadenter") and task in _searched
@@ -196,9 +321,41 @@ def _refs(snapshot: str) -> dict[str, str]:
     return {ref: line for ref, line in seen.items() if ref not in twice}
 
 
+def _evidence(tool: str, args: dict, line: str, task: str) -> str:
+    """What a state-changing call did, in a few words (never typed text or page text), else ''."""
+    if tool == "browser_click":
+        words = IRREVERSIBLE.search(line) or RECEIPT_WORDS.search(line)
+        return _label(line) if BUTTON.match(line) and words else ""
+    if tool == "browser_press":
+        key = args.get("key", "")
+        return f"press {_short(key, 30)}" if _key(key) in SEND_KEYS else ""
+    if tool in ("write_file", "patch"):
+        return _short(", ".join(path for _, path in _ops(args)), 200)
+    return _desktop(args, task) if tool == "computer_use" else ""
+
+
+def _receipt(tool: str, what: str, host: str, ok: bool) -> None:
+    """One JSON line in ~/.local/share/robo/receipts.jsonl (dir 0700, file 0600, last 2000)."""
+    row = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"), "tool": tool,
+           "label_or_path": what, "host": host, "ok": ok}
+    path = HOME / RECEIPTS
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        path.chmod(0o600)
+        lines = path.read_text().splitlines(keepends=True)
+        if len(lines) > MAX_RECEIPTS:
+            path.write_text("".join(lines[-MAX_RECEIPTS:]))
+    except OSError:
+        pass  # evidence is best effort: it must never fail the tool call
+
+
 def post_tool_call(tool_name: str = "", args: dict | None = None, result: object = "",
-                   task_id: str = "", **_):
+                   task_id: str = "", status: str = "", **_):
     task, args = task_id or "", args if isinstance(args, dict) else {}
+    line = _labels.get(task, {}).get(_ref(args), "")  # read before a click forgets the refs
     if tool_name in FORGET_AFTER:
         _labels.pop(task, None)
     try:
@@ -206,15 +363,25 @@ def post_tool_call(tool_name: str = "", args: dict | None = None, result: object
     except (TypeError, ValueError):
         data = None
     info = data if isinstance(data, dict) else {}
+    host = _host(task)  # of the page the call ran on, before a navigation moves it
     if tool_name == "browser_type" and info.get("success") is True:
-        line = _labels.get(task, {}).get(_ref(args), "")
         if SEARCH.search(line) and not (MESSAGE.search(line) or IRREVERSIBLE.search(line)):
             _searched.add(task)
+        if _on(host, *SCHOOL_HOSTS):  # only the addresses are kept, for the Send question
+            seen = [*_typed.get(task, []), *EMAIL.findall(str(args.get("text", "")))]
+            _typed[task] = list(dict.fromkeys(seen))[-10:]
+    if tool_name == "computer_use" and args.get("action") in ("capture", "focus_app"):
+        _apps[task] = str(info.get("app") or args.get("app") or "")
+    what = _evidence(tool_name, args, line, task)
+    if what and status != "blocked":  # a vetoed or refused call changed nothing
+        ok = (status or "ok") == "ok" and not info.get("error") and info.get("success") is not False
+        _receipt(tool_name, what, host, ok)
+        if ok and tool_name == "browser_click" and SENDS.search(line):
+            _typed.pop(task, None)  # the draft is gone
     if tool_name not in ("browser_navigate", "browser_snapshot", "browser_back"):
         return None
     if tool_name != "browser_snapshot":  # navigate and back report the final URL
-        url = info.get("url") if info else args.get("url")
-        _hosts[task] = urlsplit(str(url or "")).hostname or ""
+        _pages[task] = str((info.get("url") if info else args.get("url")) or "")
     if tool_name != "browser_back":
         _labels[task] = _refs(str(result) if data is None else str(info.get("snapshot", "")))
     return None

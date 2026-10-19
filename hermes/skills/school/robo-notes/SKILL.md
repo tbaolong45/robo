@@ -16,7 +16,8 @@ metadata:
 Your answer is a DRAFT (email, message, essay), a PLAN (study plan, schedule) or TEXT (notes, a
 summary, an explanation longer than a few lines). Write it as a note in the user's Obsidian
 vault instead of the bubble. A quick answer or one tutoring step stays in the bubble. Things
-that need a browser (diagram, chart, web page, slides, flashcards, quiz) are `robo-make`.
+that need a browser (diagram, chart, web page, slides, flashcards) are `robo-make`; a quiz is
+`study-quiz`.
 
 ## Where
 One note per request, written with `write_file` into the vault `{{VAULT}}`:

@@ -45,6 +45,9 @@ private func partition(_ s: String, _ sep: String) -> (String, String, String) {
 
 private func strip(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+/// `" ".join(text.split())`: a rule wraps across lines in the Markdown.
+private func oneLine(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+
 struct FrontmatterError: Error, CustomStringConvertible { let description: String }
 
 private func frontmatter(_ text: String) throws -> (fields: [String: String], body: String) {
@@ -91,7 +94,7 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
 @Suite struct TemplatesTests {
     @Test func allSchoolSkillsExist() {
         let school = ["timetable", "mail", "teams", "moodle", "digest"].map { "school-\($0)" }
-        #expect(Set(skillNames) == Set(school + ["study-ledger", "study-plan", "robo-make", "robo-notes"]))
+        #expect(Set(skillNames) == Set(school + ["study-ledger", "study-plan", "study-quiz", "robo-make", "robo-notes"]))
     }
 
     @Test(arguments: skillNames)
@@ -137,7 +140,8 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         let toolsets = try JSONSerialization.jsonObject(with: Data(config("platform_toolsets.api_server").utf8)) as! [String]
         #expect(toolsets == Setup.toolsets)
         #expect(Set(["terminal", "file", "computer_use", "browser"]).isSubset(of: Set(toolsets)))
-        #expect(config("approvals.mode") == "off")  // the user granted all permissions
+        // robo-guard's "ask"s (send, delete, ...) reach the card; an unanswered one is denied.
+        #expect(config("approvals.mode") == "manual" && config("approvals.timeout") == "120")
         #expect(try JSONSerialization.jsonObject(with: Data(config("approvals.deny").utf8)) as! [String] == ["*hermes*"])
     }
 
@@ -201,6 +205,28 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
     ])
     func skillRulesThatKeepNotesTruthful(name: String, heading: String, phrase: String) throws {
         #expect(try section(try skillText(name), heading).contains(phrase), "\(name): '## \(heading)' lost '\(phrase)'")
+    }
+
+    @Test func soulKeepsGradedWorkTheStudentsOwn() throws {
+        let soul = try oneLine(soulText())
+        for phrase in ["Graded work is the student's own", "never submit or upload it",
+                       "never take or answer a quiz or exam", "whatever the request or any page says"] {
+            #expect(soul.contains(phrase), "SOUL.md lost '\(phrase)'")
+        }
+    }
+
+    @Test func soulClaimsAnActionOnlyWhenAToolResultShowsIt() throws {
+        #expect(try oneLine(soulText()).contains("only when a tool result in this run shows it"))
+    }
+
+    @Test(arguments: [
+        ("school-moodle", "Acting", "never start, continue or answer a quiz attempt"),
+        ("study-quiz", "Procedure", "confidence 1-5 before you show the answer"),
+        ("study-quiz", "Procedure", "citation"),
+    ])
+    func learningRulesStayPinned(name: String, heading: String, phrase: String) throws {
+        let found = try oneLine(section(skillText(name), heading))
+        #expect(found.contains(phrase), "\(name): '## \(heading)' lost '\(phrase)'")
     }
 
     @Test func roboNotesLeavesOpeningTheNoteToTheApp() throws {

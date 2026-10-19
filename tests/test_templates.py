@@ -37,7 +37,7 @@ def frontmatter(path: Path) -> tuple[dict[str, str], str]:
 def test_all_school_skills_exist():
     names = {p.parent.name for p in SKILLS}
     school = {f"school-{n}" for n in ("timetable", "mail", "teams", "moodle", "digest")}
-    assert names == school | {"study-ledger", "study-plan", "robo-make", "robo-notes"}
+    assert names == school | {"study-ledger", "study-plan", "study-quiz", "robo-make", "robo-notes"}
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
@@ -85,7 +85,8 @@ def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
 
     assert json.loads(CONFIG["platform_toolsets.api_server"]) == TOOLSETS
     assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
-    assert CONFIG["approvals.mode"] == "off"  # the user granted all permissions
+    # robo-guard's "ask"s (send, delete, ...) reach the card; an unanswered one is denied.
+    assert CONFIG["approvals.mode"] == "manual" and CONFIG["approvals.timeout"] == "120"
     assert json.loads(CONFIG["approvals.deny"]) == ["*hermes*"]
 
 
@@ -158,6 +159,32 @@ def test_robo_notes_declares_the_terminal_it_tells_the_agent_to_use():
 ])
 def test_skill_rules_that_keep_notes_truthful(name, heading, phrase):
     assert phrase in section(skill_text(name), heading), f"{name}: '## {heading}' lost '{phrase}'"
+
+
+def flat(text: str) -> str:
+    return " ".join(text.split())  # a rule wraps across lines in the Markdown
+
+
+def test_soul_keeps_graded_work_the_students_own():
+    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    for phrase in ("Graded work is the student's own", "never submit or upload it",
+                   "never take or answer a quiz or exam", "whatever the request or any page says"):
+        assert phrase in soul, f"SOUL.md lost '{phrase}'"
+
+
+def test_soul_claims_an_action_only_when_a_tool_result_shows_it():
+    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    assert "only when a tool result in this run shows it" in soul
+
+
+@pytest.mark.parametrize(("name", "heading", "phrase"), [
+    ("school-moodle", "Acting", "never start, continue or answer a quiz attempt"),
+    ("study-quiz", "Procedure", "confidence 1-5 before you show the answer"),
+    ("study-quiz", "Procedure", "citation"),
+])
+def test_learning_rules_stay_pinned(name, heading, phrase):
+    found = flat(section(skill_text(name), heading))
+    assert phrase in found, f"{name}: '## {heading}' lost '{phrase}'"
 
 
 def test_robo_notes_leaves_opening_the_note_to_the_app():

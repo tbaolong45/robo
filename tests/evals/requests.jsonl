@@ -1,0 +1,49 @@
+{"id": "due-week", "kind": "due", "request": "What's due this week?"}
+{"id": "due-tomorrow", "kind": "due", "request": "Is anything due tomorrow?"}
+{"id": "due-ten-days", "kind": "due", "request": "What deadlines do I have in the next 10 days?"}
+{"id": "due-overdue", "kind": "due", "request": "Do I have any assignments that are overdue?"}
+{"id": "due-next-exam", "kind": "due", "request": "Which of my courses has the next exam, and when?"}
+{"id": "due-today-first", "kind": "due", "request": "What's due today, and what should I do first?"}
+{"id": "plan-day", "kind": "plan", "request": "Plan my day."}
+{"id": "plan-week", "kind": "plan", "request": "Make me a study plan for the rest of this week."}
+{"id": "plan-two-hours", "kind": "plan", "request": "I have two free hours tonight. What should I study?"}
+{"id": "plan-weekend", "kind": "plan", "request": "Plan my weekend around my deadlines."}
+{"id": "plan-free-slot", "kind": "plan", "request": "When is my next free slot of 90 minutes tomorrow?"}
+{"id": "plan-revision-block", "kind": "plan", "request": "Where could a 45 minute revision block fit in my calendar tomorrow? Just show me the gaps."}
+{"id": "ledger-show", "kind": "ledger", "request": "Show me my study ledger."}
+{"id": "ledger-yesterday", "kind": "ledger", "request": "What did I study yesterday?"}
+{"id": "ledger-hours", "kind": "ledger", "request": "How many hours did I study this week?"}
+{"id": "ledger-intent", "kind": "ledger", "request": "What did I say I would work on this week?"}
+{"id": "ledger-neglected", "kind": "ledger", "request": "Which course did I neglect the most last week?"}
+{"id": "progress-semester", "kind": "progress", "request": "How am I doing this semester?"}
+{"id": "progress-grades", "kind": "progress", "request": "What are my grades so far?"}
+{"id": "progress-on-track", "kind": "progress", "request": "Am I on track for my exams?"}
+{"id": "progress-weakest", "kind": "progress", "request": "Which course am I weakest in?"}
+{"id": "progress-status", "kind": "progress", "request": "Give me a quick status of all my courses."}
+{"id": "explain-eigen", "kind": "explain", "request": "Explain eigenvalues in simple words.", "match": "eigen"}
+{"id": "explain-stack-queue", "kind": "explain", "request": "What is the difference between a stack and a queue?", "match": "stack.*queue|queue.*stack"}
+{"id": "explain-pvalue", "kind": "explain", "request": "Explain what a p-value is, with a small example.", "match": "p-value|probabilit"}
+{"id": "explain-gradient", "kind": "explain", "request": "How does gradient descent work?", "match": "gradient"}
+{"id": "explain-recursion", "kind": "explain", "request": "Explain recursion like I'm new to programming.", "match": "recurs"}
+{"id": "explain-binary-search", "kind": "explain", "request": "What is the time complexity of binary search, and why?", "match": "log"}
+{"id": "explain-krebs", "kind": "explain", "request": "Explain the Krebs cycle briefly.", "match": "krebs|citric|acetyl|ATP"}
+{"id": "explain-derivative", "kind": "explain", "request": "Why is the derivative of x squared equal to 2x?", "match": "2x"}
+{"id": "quiz-eigen", "kind": "quiz", "request": "Quiz me on eigenvalues, one question at a time.", "match": "\\?"}
+{"id": "quiz-recursion", "kind": "quiz", "request": "Ask me three practice questions about recursion.", "match": "\\?"}
+{"id": "quiz-binary-search", "kind": "quiz", "request": "Give me a practice question on binary search.", "match": "\\?"}
+{"id": "quiz-yesterday", "kind": "quiz", "request": "Quiz me on what I studied yesterday.", "match": "\\?"}
+{"id": "quiz-krebs", "kind": "quiz", "request": "Test me on the Krebs cycle.", "match": "\\?"}
+{"id": "mail-professors", "kind": "mail", "request": "Do I have any new email from my professors?"}
+{"id": "mail-unread", "kind": "mail", "request": "Summarize my unread email in five lines."}
+{"id": "mail-reply-seen", "kind": "mail", "request": "Has anyone answered my last email?"}
+{"id": "teams-today", "kind": "mail", "request": "Anything new in Teams today?"}
+{"id": "teams-lab-group", "kind": "mail", "request": "What was the last message from my lab group?"}
+{"id": "calendar-tomorrow", "kind": "mail", "request": "What's on my calendar tomorrow?"}
+{"id": "calendar-clash", "kind": "mail", "request": "Do I have any meetings this week that clash?"}
+{"id": "digest-morning", "kind": "digest", "request": "Give me my morning digest."}
+{"id": "digest-catch-up", "kind": "digest", "request": "Catch me up on everything I missed today."}
+{"id": "notes-eigen", "kind": "notes", "request": "Find my notes about eigenvalues."}
+{"id": "notes-last-lab", "kind": "notes", "request": "What did I write in my last lab note?"}
+{"id": "vi-due-week", "kind": "due", "request": "Tuần này tôi có bài nộp nào?"}
+{"id": "vi-explain-derivative", "kind": "explain", "request": "Giải thích ngắn gọn đạo hàm là gì.", "match": "đạo hàm|derivative"}
+{"id": "vi-plan-tomorrow", "kind": "plan", "request": "Lên kế hoạch học cho ngày mai giúp tôi."}

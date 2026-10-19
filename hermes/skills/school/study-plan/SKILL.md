@@ -7,7 +7,7 @@ metadata:
   hermes:
     tags: [School, Planning, Calendar]
     requires_toolsets: [browser, terminal, file]
-    related_skills: [school-timetable, school-moodle, study-ledger, school-digest, robo-notes]
+    related_skills: [school-timetable, school-moodle, study-ledger, study-quiz, school-digest, robo-notes]
 ---
 
 # Study plan (today's timed blocks)
@@ -23,7 +23,8 @@ digest has the classes and deadlines) instead of fetching again.
 1. `school-timetable`: today's classes as busy times with exact start and end.
 2. `school-moodle`: everything due in the next 7 days, plus anything overdue.
 3. `study-ledger`: `read_file(path="~/.local/share/robo/study.md")` for exams, goals, weak
-   results and preferences (block length, best time of day).
+   results and preferences (block length, best time of day), and the `## Reviews` lines whose
+   `due` is today or earlier.
 4. Yesterday's activity:
    `terminal(command="{{ROBO}} activity --days 1", timeout=60)`.
    If it fails, skip it. Use it to continue unfinished work and not repeat what is done.
@@ -36,6 +37,12 @@ digest has the classes and deadlines) instead of fetching again.
      `deadline` is the due time (for exam prep, the exam start). `priority` is 0..1: overdue
      or due within 48 h, or an exam within 3 days, 0.8-1; due this week 0.5-0.8; a subject
      with weak results +0.1-0.2; goals and review 0.2-0.4. Split work over 2 h into blocks.
+   - due reviews become ONE task for all of them, not one per topic:
+     `{"id": "review", "title": "Review: eigenvalues, SVD", "minutes": 25, "priority": 0.4}`
+     (30 minutes with three topics). At most 3 topics a day, the longest overdue first; the
+     rest stay due and slide to the next plan. With an exam of one of those courses within
+     3 days: priority 0.8 or more and the exam start as `deadline`. The student does it as a
+     `study-quiz` on those topics, which is what moves their due dates.
    - busy: `[{"title": "Calculus", "start": "2026-10-11T09:00:00", "end": "2026-10-11T10:30:00"}]`,
      today's classes and any existing events (including `[Robo]` ones).
 2. `terminal(command="{{ROBO}} plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json", timeout=60)`.
