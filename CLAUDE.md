@@ -173,7 +173,8 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (optional cap: `ROBO_DAILY_TOKENS`, else the
   number in `~/.local/share/robo/daily_tokens`; the file is what survives `robo setup`, which rewrites the login item without any
   environment, and it is set to 6000000 on the live Mac since 2026-10-20; a run counts `total` including cache reads: a chat turn is
-  ~95k, the LMS course list ~290k, one course scan ~630k, a normal day 1.8-2.3M; the cap stops chat too; Hermes reports no usage for
+  ~95k, the LMS course list ~290k, one course scan ~630k (15 tool calls) before the skill's thrift rule and ~340k (10 calls, same answer, one
+  quiet course) after it, a normal day 1.8-2.3M; the cap stops chat too; Hermes reports no usage for
   failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
   v3 manifests expire within 24 h (Hermes has no handling), need a per-profile file, and the terminal/browser tools bypass it.
 - **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a

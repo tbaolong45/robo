@@ -55,7 +55,13 @@ Never try to sign in.
    sorted by latest post), then recent activity. Open each discussion and read its posts. Go through
    long lists page by page. Stop a forum when its remaining discussions have no post on or after
    SINCE.
-3. Stop the course after 120 posts read or about 12 minutes of work, and say so in the one sentence.
+3. Be thrifty: every tool call sends your whole context again, so a quiet course must cost few
+   calls. Use `browser_navigate` and `browser_snapshot` only (no `browser_vision`, no
+   `browser_console`), never read a page twice, and once the Announcements forum and the
+   recent-activity page show nothing on or after SINCE, stop and answer `[]` without opening other
+   forums (unless the course page itself names one for deadlines or assignments). At most 12 tool
+   calls for a course; say so in the one sentence if you stopped at that limit. Also stop after 120
+   posts read or about 12 minutes of work, and say so.
 4. For every post that states or changes a DEADLINE, EXAM, QUIZ, SUBMISSION, SESSION or EVENT with a
    date or time, add one object. Take what teachers and course staff write; a student's question
    or guess is not a deadline. One object per item, with these fields:

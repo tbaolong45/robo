@@ -229,6 +229,9 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         ("school-posts", "Modes", "`MODE: scan`"),
         ("school-posts", "Procedure", "`\"due\": null`"),
         ("school-posts", "Procedure", "never guess a year or a time"),
+        // each tool call re-sends the whole context (a scan took 15 calls and ~630k tokens): text only, an early stop, a cap
+        ("school-posts", "Procedure", "no `browser_vision`, no `browser_console`"),
+        ("school-posts", "Procedure", "At most 12 tool calls for a course"),
         ("school-posts", "Procedure", "`YYYY-MM-DD` when the post gives a day and no time"),  // the app reads a day as the end of it
         ("school-posts", "Modes", "SINCE: <YYYY-MM-DD>"),  // a day: the daily scan has no backfill
         ("school-posts", "Pitfalls", "never click Attempt, Start, Submit, Add submission, Reply, Post, Subscribe or Mark as done"),

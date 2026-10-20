@@ -188,6 +188,10 @@ def test_soul_claims_an_action_only_when_a_tool_result_shows_it():
     ("school-posts", "Modes", "`MODE: scan`"),
     ("school-posts", "Procedure", '`"due": null`'),
     ("school-posts", "Procedure", "never guess a year or a time"),
+    # each tool call re-sends the whole context (a scan took 15 calls and ~630k tokens):
+    # text only, an early stop, a cap
+    ("school-posts", "Procedure", "no `browser_vision`, no `browser_console`"),
+    ("school-posts", "Procedure", "At most 12 tool calls for a course"),
     # the app reads a day as the end of it, and the daily scan has no backfill (SINCE is a day)
     ("school-posts", "Procedure", "`YYYY-MM-DD` when the post gives a day and no time"),
     ("school-posts", "Modes", "SINCE: <YYYY-MM-DD>"),
