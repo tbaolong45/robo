@@ -81,7 +81,12 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   two. Calibrate on the user's own voice through the real mic (`scripts/voice_eval.py --record`, or
   replay a clip through `Endpointer`), not a TTS voice. Recording from the Bluetooth headset
   (WH-CH720N) while Robo ran was followed by "I lost the microphone, reconnecting..." in Robo (not
-  isolated: probably the headset's profile switch); it recovered by itself within ~20 s.
+  isolated: probably the headset's profile switch); it recovered by itself within ~20 s. **The live app died of that class of
+  event on 2026-10-20 11:30 (SIGABRT on the `robo-listen` thread)**: `Microphone.init` read the input format, then `installTap(format:)`
+  with it, and when the device changed in between AVAudioEngine raised an NSException ("Failed to create tap due to format mismatch",
+  2 ch 44100 Hz) that Swift cannot catch. Now the tap gets `format: nil` and `AdaptiveResampler` builds the converter from each buffer's
+  own format. Reproduced with a scratch program (a wrong explicit format aborts with that message, exit 134; nil installs cleanly), the
+  device change itself is not testable here. Other uncatchable AVAudioEngine exceptions could remain (a catch needs an Objective-C shim).
 - **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model
   loads on its thread. Use `Listener.running`, not the return value, to know voice input is alive.
   Listener callbacks reach the UI only through `app._Bridge` signals.
@@ -165,8 +170,11 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   graded-work actions (Moodle quiz attempt URLs/labels, assignment submit, raw JS on school hosts, `/mod/quiz/` in a command)
   and remote images/scripts in written notes, and asks for send/move/junk/invites/Outlook-Teams `computer_use`; the asks only
   bite in `approvals.mode: manual`. It appends receipts to `~/.local/share/robo/receipts.jsonl`; the app shows "✓ sent · host"
-  or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (`ROBO_DAILY_TOKENS` = optional cap;
-  Hermes reports no usage for failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
+  or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (optional cap: `ROBO_DAILY_TOKENS`, else the
+  number in `~/.local/share/robo/daily_tokens`; the file is what survives `robo setup`, which rewrites the login item without any
+  environment, and it is set to 6000000 on the live Mac since 2026-10-20; a run counts `total` including cache reads: a chat turn is
+  ~95k, the LMS course list ~290k, one course scan ~630k, a normal day 1.8-2.3M; the cap stops chat too; Hermes reports no usage for
+  failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
   v3 manifests expire within 24 h (Hermes has no handling), need a per-profile file, and the terminal/browser tools bypass it.
 - **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
   `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;

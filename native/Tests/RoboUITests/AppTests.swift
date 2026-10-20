@@ -514,7 +514,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
 
     // MARK: the daily cap
 
-    private let message = "Today's token budget (100) is used up. Set ROBO_DAILY_TOKENS higher or wait for tomorrow."
+    private let message = "Today's token budget (100) is used up. Raise the number in daily_tokens (in ~/.local/share/robo) or wait for tomorrow."
     private let day = 1_792_393_402.0
 
     private func capped(_ r: Rig, cap: Int, used: Int, at: Double? = nil) {
@@ -529,7 +529,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         capped(r, cap: 100, used: 100)
         r.window.ask("hi")
         #expect(shown(r) == message && !r.window.busy)
-        #expect(r.window.card.reply.textView.string.contains("ROBO_DAILY_TOKENS higher"))  // the underscores are not Markdown
+        #expect(r.window.card.reply.textView.string.contains("number in daily_tokens"))  // the underscore is not Markdown
         #expect(!(await pump(!r.hermes.asked.isEmpty, timeout: 0.3)))  // Hermes was never asked
         #expect(r.window.mind.activity == .idle)
     }
@@ -554,8 +554,10 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(shown(r) == message && r.hermes.asked.map(\.text) == ["first"])
     }
 
-    @Test func theCapReadsTheEnvironmentWhenTheMachineIsBuilt() {
-        #expect(Machine(home: URL(fileURLWithPath: "/Users/jane")).dailyTokens == Usage.cap(ProcessInfo.processInfo.environment))
+    @Test func theCapReadsTheEnvironmentThenTheDataFolderWhenTheMachineIsBuilt() {
+        let file = ActivityLog.dataDir.appendingPathComponent("daily_tokens")
+        #expect(Machine(home: URL(fileURLWithPath: "/Users/jane")).dailyTokens == Usage.cap(ProcessInfo.processInfo.environment, file: file))
+        #expect(Machine(home: URL(fileURLWithPath: "/Users/jane"), environment: ["ROBO_DAILY_TOKENS": "1234"]).dailyTokens == 1234)
     }
 
     // MARK: the working label

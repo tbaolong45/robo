@@ -67,6 +67,23 @@ final class Resampler {
     }
 }
 
+/// A `Resampler` that follows the buffers instead of a format read earlier: the first buffer says what the device delivers, and a later
+/// one in another format (a headset joined, the rate changed) gets a new converter. Called from the tap's one queue.
+final class AdaptiveResampler {
+    private var current: (format: AVAudioFormat, resampler: Resampler)?
+
+    func convert(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        if current?.format != buffer.format {
+            guard let resampler = try? Resampler(from: buffer.format) else {
+                current = nil
+                return []  // a format that cannot be converted gives silence, which the listener reports
+            }
+            current = (buffer.format, resampler)
+        }
+        return current?.resampler.convert(buffer) ?? []
+    }
+}
+
 /// The default input device through AVAudioEngine; the tap callback queues frames so none are dropped.
 public final class Microphone: AudioSource {
     private let engine = AVAudioEngine()
@@ -76,8 +93,11 @@ public final class Microphone: AudioSource {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError("no input device") }
-        let resampler = try Resampler(from: format)
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [queue] buffer, _ in
+        let resampler = AdaptiveResampler()
+        // No format of our own: `format` above can be stale if the input device changed since it was read (a headset connecting), and
+        // installTap then raises an NSException ("Failed to create tap due to format mismatch") that Swift cannot catch: it killed the
+        // live app on 2026-10-20. With nil the engine uses the device's format at this moment, and each buffer carries its own.
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { [queue] buffer, _ in
             queue.append(samples: resampler.convert(buffer))
         }
         do { try engine.start() } catch {

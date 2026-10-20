@@ -20,7 +20,7 @@ extension RoboWindow {
         }
         let cap = machine.dailyTokens
         if cap > 0 && Usage.todayTokens(file: machine.usageFile, now: machine.wall()) >= cap {  // no run starts: it would only cost more
-            say("Today's token budget (\(cap)) is used up. Set ROBO_DAILY_TOKENS higher or wait for tomorrow.")
+            say("Today's token budget (\(cap)) is used up. Raise the number in daily_tokens (in ~/.local/share/robo) or wait for tomorrow.")
             return
         }
         let day = today()

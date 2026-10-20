@@ -29,6 +29,24 @@ private func mode(_ url: URL) -> Int {
         #expect(Usage.cap(environment) == want)
     }
 
+    /// `robo setup` rewrites the login item byte for byte, so an environment variable put there would not survive it; the number in
+    /// robo's data folder does.
+    @Test func withoutTheEnvironmentTheCapComesFromAFileThatTheEnvironmentOverrides() throws {
+        let dir = temp()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("daily_tokens")
+        #expect(Usage.cap([:], file: file) == 0)  // no file
+        try "6000000\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(Usage.cap([:], file: file) == 6_000_000)
+        #expect(Usage.cap(["ROBO_DAILY_TOKENS": ""], file: file) == 6_000_000)  // an empty variable is no variable
+        #expect(Usage.cap(["ROBO_DAILY_TOKENS": "500000"], file: file) == 500_000)  // the environment wins
+        #expect(Usage.cap(["ROBO_DAILY_TOKENS": "0"], file: file) == 0)  // and can switch the cap off for a run
+        for text in ["", "lots", "-5", "0", "6 000 000"] {
+            try text.write(to: file, atomically: true, encoding: .utf8)
+            #expect(Usage.cap([:], file: file) == 0, "\(text)")
+        }
+    }
+
     @Test func theStampIsIsoWithTheLocalOffsetSoItsFirstTenCharactersAreTheLocalDate() {
         #expect(Usage.stamp(MIDNIGHT, zone: VN) == "2026-10-19T00:00:00+07:00")
         #expect(Usage.stamp(MIDNIGHT - 1, zone: VN) == "2026-10-18T23:59:59+07:00")

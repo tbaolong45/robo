@@ -93,7 +93,7 @@ struct Machine {
     var usageFile: URL  // one line per finished run: tokens, seconds, steps
     var nudgeDir: URL  // agenda.json, nudges.json and reminders.json
     var studyFile: URL  // the study ledger: exams and "snooze nudges until"
-    var dailyTokens = Usage.cap(ProcessInfo.processInfo.environment)  // ROBO_DAILY_TOKENS; 0 = no cap
+    var dailyTokens = 0  // ROBO_DAILY_TOKENS, else the number in `daily_tokens` of robo's data folder (set in `init`); 0 = no cap
     var showTyper: (TypePanel) -> Void = { $0.present() }
     var terminate: () -> Void = { NSApp.terminate(nil) }
     var focus = Focus()
@@ -114,6 +114,7 @@ struct Machine {
         // can be looked at at night.
         if environment["ROBO_NUDGE_PRESENT"] == "1" { userAway = { false } }
         radarNow = environment["ROBO_RADAR_NOW"] == "1"
+        dailyTokens = Usage.cap(environment, file: ActivityLog.dataDir.appendingPathComponent("daily_tokens"))
         let profile = HermesProfile(home: home, env: environment)
         postsMoodle = { Setup.postsMoodle(profile) }
         outputDir = home.appendingPathComponent("Robo")

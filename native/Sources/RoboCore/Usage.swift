@@ -14,9 +14,13 @@ public struct UsageRecord: Equatable, Sendable {
 }
 
 public enum Usage {
-    /// The daily cap in tokens from the environment (a dev switch like ROBO_NO_VOICE); unset, 0 or not a number: no cap.
-    public static func cap(_ environment: [String: String]) -> Int {
-        max(0, Int(environment["ROBO_DAILY_TOKENS"] ?? "") ?? 0)
+    /// The daily cap in tokens: ROBO_DAILY_TOKENS when it is set (and not empty), else the number in `file` (`daily_tokens` in robo's
+    /// data folder, which survives `robo setup`: that rewrites the login item, so a variable put there would be lost); unset, 0 or not
+    /// a number: no cap.
+    public static func cap(_ environment: [String: String], file: URL? = nil) -> Int {
+        var text = environment["ROBO_DAILY_TOKENS"] ?? ""
+        if text.isEmpty, let file { text = (try? String(contentsOf: file, encoding: .utf8)) ?? "" }
+        return max(0, Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0)
     }
 
     /// Wall time as ISO 8601 with the zone's offset ("2026-10-19T14:03:22+07:00"), as robo-guard stamps its receipts:

@@ -35,6 +35,19 @@ func theDevicesAudioBecomes16kHzMono(rate: Double, channels: AVAudioChannelCount
     #expect(abs(Double(crossings) / (Double(steady.count) / 16000) - 880) < 10)
 }
 
+/// The tap is installed with no format of its own (one given by the caller can be stale after the input device changed, and AVAudioEngine
+/// then raises an NSException that no Swift code can catch: the live app died of it on 2026-10-20), so the buffers say what the device
+/// delivers, and a later buffer of another format (a headset joined) needs another converter.
+@Test func theResamplerFollowsTheDevicesFormatWhenItChangesInTheMiddleOfARun() {
+    let adaptive = AdaptiveResampler()
+    let laptop = sineBuffers(rate: 44100, channels: 2, seconds: 1, chunk: 4410).flatMap { adaptive.convert($0) }
+    let headset = sineBuffers(rate: 16000, channels: 1, seconds: 1, chunk: 1600).flatMap { adaptive.convert($0) }
+    let back = sineBuffers(rate: 48000, channels: 1, seconds: 1, chunk: 4800).flatMap { adaptive.convert($0) }
+    for samples in [laptop, headset, back] { #expect(abs(samples.count - Listen.sampleRate) < 800) }
+    let level = (back.suffix(8000).reduce(0) { $0 + $1 * $1 } / 8000).squareRoot()
+    #expect(abs(Double(level) - 0.5 / 2.0.squareRoot()) < 0.03)  // and the sine still comes through after two changes
+}
+
 @Test func theFrameQueueCutsSamplesIntoFramesAndKeepsTheRemainder() {
     let queue = FrameQueue()
     queue.append(samples: [Float](repeating: 1, count: 3000))
