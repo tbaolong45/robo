@@ -228,12 +228,12 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         #expect(due([moved], fired: Set(r.covered), now: now).isEmpty)
     }
 
-    @Test func newIsOnlyForTheCalendarFeedAndOnlyForAWeekAheadAndOnlyForADay() {
+    @Test func newIsOnlyForTheCalendarFeedAndPostsAndOnlyForAWeekAheadAndOnlyForADay() {
         let now = at(2026, 10, 20, 2)
         func rungs(_ i: AgendaItem, at t: Date = now) -> [Reminder.Rung] { due([i], now: t).map(\.rung) }
         #expect(rungs(item(.event, now.addingTimeInterval(7 * 86_400), firstSeen: now)) == [.newEvent])
         #expect(rungs(item(.event, now.addingTimeInterval(7 * 86_400 + 1), firstSeen: now)).isEmpty)  // beyond a week
-        #expect(rungs(item(.event, now.addingTimeInterval(86_400), source: .lms, firstSeen: now)).isEmpty)
+        #expect(rungs(item(.event, now.addingTimeInterval(86_400), source: .lms, firstSeen: now)) == [.newEvent])  // a post's find too
         #expect(rungs(item(.event, now.addingTimeInterval(86_400), source: .ledger, firstSeen: now)).isEmpty)
         #expect(rungs(item(.event, now.addingTimeInterval(86_400), source: .radar, firstSeen: now)).isEmpty)
         #expect(rungs(item(.event, now.addingTimeInterval(86_400), recurring: true, firstSeen: now)).isEmpty)
@@ -248,6 +248,20 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         let seen = replay([i], from: now, to: now.addingTimeInterval(6 * 86_400))
         #expect(seen.map(\.rung) == [.newEvent, .day, .hours3])
         #expect(seen[0].at == now)
+    }
+
+    /// A deadline a teacher wrote in a post is news the moment the scan finds it, and posts give weeks of notice: a month, not a week.
+    @Test func aDeadlineFoundInAPostIsAnnouncedWithinAMonthAndThenFollowsItsLadder() {
+        let now = at(2026, 10, 20, 2)
+        let near = item(.deadline, now.addingTimeInterval(20 * 86_400), id: "near", source: .lms, firstSeen: now)
+        let seen = replay([near], from: now, to: now.addingTimeInterval(21 * 86_400))
+        #expect(seen.map(\.rung) == [.newEvent, .day, .hours3] && seen[0].at == now)
+        let thirty = item(.deadline, now.addingTimeInterval(30 * 86_400), source: .lms, firstSeen: now)
+        #expect(due([thirty], now: now).map(\.rung) == [.newEvent])
+        #expect(due([item(.deadline, now.addingTimeInterval(30 * 86_400 + 1), source: .lms, firstSeen: now)], now: now).isEmpty)  // later
+        // old news is not news, a moved date is (another post moved it)
+        #expect(due([item(.deadline, now.addingTimeInterval(5 * 86_400), source: .lms)], now: now).isEmpty)
+        #expect(due([item(.deadline, now.addingTimeInterval(5 * 86_400), source: .lms, changed: true)], now: now).map(\.rung) == [.newEvent])
     }
 
     @Test func aNewMeetingSoonerThanItsReminderIsOnlyTheReminder() throws {

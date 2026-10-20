@@ -198,8 +198,10 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   years after; text is one clean line (control and bidi characters removed); a quote is required; same course + title = one item, the later
   post wins; caps 60 items / 40 courses; dropped objects are counted in the log. Items are `AgendaItem(source: .lms, id lms:<course>:<title>)`
   merged with the earlier ones (a scan reports only new posts), then the ordinary reminders (T-1 d, T-3 h) and `NudgeBudget` apply; the
-  card says "from a post: check the date" with the quote. Not done: a "new deadline posted" heads-up (an LMS item nudges only on the
-  ladder), a consent card (not needed without a backfill; installing the skill is the opt-in). **Verified** (fakes, temp dirs, 2026-10-20):
+  card says "from a post: check the date" with the quote. **Heads-up (2026-10-20)**: a find is announced once at the next slot as "new ·
+  <when>" (or "moved · ..." when a later post changed its date): `Reminders` gives `.lms` items the `newEvent` rung within
+  `newHorizonPosts` = 30 days (the calendar feed keeps 7), for the day after it is first seen; then the usual ladder. Not done: a consent
+  card (not needed without a backfill; installing the skill is the opt-in). **Verified** (fakes, temp dirs, 2026-10-20):
   the decoder against hostile and malformed replies, the plan, the window flow (gates, session per run, denied asks, user cancel, limit,
   failures and retries, merge, cap, list refresh), the state file. **Verified live (release test copy)**: with a throwaway `HOME` (dummy
   `.hermes/profiles/robo/.env` with `MOODLE_BASE_URL`, a stub `skills/school/school-posts/SKILL.md`) and a loopback script imitating the

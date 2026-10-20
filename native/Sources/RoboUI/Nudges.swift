@@ -96,7 +96,10 @@ enum Nudges {
         if let course = item.course, !title.localizedCaseInsensitiveContains(course) { title = "\(course) · \(title)" }
         var detail = r.rung == .newEvent ? (item.changed ? "moved · " : "new in your calendar · ") + when : when
         // A date an AI read out of a post can be wrong: the card says so and shows the words it was read from.
-        if item.source == .lms, let quote = item.quote { detail = "\(when)\n“\(quote)”\nfrom a post: check the date" }
+        if item.source == .lms, let quote = item.quote {
+            let head = r.rung == .newEvent ? (item.changed ? "moved · " : "new · ") + when : when  // just found, or a later post moved it
+            detail = "\(head)\n“\(quote)”\nfrom a post: check the date"
+        }
         return NudgeCandidate(id: r.key, category: category, urgent: r.urgent, title: title, detail: detail, url: item.url, dueAt: item.when)
     }
 

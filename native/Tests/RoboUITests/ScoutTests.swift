@@ -160,6 +160,25 @@ private final class Replies: @unchecked Sendable {
         #expect(r.window.card.nudge.label.text == "HEADS-UP ▸" && well.contains("↗ \(host)"))
     }
 
+    @Test func aDeadlineFoundInAPostIsAnnouncedAtTheNextSlotAsNewAndNotAgain() async {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [courses([courseA]), fenced([post(["due": "2026-10-25T23:59"])])])  // due Sunday, five days ahead
+        tick(r, at(8))
+        #expect(await settled(r))
+        tick(r, at(8, 1))
+        #expect(await settled(r))
+        #expect(r.window.nudge.shown.isEmpty)  // 08:01 is no slot: it waits for 09:00
+        tick(r, at(9))
+        let well = r.window.card.nudge.well.text
+        #expect(r.window.nudge.shown.count == 1 && r.window.card.nudge.label.text == "HEADS-UP ▸")
+        #expect(well.hasPrefix("MATH201 · Problem set 4 moved\nnew · Sun 23:59\n“Problem set 4 is now due Friday 23 October at 23:59.”\nfrom a post: check the date"))
+        r.window.nudge.shown = []  // the card goes away
+        r.window.closeBubble()
+        tick(r, at(13))  // the same find the next slot: announced already, its day rung is not yet due
+        #expect(r.window.nudge.shown.isEmpty)
+    }
+
     @Test func earlierFindingsStayAndAThingFoundAgainIsTheNewOne() async {
         let r = await launch()
         defer { r.close() }

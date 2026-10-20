@@ -4,7 +4,8 @@
 // The ladder, by kind: deadline T-1 day and T-3 h; exam T-7 days, T-1 day, T-3 h; event (a meeting that is not a class) T-30
 // min; opportunity T-3 days and T-1 day. "A day" is a calendar day in the user's zone (the same wall-clock time the day before,
 // also across a DST change); the hours and minutes are absolute. Recurring items (classes) never remind, and nothing in the
-// past does. A new or moved item from the calendar feed gets one `newEvent` when it starts within a week.
+// past does. A new or moved item from the calendar feed gets one `newEvent` when it starts within a week, and so does a deadline
+// the LMS scan found in a post (within a month).
 //
 // One item gives at most one reminder at a time. When several rungs are due at once (the app slept, or the item was found
 // late) the tightest one is returned and it stands for the looser ones: add `covered` to `fired`, and they never fire later
@@ -28,8 +29,10 @@ public struct Reminder: Equatable, Sendable {
 public enum Reminders {
     /// How long after an item is first seen it still counts as new.
     public static let newWindow: TimeInterval = 86_400
-    /// A new or moved item is announced when it starts within this long.
+    /// A new or moved item of the calendar feed is announced when it starts within this long.
     public static let newHorizon: TimeInterval = 7 * 86_400
+    /// A deadline the LMS scan read out of a post: teachers give weeks of notice, and the user wants to hear of it at once.
+    public static let newHorizonPosts: TimeInterval = 30 * 86_400
 
     /// The key of one rung of an item. It holds the item's time, so an item that moves (a deadline extended) is reminded afresh.
     /// On the first import of a calendar the caller should add `key(item, .newEvent)` of every item to `fired`, or each
@@ -58,7 +61,8 @@ public enum Reminders {
         for item in items.sorted(by: { ($0.when, $0.id) < ($1.when, $1.id) }) where !item.recurring && item.when > now {
             var rungs: [(rung: Reminder.Rung, at: Date)] = []  // the longest lead first
             let isNew = item.changed || now.timeIntervalSince(item.firstSeen) <= newWindow
-            if item.source == .ics, isNew, item.when.timeIntervalSince(now) <= newHorizon { rungs.append((.newEvent, .distantPast)) }
+            let horizon = item.source == .ics ? newHorizon : item.source == .lms ? newHorizonPosts : 0  // the ledger and the radar: never
+            if isNew, item.when.timeIntervalSince(now) <= horizon { rungs.append((.newEvent, .distantPast)) }
             for (rung, lead) in ladder(item.kind) {
                 switch lead {
                 case .days(let n): if let at = cal.date(byAdding: .day, value: -n, to: item.when) { rungs.append((rung, at)) }
