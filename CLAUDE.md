@@ -171,6 +171,108 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
 - **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
   `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;
   SOUL.md "Learning first" (hints before answers, graded work is never done for the student).
+- **LMS posts scan (planned, 2026-10-20; the skill exists, the Swift `Scout` and `robo setup` do not yet)**: deadlines live in Moodle
+  posts, not the calendar. `hermes/skills/school/school-posts` has two modes picked by the request's first line: `MODE: list` (courses
+  as a JSON array) and `MODE: scan` + `COURSE` / `SINCE` / `TODAY` (one fenced JSON array of `{course, post_url, posted, title, due, kind,
+  quote}`; `due` is `YYYY-MM-DDTHH:MM` or `null`, a date with no stated time is `null` too). One run per course (planned) keeps each run short
+  and lets a failed course be retried alone and the first scan resume. The app must decode strictly (https on the Moodle host
+  only, caps, sane dates) and show the quote, because the model can misread a date. The guarantees are the skill's Pitfalls (never open
+  quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the unattended asks being
+  denied; each is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
+- **Nudges (Swift only, 2026-10-20; the Python tree has none)**: robo shows what is coming up on its card. Pure parts in RoboCore
+  (`ICS`, `Agenda`, `Reminders`, `NudgeBudget`), `RoboSystem/CalendarLinks.swift` + `NudgeFiles.swift`, the window's side in
+  `RoboUI/Nudges.swift`, `NudgeView` in `Card.swift`. Sources: calendar links (Outlook "publish", Moodle export) fetched off the main
+  thread every 45 min, at launch and after a wake, and the Exams of `study.md`. Rules: normal nudges only at the 09:00 / 13:00 / 19:00
+  slots, 3 a day, nothing 22:00-08:00, everything due at that moment is ONE card; the last 3 h of a deadline and the 30 min before a
+  meeting show at once (4 a day); Later = next slot but never past 15 min before the thing itself (min 5 min from the press; found
+  live: a 10:42 meeting snoozed to 13:00 was lost), Not for me = 30 days (3 in a row mutes the category); a `snooze nudges until D`
+  line in the ledger's Notes holds all of it until D; the menu's `🔔 Nudges` chip turns it off. **State is `agenda.json`, `nudges.json`,
+  `reminders.json` in `~/.local/share/robo` (0600, atomic writes), not in `robo_state.json`**: that file is shared with the Python
+  build, which owns its one key. Time is `machine.wall` (the monotonic `clock` stops while the Mac sleeps, a deadline does not). A
+  nudge waits for a free card: it never breaks in on a reply or its typing, a run, listening, an approval, the follow-up window, the
+  Type window or a mouse press, or when the Mac is locked or idle over 5 min (`Machine.userAway`). Every end of the card without a
+  button (Esc, a click on the face, the 60 s timeout, speaking, a new request) is "dismissed", which mutes nothing. It never calls the
+  pet to a corner and never raises the Screen Recording dialog (`open(askScreen: false)`; the next card you ask for does). The first
+  import of a calendar marks every event as announced (`reminders.json` `imported`), or the coming week would all be "new". A failed
+  fetch keeps the last good agenda and logs one line without the link (any failing link keeps all of them as they were).
+  **The links are secrets**, kept in `calendars.json` (`{"label": "https://..."}`, 0600, atomic writes, folder 0700) of
+  `~/.local/share/robo` (`FileSecretStore`, like the Hermes key; a missing or corrupt file reads as empty): `robo calendar add URL
+  [--label NAME]`, `list` (scheme and host only), `remove LABEL`, `check` (fetch + parse once, prints counts and the next 5 titles,
+  never the link). **Not the Keychain (tried 2026-10-20, live)**: its partition list pins the item to the cdhash of the build that ran
+  `add`, so each rebuild asked for the login password and the background fetch hung on that dialog; fixing it needs the user's
+  keychain password. Nothing prints, logs or errors with the link or its query; the fetcher takes https (`webcal://` is read as
+  https; plain http only for localhost, for demos), refuses a redirect to anything else, 20 s, 4 MB, ETag kept in memory. A link given
+  on the command line stays in the shell's history. **While a nudge card is up the pet is frozen like under a mouse press**
+  (`RoboWindow.roam()`: `engaged: press != nil || !nudge.shown.isEmpty`): the card is attached to the pet, and live the buttons drifted
+  1200 px in a minute; `aNudgeDoesNotSendThePetToACornerButAReplyDoes` watches 65 s and fails without it. **Dev switches**:
+  `ROBO_WALL_OFFSET=<seconds, may be negative>` shifts `Machine.wall` (a demo brings a deadline near; it also shifts the "files made
+  since" and the usage day), and `ROBO_NUDGE_PRESENT=1` makes `Machine.userAway` always false (a demo copy at night, when the idle
+  check would hold every nudge): test copies only. A test copy shares `~/.local/share/robo`, so delete its `agenda.json`,
+  `nudges.json` and `reminders.json` (and `calendars.json` if it added a link) afterwards. **Verified** (2026-10-20, fakes and temp
+  dirs): the pure rules, the window flow (timing, holds, every answer and dismissal, merged card, first import, failed fetch, ledger,
+  restart), the fetcher against a stub URLProtocol, the CLI, the link file (round trip, modes, overwrite, remove, corrupt file).
+  **Verified live** (2026-10-20, installed app + a loopback ICS server + `ROBO_WALL_OFFSET`, `ROBO_NUDGE_PRESENT=1`): `calendar add/
+  check`, the fetch at launch, the merged card (meeting + deadline, concerned face), the card holding still, Later (snoozed to 15 min
+  before each, keys un-fired) and its return as a single card with Open / Later / Not for me, Not for me (muted 30 days, streak 1),
+  the 0600/0700 files. **Live-test trap**: a card stays open while the pointer is over it, and a synthetic click (`probe.py clickat`)
+  leaves the pointer where it clicked, so the next card never closed and every nudge was held; move the pointer away
+  (`CGWarpMouseCursorPosition`). **Not verified**: a real Outlook link (a tenant may block publishing), the card over light and dark
+  backdrops, the real alert behind Open, `userAway` on a locked screen, the wake path.
+- **Radar (Swift only, 2026-10-20; the Python tree has none)**: once a day robo finds papers, news, internships/programmes and
+  hackathons/contests for the profile and offers them through the nudge machinery above (no AI, no Hermes run, nothing from the web
+  reaches the agent). Pure parts in RoboCore (`Radar` = `RadarItem`, `FeedParsers` = `Feeds`/`Programmes`, `Rank`, `Profile`),
+  downloads in `RoboSystem/RadarFetcher.swift`, the window's side in `RoboUI/Radar.swift`. **When**: `RoboWindow.nudgeTick` (every
+  30 s of wall time) calls `radarTick`: a run starts at the first tick after 07:00 local when `radar.json`'s `day` is not today and
+  `Radar/<today>.md` does not exist (so also at launch later in the day, and after a wake); a run is off the main thread and one at a
+  time; `NudgeState.enabled == false` runs nothing. **No network** (every source failed with a transient error: offline, timeout): the
+  day is not marked done and the run is tried again after 30 min; HTTP errors are an answer (day done). **Files**: vault
+  `Radar/Profile.md` (made from `Profile.template()` when missing, 0644, linked into place so an existing note is never overwritten;
+  ONE `radar-setup` card then, `category .digest`, never again for the same note; nothing is fetched while `interests` is empty),
+  vault `Radar/YYYY-MM-DD.md` (Obsidian Markdown: Papers / News / Opportunities (top 5, with one standing scam line) / Contests (next
+  3); every title and address is `Plain` text from the parser and escaped again in `RadarNote.escape/target`, a bare `https://` in a
+  title is broken with `\://`, so no title can be a link, a tag, a comment or a block; no remote image or HTML), and in
+  `~/.local/share/robo`: `radar.json` (`day`, `seen` id -> date kept 60 days so nothing is shown twice, `offers` waiting for a slot;
+  offers go stale at the next midnight, the setup one after 7 days) and `radar-cache/` (`<sha256 of the URL>.body|.json`, 0600, the
+  last good body with its ETag/Last-Modified, never the URL; dropped after 30 days unused). **Offers** go into the SAME candidate list
+  as the calendar reminders, so slots, 3 a day, quiet hours, holds, `enabled` and the answers are `NudgeBudget`'s: the digest
+  (`.digest`, "N to read, M to look into": N = papers + news, M = opportunities + contests of the note, an empty half is left out; detail = first two titles, `NudgeCandidate.note` = the note;
+  Open opens it in Obsidian through `machine.openNote`, the path is checked by `Radar.noteURL`: `Radar/<name>.md` only), the best
+  matching upcoming contest (`.contest`), and a matching internship whose deadline is within 72 h (`.opportunity`, from everything
+  ranked, also what an earlier note listed). A radar offer covers no reminder key. **Sources and allowlist**: https only, hosts
+  `rss.arxiv.org` (`/atom/cs.CV+cs.RO`: the `+` joins categories in one request, checked 2026-10-20), `huggingface.co`,
+  `hacker-news.firebaseio.com` (top 30, 6 requests at a time, 15 s for all), `ctftime.org` (`/api/v1/events/?limit=30`: without
+  `start` it lists from now, checked), `codeforces.com`, `raw.githubusercontent.com` (SimplifyJobs `Summer<Y>-Internships/dev/.github/
+  scripts/listings.json`, Y = next year from August on; `Summer2027` answered 200 on 2026-10-20, the file was 12.8 MB), the three ATS
+  APIs for the profile's `companies`, plus the hosts of the profile's `feeds` (https, a named host: no IP, localhost, `.local`);
+  exact host match, a redirect to another host or to http is refused. `RadarFetcher`: 20 s, caps 4 MB / arXiv 8 MB / SimplifyJobs
+  24 MB, User-Agent `Robo/1.0 (personal study assistant)` (CTFtime refuses the default), gap per host 1 s (arXiv 3 s, HN 0.25 s so 30
+  stories fit in 15 s), an HTTP error/too big backs the URL off for 20 h (a bit under a day so tomorrow's 07:00 run is not skipped; a
+  timeout or lost network does not). LinkedIn, Indeed, Handshake, Wellfound, Devpost and Glassdoor are deliberately not touched.
+  **Privacy**: a source learns the Mac's IP and which category, company or feed is watched (the URL), never the profile text, the
+  goals or the country; the note stays on the Mac. Robo never applies, signs in, pays or sends anything. **Dev switch**
+  `ROBO_RADAR_NOW=1` (`Machine.radarNow`): the first run after launch ignores the once-a-day and 07:00 rules (then the ordinary rules
+  are back); it reads and writes the vault's `Radar/` and downloads, so use it with a throwaway `HOME`; a test copy shares
+  `~/.local/share/robo`, so delete its `radar.json` and `radar-cache/` afterwards. `Rig(radar: true)` turns the radar on in tests
+  (off by default so no other test reads a vault or meets its cards); `RadarFakes` is the fake downloader. **Verified** (2026-10-20,
+  fakes, a stub URLProtocol and temp dirs): the fetcher (allowlist, redirects, caps, ETag/304 served from disk across a restart, no URL
+  in any cache file, back-off, gaps), a run (template once, empty interests, every source -> note, a failing source, offline day,
+  never twice, nothing new -> no note, eligibility, scam/apply lines, hostile titles), the window (07:00 and once-a-day gates, launch
+  later, `enabled`, retry after offline, restart keeps the offers, midnight stale, slots, Open for a note and for a link, Not for me).
+  **Verified live** (2026-10-20, the installed app with a throwaway `HOME` that held a dummy `.hermes/profiles/robo/.env` (the app
+  exits without one), a test profile and `ROBO_WALL_OFFSET`): the template and the one setup card, then a run through the real
+  `RadarFetcher` (arXiv, Hugging Face, Hacker News, SimplifyJobs, a Greenhouse board, CTFtime, Codeforces: 7 answered, 2278 items, 8 s),
+  a note with real papers, jobs and contests, `radar.json` and the cache 0600/0700, and the next morning's run starting by itself with
+  no dev switch and showing a digest card (then titled "12 picks for you today"; the title was changed on 2026-10-20 to "N to read, M to look into", tests only, not seen live).
+  **A release-only crash the tests missed (2026-10-20)**: the first `gather` collected `for await` results into a captured var with a
+  tuple holding a `Result`; the debug build and all 1295 tests passed, but the release build (Swift 6.4) lost every answer
+  (`answered=0`, no failures) and the app died in `TaskGroup::offer` about 14 s after launch (SIGSEGV, exit 139). Both task groups now
+  use `withTaskGroup(of:returning:)`, a plain struct and no nested function capturing the group. **Run the tests in release too for
+  concurrency code**: `native/test.sh -c release -Xswiftc -enable-testing` (all four targets passed on 2026-10-20), and look at a real
+  run of the installed app. A live run needs `ROBO_RADAR_NOW=1` only for the first run after launch; with it a second run the same day
+  writes a second note of the unseen items over the first. The setup card is a `.digest`, so it uses that day's one digest: a profile
+  filled in the same day is read at the next day's 07:00. **Not verified**: the real Obsidian opening (not pressed: it would launch the
+  user's Obsidian at a temp vault), the card over light and dark backdrops, that Obsidian's reading view leaves `\[`/`\://` unlinked
+  (CommonMark says so), the day rollover on the user's own Mac (the demo moved the clock), the Lever board (no live sample).
 - **Themes (Python tree)**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
   follows the face's live hue in all five themes (the user chose this over one fixed colour);
   `hud.chrome` is cached on `Theme.rev` plus the quantised hue. Label contrast is tested at all

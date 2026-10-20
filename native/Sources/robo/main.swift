@@ -1,7 +1,7 @@
 // `robo` opens the floating robo. `robo setup` prepares Hermes, `robo signin` opens robo's Brave for school
 // sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on this laptop,
-// `robo plan` packs study blocks into free time (JSON in, JSON out), `robo voice-eval` scores the voice
-// pipeline. Thin on purpose: every command lives in its own module (cli.py).
+// `robo plan` packs study blocks into free time (JSON in, JSON out), `robo calendar` keeps the calendar links
+// of the deadline nudges, `robo voice-eval` scores the voice pipeline. Thin on purpose: every command lives in its own module (cli.py).
 import Foundation
 import RoboCore
 import RoboSystem
@@ -10,11 +10,13 @@ import RoboVoice
 
 let usage = """
     usage: robo [-h] [--moodle URL] [--days DAYS] [--day DAY]
-                [{setup,signin,chat,activity,plan,voice-eval}]
+                [{setup,signin,chat,activity,plan,calendar,voice-eval}]
 
     `robo` opens the floating robo. `robo setup` prepares Hermes, `robo signin` opens robo's Brave
     for school sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on
-    this laptop, `robo plan` packs study blocks into free time (JSON in, JSON out).
+    this laptop, `robo plan` packs study blocks into free time (JSON in, JSON out), `robo calendar`
+    keeps your calendar links for the deadline nudges (`add URL [--label NAME]`, `list`, `remove LABEL`,
+    `check`; the links go into a private file and are never printed).
 
     options:
       -h, --help    show this help message and exit
@@ -40,6 +42,8 @@ case "setup":
     exit(runSetup(args))
 case "signin":
     exit(runSignin())
+case "calendar":
+    exit(await runCalendar(args))
 case "chat":
     exit(await chatMain())
 case "voice-eval":
@@ -49,6 +53,6 @@ case "-h", "--help":
     exit(0)
 default:
     Host.warn("\(usage)robo: error: argument command: invalid choice: '\(command!)' "
-              + "(choose from setup, signin, chat, activity, plan, voice-eval)")
+              + "(choose from setup, signin, chat, activity, plan, calendar, voice-eval)")
     exit(2)
 }

@@ -80,6 +80,10 @@ public struct Mind: Equatable, Sendable {
             let held = [.idle, .sleepy, .asleep, .error].contains(activity)
             m.emotion = e; m.emotionUntil = held ? now + Mind.emotionHold : .infinity
             m.after = nil
+        case .nudged(let e):  // `.feeling` for a pet that is awake: a sleeper wakes first, or the face would ignore the emotion
+            if activity == .sleepy || activity == .asleep { m.go(.idle, now) }
+            m.lastInput = now
+            m = m.react(.feeling(e), now: now)
         case .delta:
             m.go(.talking, now)
             m.label = ""; m.talking = true; m.lastDelta = now

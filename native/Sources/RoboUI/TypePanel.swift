@@ -8,6 +8,7 @@ final class TypePanel: NSPanel {
 
     let field = NSTextField()
     private let onSubmit: (String) -> Void
+    var onClose: (() -> Void)?  // however it closes: the window knows the Type window is gone
     private let focus: Focus
     private var previous: NSRunningApplication?  // who had the keyboard before this window took it
 
@@ -70,6 +71,7 @@ final class TypePanel: NSPanel {
         super.close()
         focus.handBack(to: previous)
         previous = nil
+        onClose?()
     }
 
     /// OK: close, and ask unless there is nothing but spaces.

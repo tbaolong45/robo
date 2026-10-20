@@ -6,7 +6,11 @@ import RoboVoice
 
 /// The dev switches, read once at start: ROBO_NO_VOICE=1 (no microphone), ROBO_NO_WATCH=1 (no activity
 /// watching and no ledger), ROBO_HERMES_URL (another gateway: robo's own Brave is then left alone, it is
-/// the live gateway's).
+/// the live gateway's). ROBO_WALL_OFFSET=<seconds, may be negative> is read by `Machine` and shifts its wall clock, so a demo can
+/// bring a deadline of the nudges near without waiting; it also shifts the "files made since" and the usage day, so it is for a
+/// test copy and never the live profile. ROBO_RADAR_NOW=1 (also read by `Machine`) lets the first run of the daily radar after launch
+/// ignore the once-a-day and the 07:00 rules, so a test copy can look at the digest at once; it reads and writes the vault's `Radar/`
+/// folder and downloads from the public sources, so use it with a throwaway HOME.
 public struct DevSwitches: Equatable {
     public var noVoice: Bool, noWatch: Bool, otherGateway: Bool
 

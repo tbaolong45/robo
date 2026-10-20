@@ -34,4 +34,7 @@ public enum Event: Equatable, Sendable {
     case listening(Bool)
     /// The user sent a message (typed, or the digest button / wake trigger).
     case userSent(String)
+    /// A nudge card is about to show (a deadline or an event is near): the feeling to show (as `.feeling`), and robo wakes up
+    /// if it was dozing, because the face ignores the emotion of a sleeper.
+    case nudged(String)
 }

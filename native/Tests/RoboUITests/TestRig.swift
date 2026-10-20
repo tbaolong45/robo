@@ -141,6 +141,69 @@ final class TestClock: @unchecked Sendable {
     func advance(_ by: Double) { lock.withLock { seconds += by } }
 }
 
+/// What the nudges read from the machine, behind a lock because the calendar fetch runs off the main thread: the wall clock (nil =
+/// the real one), the calendar feed the fake fetch hands back (nil = no link added) with the links that fail, and how often it ran.
+final class NudgeFakes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _wall: Double?, _ics: String?, _failures: [String] = [], _fetches = 0
+    var wall: Double? {
+        get { lock.withLock { _wall } }
+        set { lock.withLock { _wall = newValue } }
+    }
+    var ics: String? {
+        get { lock.withLock { _ics } }
+        set { lock.withLock { _ics = newValue } }
+    }
+    var failures: [String] {
+        get { lock.withLock { _failures } }
+        set { lock.withLock { _failures = newValue } }
+    }
+    var fetches: Int { lock.withLock { _fetches } }
+
+    func bodies() -> CalendarBodies {
+        lock.withLock {
+            _fetches += 1
+            return CalendarBodies(bodies: _ics.map { [Data($0.utf8)] } ?? [], failures: _failures, links: (_ics == nil ? 0 : 1) + _failures.count)
+        }
+    }
+}
+
+/// What the radar downloads, answered from a table: the body (or the error) of each URL, every URL asked, and how many requests were
+/// in flight at once (`delay` holds each answer so that they overlap). `offline` makes every request fail as a Mac without a network
+/// does. The feed hosts the radar allowed are in `hosts`. Nothing here touches the network.
+final class RadarFakes: RadarFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _answers: [String: Result<Data, RadarFetchError>] = [:]
+    private var _asked: [String] = [], _hosts: Set<String> = []
+    private var _flying = 0, _most = 0, _offline = false, _delay = Duration.zero, _watch = ""
+    var asked: [String] { lock.withLock { _asked } }
+    /// The most requests in flight at once; only those whose URL contains `watch` are counted ("" = all).
+    var most: Int { lock.withLock { _most } }
+    var watch: String { get { lock.withLock { _watch } } set { lock.withLock { _watch = newValue } } }
+    var hosts: Set<String> { get { lock.withLock { _hosts } } set { lock.withLock { _hosts = newValue } } }
+    var offline: Bool { get { lock.withLock { _offline } } set { lock.withLock { _offline = newValue } } }
+    var delay: Duration { get { lock.withLock { _delay } } set { lock.withLock { _delay = newValue } } }
+
+    func serve(_ url: String, _ body: String) { lock.withLock { _answers[url] = .success(Data(body.utf8)) } }
+    func fail(_ url: String, _ error: RadarFetchError) { lock.withLock { _answers[url] = .failure(error) } }
+    func forget() { lock.withLock { _asked = []; _most = 0 } }
+
+    func fetch(_ url: URL) async throws -> Data {
+        let (wait, answer, counted) = lock.withLock { () -> (Duration, Result<Data, RadarFetchError>, Bool) in
+            _asked.append(url.absoluteString)
+            let counted = _watch.isEmpty || url.absoluteString.contains(_watch)
+            if counted {
+                _flying += 1
+                _most = max(_most, _flying)
+            }
+            return (_delay, _offline ? .failure(.offline) : (_answers[url.absoluteString] ?? .failure(.http(404))), counted)
+        }
+        if wait > .zero { try? await Task.sleep(for: wait) }
+        if counted { lock.withLock { _flying -= 1 } }
+        return try answer.get()
+    }
+}
+
 /// What the card shows, read from its own views.
 extension CardView {
     var heardShown: String { quote.text.textView.string }
@@ -183,7 +246,18 @@ extension CardView {
     var held: [(Double?) -> Void] = []
     var screenAsks = 0
     var reduceMotion = false
+    var reduceReads = 0  // how often the window asked the machine about Reduce Motion
     var systemDark = true  // what the machine says about the system's mode
+    /// The nudges: their fakes (set `fake.wall` for a wall clock of your own; UTC is the zone), whether the user is away, the links
+    /// robo was asked to open (with the alert's answer), and where the three files and the ledger are. Nothing here touches the
+    /// real link file (`calendars.json`), the real data folder or a real alert.
+    let fake = NudgeFakes()
+    /// The radar (off unless `radar: true`, so no other test reads a vault or sees a nudge it did not ask for): what it downloads.
+    let radarFake = RadarFakes()
+    var away = false
+    var openedLinks: [URL] = [], linkAsks: [URL] = [], linkAnswer = true
+    var nudgeDir: URL { dir.appendingPathComponent("data") }
+    var study: URL { nudgeDir.appendingPathComponent("study.md") }
     /// The app that had the keyboard before robo took it, whether robo's app is active, who got it back.
     var frontmost: NSRunningApplication? = NSWorkspace.shared.runningApplications.first {
         $0.processIdentifier != getpid() && $0.activationPolicy == .regular
@@ -204,7 +278,7 @@ extension CardView {
     init(_ script: [FakeHermes.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
          listener: Bool = true, micOK: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
          today: @escaping () -> CalendarDay = { Rig.day }, network: @escaping () -> Bool = { true },
-         watchPaused: Bool = false, hotkey: Hotkey? = nil) {
+         watchPaused: Bool = false, hotkey: Hotkey? = nil, radar: Bool = false) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         hermes = FakeHermes(script, fail: fail)
         digest = DigestClock(path: dir.appendingPathComponent("state.json"))
@@ -220,6 +294,23 @@ extension CardView {
         m.receiptsFile = dir.appendingPathComponent("data/receipts.jsonl")  // never the real data folder
         m.usageFile = dir.appendingPathComponent("data/usage.jsonl")
         m.dailyTokens = 0  // whatever ROBO_DAILY_TOKENS the shell has
+        m.nudgeDir = nudgeDir  // never the real data folder, ledger or link file (`calendarBodies` below is the fake)
+        m.studyFile = study
+        m.zone = TimeZone(identifier: "UTC")!
+        m.wall = { [fake] in fake.wall ?? Date().timeIntervalSince1970 }
+        m.userAway = { [weak self] in self?.away ?? false }
+        m.calendarBodies = { [fake] in fake.bodies() }
+        m.radarOn = radar
+        m.radarNow = false  // whatever ROBO_RADAR_NOW the shell has
+        m.radarFetcher = { [radarFake] _, hosts in
+            radarFake.hosts = hosts
+            return radarFake
+        }
+        m.confirmLink = { [weak self] url, _ in
+            self?.linkAsks.append(url)
+            return self?.linkAnswer ?? false
+        }
+        m.openURL = { [weak self] in self?.openedLinks.append($0) }
         m.displays = { [weak self] in self?.displays ?? Rig.single }
         m.pointer = { [weak self] in self?.pointer ?? .zero }
         m.openFile = { [weak self] in self?.files.append($0) }
@@ -232,7 +323,10 @@ extension CardView {
             if holdLooks { held.append(done) } else { done(backdrop) }
         }
         m.askScreenAccess = { [weak self] in self?.screenAsks += 1 }
-        m.reduceMotion = { [weak self] in self?.reduceMotion ?? false }
+        m.reduceMotion = { [weak self] in
+            self?.reduceReads += 1
+            return self?.reduceMotion ?? false
+        }
         m.systemDark = { [weak self] in self?.systemDark ?? true }
         Chrome.ink = nil  // a card that knew its backdrop in an earlier test must not colour this one
         m.focus = Focus(frontmost: { [weak self] in self?.frontmost }, appIsActive: { [weak self] in self?.appActive ?? false },

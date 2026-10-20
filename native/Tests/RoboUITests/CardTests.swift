@@ -130,9 +130,9 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         #expect(card.subviews.first === card.glass)
         let others = card.subviews.dropFirst()
-        #expect(others.count == 8 && !others.contains { $0 === card.glass })
+        #expect(others.count == 9 && !others.contains { $0 === card.glass })
         let order = { (v: NSView) in card.subviews.firstIndex { $0 === v }! }
-        for column in [card.chips, card.quote, card.statusRow, card.reply, card.footer, card.approval, card.caret] as [NSView] {
+        for column in [card.chips, card.quote, card.statusRow, card.reply, card.footer, card.approval, card.nudge, card.caret] as [NSView] {
             #expect(order(card.header) > order(column) && order(column) > order(card.glass))
         }
     }
@@ -712,58 +712,62 @@ private extension MicroLabel {
 // MARK: the menu
 
 @Suite @MainActor struct CardMenuTests {
-    @Test func theMenuIsThreeByTwoAndWithoutAWatcherQuitTakesTheWholeSecondRow() {
+    @Test func theMenuIsThreeByTwoAndWithoutAWatcherNudgesAndQuitShareTheSecondRow() {
         func grid(_ card: CardView) -> [String: [Int]] {
             Dictionary(uniqueKeysWithValues: card.chips.cells.map { ($0.0.title.split(separator: " ").last.map(String.init)!, [$0.1, $0.2, $0.3]) })
         }
-        #expect(makeCard().chips.buttons.count == 5 && makeCard().chips.subviews.count == 5)  // digest, type, stay, watch, quit
-        #expect(grid(makeCard()) == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Quit": [1, 0, 6]])  // row, column, columns
+        #expect(makeCard().chips.buttons.count == 6 && makeCard().chips.subviews.count == 6)  // digest, type, stay, watch, nudges, quit
+        #expect(grid(makeCard()) == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Nudges": [1, 0, 3], "Quit": [1, 3, 3]])  // row, column, columns
         let watched = grid(makeCard(watch: true))
-        #expect(watched == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Watch": [1, 0, 3], "Quit": [1, 3, 3]])
+        #expect(watched == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Watch": [1, 0, 2], "Nudges": [1, 2, 2], "Quit": [1, 4, 2]])
     }
 
     @Test func theMenuChipsFillTheColumnInSixEqualColumns() {
         let card = makeCard(watch: true)
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        let rects = card.chips.buttons.map { $0.frame }  // digest, type, stay, watch, quit
-        #expect(rects.map(\.width) == [97, 96, 97, 148, 148] && rects.map(\.minY) == [0, 0, 0, 34, 34])  // six columns of 45 1/3 and a gap of 6, edges rounded
-        #expect(rects.map(\.height) == [28, 28, 28, 28, 28] && card.chips.height == 62 && card.chips.frame.height == 62)
+        let rects = card.chips.buttons.map { $0.frame }  // digest, type, stay, watch, nudges, quit
+        #expect(rects.map(\.width) == [97, 96, 97, 97, 96, 97] && rects.map(\.minY) == [0, 0, 0, 34, 34, 34])  // six columns of 45 1/3 and a gap of 6, edges rounded
+        #expect(rects.map(\.height) == [28, 28, 28, 28, 28, 28] && card.chips.height == 62 && card.chips.frame.height == 62)
         #expect(rects[0].minX == 0 && rects[2].maxX == 302 && rects[1].minX - rects[0].maxX == 6 && rects[2].minX - rects[1].maxX == 6)
-        #expect(rects[3].minX == 0 && rects[4].maxX == 302 && rects[4].minX - rects[3].maxX == 6)  // watch | quit, three columns each
+        #expect(rects[3].minX == 0 && rects[5].maxX == 302 && rects[4].minX - rects[3].maxX == 6 && rects[5].minX - rects[4].maxX == 6)  // watch | nudges | quit, two columns each
         let bare = makeCard()
         bare.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
-        #expect(bare.chips.watch.isHidden && bare.chips.quit.frame == NSRect(x: 0, y: 34, width: 302, height: 28))  // quit alone across all six
+        #expect(bare.chips.watch.isHidden)
+        #expect(bare.chips.nudges.frame == NSRect(x: 0, y: 34, width: 148, height: 28) && bare.chips.quit.frame == NSRect(x: 154, y: 34, width: 148, height: 28))  // nudges | quit, three columns each
     }
 
     @Test(arguments: [true, false]) func theMenuButtonsStayInsideTheColumnAndNeverOverlap(_ watch: Bool) {
         let card = makeCard(watch: watch)
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
         let shown = card.chips.buttons.filter { !$0.isHidden }
-        #expect(shown.count == (watch ? 5 : 4))
+        #expect(shown.count == (watch ? 6 : 5))
         let column = NSRect(x: 0, y: 0, width: 302, height: 62)
         for (i, a) in shown.enumerated() {
             #expect(column.contains(a.frame), "\(a.title)")
             for b in shown[(i + 1)...] { #expect(!a.frame.intersects(b.frame), "\(a.title) over \(b.title)") }
         }
-        #expect(card.chips.frame.width == 302 && card.chips.subviews.count == 5)
+        #expect(card.chips.frame.width == 302 && card.chips.subviews.count == 6)
     }
 
     @Test func aMenuEntryHidesTheMenuBeforeItIsReported() {
         let card = makeCard(watch: true)
         var got: [(MenuAction, Bool)] = []
         card.onMenu = { got.append(($0, card.chips.isHidden)) }
-        card.showMenu(stay: "🧭 Wander", watch: "▶ Watch")
-        #expect(card.chips.stay.title == "🧭 Wander" && card.chips.watch.title == "▶ Watch")
+        card.showMenu(stay: "🧭 Wander", watch: "▶ Watch", nudges: "🔕 Nudges")
+        #expect(card.chips.stay.title == "🧭 Wander" && card.chips.watch.title == "▶ Watch" && card.chips.nudges.title == "🔕 Nudges")
         card.chips.stay.onClick?()
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
+        #expect(card.chips.nudges.title == "🔔 Nudges")  // the default: on
         card.chips.digest.onClick?()
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
         card.chips.type.onClick?()
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
         card.chips.watch.onClick?()
         card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
+        card.chips.nudges.onClick?()
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")
         card.chips.quit.onClick?()
-        #expect(got.map(\.0) == [.stay, .digest, .type, .watch, .quit] && got.allSatisfy(\.1))
+        #expect(got.map(\.0) == [.stay, .digest, .type, .watch, .nudges, .quit] && got.allSatisfy(\.1))
     }
 
     @Test func buttonsAreButtonsForAccessibilityAndClickWhenReleasedInside() {
@@ -886,6 +890,78 @@ private extension MicroLabel {
         footer.frame = NSRect(x: 0, y: 0, width: 302, height: footer.height(for: 302))
         let f = Bitmap(snap(footer))
         #expect(f.alpha(150, 0) > 0 && f.alpha(150, 2) == 0)  // the hairline above the text
+    }
+}
+
+// MARK: the nudge
+
+@Suite @MainActor struct CardNudgeTests {
+    private func one(url: String? = "https://moodle.example.edu/mod/assign/view.php?id=7") -> NudgeText {
+        NudgeText([NudgeCandidate(id: "a", category: .deadline, title: "MATH201 midterm", detail: "tomorrow 09:00", url: url)])
+    }
+
+    @Test func aNudgeShowsLabelTitleWhyAndDomainAndReportsTheThreeButtons() {
+        let card = makeCard()
+        var got: [NudgeBudget.Outcome] = []
+        card.onNudge = { got.append($0) }
+        card.setNudge(one())
+        #expect(!card.nudge.isHidden && card.nudge.label.text == "HEADS-UP ▸")
+        #expect(card.nudge.well.text == "MATH201 midterm\ntomorrow 09:00\n↗ moodle.example.edu")
+        #expect(!card.nudge.open.isHidden)
+        card.nudge.open.onClick?(); card.nudge.later.onClick?(); card.nudge.notForMe.onClick?()
+        #expect(got == [.opened, .later, .notForMe])
+        card.setNudge(nil)
+        #expect(card.nudge.isHidden && card.fittingHeight == 61)
+    }
+
+    @Test func openIsOnlyThereWhenThereIsAnHttpsLinkAndTheOtherButtonsShareTheRow() {
+        let card = makeCard()
+        card.setNudge(one(url: nil))
+        #expect(card.nudge.open.isHidden && card.nudge.well.text == "MATH201 midterm\ntomorrow 09:00")  // no link, no domain line
+        fitted(card)
+        #expect(card.nudge.later.frame.width == 147 && card.nudge.notForMe.frame == NSRect(x: 155, y: card.nudge.later.frame.minY, width: 147, height: 28))
+        card.setNudge(one(url: "http://moodle.example.edu/x"))  // plain http is no link robo opens
+        #expect(card.nudge.open.isHidden)
+        card.setNudge(one())
+        fitted(card)
+        let row = [card.nudge.open, card.nudge.later, card.nudge.notForMe].map(\.frame)
+        #expect(row.map(\.width) == [95, 96, 95] && row[0].minX == 0 && row[2].maxX == 302 && row[1].minX - row[0].maxX == 8 && row[2].minX - row[1].maxX == 8)
+    }
+
+    @Test func theNudgeGrowsWithItsTextAndJoinsTheColumnLikeTheApproval() {
+        let card = makeCard()
+        card.setNudge(one())
+        let short = card.fittingHeight, n = card.nudge
+        #expect(short == 42 + n.height(for: 302) + 19 && n.height(for: 302) == 12 + 6 + n.well.height(for: 302) + 6 + 28)
+        card.setNudge(NudgeText((0..<5).map { NudgeCandidate(id: "\($0)", category: .deadline, title: String(repeating: "word ", count: 12), detail: "tomorrow 09:00") }))
+        #expect(card.fittingHeight > short + 30)
+        fitted(card)
+        #expect(n.frame == NSRect(x: 19, y: 42, width: 302, height: n.height(for: 302)) && n.later.frame.maxY == n.frame.height)
+        card.showMenu(stay: "📌 Stay", watch: "⏸ Watch")  // the menu sits above it, the column's 8 between
+        #expect(card.fittingHeight == 42 + card.chips.height + 8 + n.height(for: 302) + 19)
+    }
+
+    @Test func severalThingsMakeOneCardWithACountAndAtMostThreeLines() {
+        func c(_ i: Int, _ category: NudgeCategory = .deadline) -> NudgeCandidate {
+            NudgeCandidate(id: "\(i)", category: category, title: "Thing \(i)", detail: "tomorrow 09:00", url: "https://a.example/\(i)")
+        }
+        let deadlines = NudgeText([c(1), c(2), c(3)])
+        #expect(deadlines.title == "3 things due soon" && deadlines.lines == ["Thing 1 · tomorrow 09:00", "Thing 2 · tomorrow 09:00", "Thing 3 · tomorrow 09:00"])
+        #expect(deadlines.domain == nil && !deadlines.canOpen)  // which link would Open take?
+        let mixed = NudgeText([c(1), c(2, .event), c(3), c(4), c(5)])
+        #expect(mixed.title == "5 things coming up" && mixed.lines.count == 4 && mixed.lines.last == "+ 2 more")
+        #expect(NudgeText([NudgeCandidate(id: "x", category: .opportunity, title: "Programme", detail: "")]).label == "WORTH A LOOK ▸")
+    }
+
+    @Test func theNudgePaintsItsWellAndButtonsOnTheGlass() {
+        let nudge = NudgeView()
+        nudge.well.text = "MATH201 midterm\ntomorrow 09:00"
+        nudge.frame = NSRect(x: 0, y: 0, width: 302, height: nudge.height(for: 302))
+        nudge.place()
+        let img = Bitmap(snap(nudge))
+        #expect(img.alpha(0.5, nudge.well.frame.midY) > 200)  // the well's bar, as in the approval
+        let open = nudge.open.frame
+        #expect(img.alpha(open.midX, open.minY + 3) > 0)  // the accent capsule
     }
 }
 

@@ -11,6 +11,7 @@ extension RoboWindow {
 
     /// Start one run; while another is in flight, stop it and ask this one after it.
     func ask(_ text: String, waitNetwork: Bool = false) {
+        dismissNudge()  // a request of any kind takes the card: the nudge is closed unanswered
         if busy {
             pending = text
             stop()
@@ -168,6 +169,7 @@ extension RoboWindow {
     /// Show a short local message (no model involved), typed like an answer. During a run it is not the end
     /// of the reply: Hermes goes on and `runEnded` finishes it.
     func say(_ text: String) {
+        dismissNudge()
         setHeard("")
         clearReply()
         feed(text, end: !busy)
@@ -181,6 +183,7 @@ extension RoboWindow {
         switch ev {
         case .listening(true):
             stop()  // speaking over robo interrupts its answer
+            dismissNudge()
             noted = false
             setHeard("")
             clearReply()
@@ -270,6 +273,7 @@ extension RoboWindow {
             }
         }
         alive(now)
+        if machine.wall() >= nudge.checkAt { nudgeTick() }  // wall time: the Mac's sleep does not stop a deadline
         if !card.isHidden && now >= sampleAt { look() }  // nothing runs while the card is away
         refresh()
     }
@@ -433,15 +437,16 @@ extension RoboWindow {
 
     // MARK: - the card's life
 
-    /// Show the card; it closes `closeAfter` s after the reply is typed (0: stays).
-    func open(closeAfter after: Double = 0) {
+    /// Show the card; it closes `closeAfter` s after the reply is typed (0: stays). `askScreen` false: a card nobody asked for (a
+    /// nudge) never raises the system's Screen Recording dialog; the next card the user asks for does.
+    func open(closeAfter after: Double = 0, askScreen: Bool = true) {
         closeAfter = after
         let armed = after != 0 && !tw.pending  // while it types, finishedTyping arms the timer
         closeAt = armed ? now() + after : 0
         if card.isHidden {
             fit { card.isHidden = false }
             fadeIn()
-            if !askedScreen {
+            if askScreen && !askedScreen {
                 askedScreen = true
                 machine.askScreenAccess()  // the system's dialog, once per launch; the card and its typing do not wait for it
             }
@@ -452,7 +457,7 @@ extension RoboWindow {
     /// The card appears with a short fade (closing stays instant: the window shrinks around the face at once).
     /// The model value is 1 straight away, only what is on screen eases in; Reduce Motion skips it.
     private func fadeIn() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard !machine.reduceMotion() else { return }
         card.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
@@ -465,6 +470,7 @@ extension RoboWindow {
         stopShading()
         endFollowUp()
         fit {
+            dismissNudge()  // a nudge that is still up when the card goes was not answered
             card.hideMenu()
             card.isHidden = true
         }

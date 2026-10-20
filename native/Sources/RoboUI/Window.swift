@@ -76,6 +76,10 @@ final class RoboWindow {
     var cursor = Vec.zero, cursorMoved = -Double.infinity  // the pointer, and when it last moved
     var fidgetAt: Double
 
+    var nudge = NudgeModel()  // the agenda, the budget and the card that shows now (Nudges.swift)
+    var radar = RadarModel()  // the daily radar: when it last ran, what it already showed, what it offers (Radar.swift)
+    var typerOpen = false  // the Type window is up (a nudge does not break in on it)
+
     var ear: Ear?
     var poller: Polling?
     var wakeWatcher: WakeWatcher?
@@ -134,6 +138,7 @@ final class RoboWindow {
         card.onReplyClick = { [unowned self] in self.skip() }
         card.onMenu = { [unowned self] action in self.menu(action) }
         card.onApprove = { [unowned self] choice in self.approve(ApprovalChoice(rawValue: choice) ?? .deny) }
+        card.onNudge = { [unowned self] outcome in self.nudgeAnswered(outcome) }
         face.setTheme(hue: hueFunction(theme), bg: screenColours(theme), snap: true)
         face.onMouse = { [unowned self] kind in self.faceMouse(kind) }
         layoutWindow(keeping: nil)  // just the face; the card is hidden and takes no room
@@ -144,7 +149,7 @@ final class RoboWindow {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.screensChanged() }
         if watchWake {
-            wakeWatcher = WakeWatcher { [weak self] in DispatchQueue.main.async { self?.maybeDigest() } }
+            wakeWatcher = WakeWatcher { [weak self] in DispatchQueue.main.async { self?.maybeDigest(); self?.nudgeWoke() } }
             wakeWatcher?.start()
         }
         if let watcher {
@@ -163,7 +168,10 @@ final class RoboWindow {
             poller = make(health) { [bridge] in bridge.link($0) }
             poller?.start()
         }
-        DispatchQueue.main.async { [weak self] in self?.maybeDigest() }
+        DispatchQueue.main.async { [weak self] in
+            self?.maybeDigest()
+            self?.startNudges()
+        }
     }
 
     deinit {
@@ -225,9 +233,10 @@ final class RoboWindow {
 
     func roam() {
         // it walks to a corner and stays; the right-click menu opens the card too, but it must not leave
-        // before the user can press Stay
-        let called = busy || (!card.isHidden && card.chips.isHidden)
-        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil, called: called)
+        // before the user can press Stay. A nudge is not a call either, but it freezes the pet like a press: the card is attached
+        // to it, and buttons that drift at 40 px/s are hard to hit (seen live: 1200 px in a minute)
+        let called = busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty)
+        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil || !nudge.shown.isEmpty, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
         scheduleRoam()
@@ -322,7 +331,8 @@ final class RoboWindow {
         }
         let now = now()
         card.showMenu(stay: roamer.stays(now: now) ? "🧭 Wander" : "📌 Stay",
-                      watch: watcher?.paused == true ? "▶ Watch" : "⏸ Watch")
+                      watch: watcher?.paused == true ? "▶ Watch" : "⏸ Watch",
+                      nudges: nudge.state.enabled ? "🔔 Nudges" : "🔕 Nudges")
         open(closeAfter: 8)
     }
 
@@ -332,6 +342,7 @@ final class RoboWindow {
         case .type: typeText()
         case .stay: toggleStay()
         case .watch: toggleWatch()
+        case .nudges: toggleNudges()
         case .quit: quit()
         }
     }
@@ -384,9 +395,11 @@ final class RoboWindow {
     func typeText() {
         typer?.close()
         let t = TypePanel { [weak self] in self?.ask($0) }
+        t.onClose = { [weak self, weak t] in if self?.typer === t { self?.typerOpen = false } }
         let displays = machine.displays()
         if let d = space.display(at: faceCentre, in: displays) { t.place(on: d.visible) }
         typer = t
+        typerOpen = true
         machine.showTyper(t)
     }
 

@@ -15,7 +15,7 @@ let package = Package(
         .target(name: "RoboVoice", dependencies: [
             .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
         ]),
-        .target(name: "RoboSystem"),  // activity, wake, setup, vault
+        .target(name: "RoboSystem", dependencies: ["RoboCore"]),  // activity, wake, setup, vault, calendar links, nudge files
         .target(name: "RoboUI", dependencies: ["RoboCore", "RoboVoice", "RoboSystem"]),  // AppKit: window, face, card
         .executableTarget(name: "robo", dependencies: ["RoboUI"]),  // thin: dispatches the subcommands
         .testTarget(name: "RoboCoreTests", dependencies: ["RoboCore"]),

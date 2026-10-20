@@ -119,6 +119,26 @@ struct MindTests {
         #expect(runMind(.userSent("x"), .feeling("ecstatic")).m.emotion == "neutral")
     }
 
+    @Test func nudgedFeelsLikeAFeelingAndWakesASleeper() {
+        let asleep = Mind(now: 0).tick(now: Mind.asleepAfter)
+        #expect(asleep.activity == .asleep)
+        let m = asleep.react(.nudged("concerned"), now: 2000)
+        #expect(m.activity == .idle && m.emotion == "concerned" && m.lastInput == 2000)  // awake: the face shows the emotion
+        #expect(m.emotionUntil == 2000 + Mind.emotionHold)
+        #expect(m.tick(now: 2000 + Mind.emotionHold).emotion == "neutral")
+        #expect(m.tick(now: 2000 + Mind.sleepyAfter - 1).activity == .idle)  // and the sleep clock starts again from the nudge
+        #expect(m.tick(now: 2000 + Mind.sleepyAfter).activity == .sleepy)
+    }
+
+    @Test func nudgedIsLikeAFeelingToAnythingElse() {
+        let busy = runMind(.userSent("x")).m  // a nudge never comes during a run, but if it did it would not end it
+        let n = busy.react(.nudged("curious"), now: 5)
+        #expect(n.activity == .thinking && n.emotion == "curious" && n.emotionUntil == .infinity)
+        #expect(runMind(.nudged("ecstatic")).m.emotion == "neutral")  // outside the vocabulary: ignored, like a feeling
+        let dozing = Mind(now: 0).tick(now: Mind.sleepyAfter)
+        #expect(dozing.react(.nudged("curious"), now: 400).activity == .idle)
+    }
+
     @Test func deltaTalksThenMouthClosesAfterPause() {
         var (m, t) = runMind(.userSent("x"), .delta("hel"))
         #expect(m.activity == .talking && m.talking && m.lastDelta == t)
