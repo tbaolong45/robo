@@ -57,7 +57,10 @@ struct NudgeText: Equatable {
         } else {
             // Several at once make one card: a count, then the first three, each as "what · when".
             title = "\(batch.count) things " + (batch.contains { $0.category == .event } ? "coming up" : "due soon")
-            lines = batch.prefix(3).map { $0.detail.isEmpty ? $0.title : "\($0.title) · \($0.detail)" }
+            lines = batch.prefix(3).map { c in
+                let first = c.detail.split(separator: "\n").first.map(String.init) ?? ""  // an LMS item's quote stays out of the list
+                return first.isEmpty ? c.title : "\(c.title) · \(first)"
+            }
                 + (batch.count > 3 ? ["+ \(batch.count - 3) more"] : [])
             domain = nil
             canOpen = false  // which of them would Open open?
@@ -91,7 +94,9 @@ enum Nudges {
         }
         var title = String(item.title.prefix(120))
         if let course = item.course, !title.localizedCaseInsensitiveContains(course) { title = "\(course) · \(title)" }
-        let detail = r.rung == .newEvent ? (item.changed ? "moved · " : "new in your calendar · ") + when : when
+        var detail = r.rung == .newEvent ? (item.changed ? "moved · " : "new in your calendar · ") + when : when
+        // A date an AI read out of a post can be wrong: the card says so and shows the words it was read from.
+        if item.source == .lms, let quote = item.quote { detail = "\(when)\n“\(quote)”\nfrom a post: check the date" }
         return NudgeCandidate(id: r.key, category: category, urgent: r.urgent, title: title, detail: detail, url: item.url, dueAt: item.when)
     }
 
@@ -153,6 +158,7 @@ extension RoboWindow {
         nudge.fired = files.loadFired(now: now)
         nudge.started = true
         loadRadar(files, now)
+        loadScout(files)
         syncLedger(now)
         refreshAgenda()
     }
@@ -227,6 +233,7 @@ extension RoboWindow {
         if wall >= nudge.refreshAt { refreshAgenda() }
         syncLedger(now)
         radarTick(now, wall: wall)  // the daily radar (Radar.swift): starts its run when due; what it offers joins the candidates below
+        scoutTick(now, wall: wall)  // the LMS posts scan (Scout.swift): what it finds joins the agenda, so the reminders below see it
         let due = Reminders.due(items: nudge.agenda, fired: Set(nudge.fired.keys.keys), now: now, zone: zone)
         let offers = radarCandidates(now)
         guard !due.isEmpty || !offers.isEmpty else { return }

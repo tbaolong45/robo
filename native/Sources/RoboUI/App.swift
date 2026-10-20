@@ -12,6 +12,7 @@ extension RoboWindow {
     /// Start one run; while another is in flight, stop it and ask this one after it.
     func ask(_ text: String, waitNetwork: Bool = false) {
         dismissNudge()  // a request of any kind takes the card: the nudge is closed unanswered
+        scout.running?.cancel()  // the user comes first: an LMS scan in the background gives way (Scout.swift)
         if busy {
             pending = text
             stop()

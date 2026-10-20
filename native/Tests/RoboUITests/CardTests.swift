@@ -900,6 +900,23 @@ private extension MicroLabel {
         NudgeText([NudgeCandidate(id: "a", category: .deadline, title: "MATH201 midterm", detail: "tomorrow 09:00", url: url)])
     }
 
+    /// Found live (2026-10-20): a deadline read from a post had a quote that fit one line when measured and wrapped when drawn (the
+    /// well draws with `.kern: 0`, which turns pair kerning off), so the well was a line short and the domain line was cut off.
+    @Test func aWellMeasuresTextTheWayItIsDrawn() {
+        _ = NSApplication.shared
+        let font = Chrome.ui(12), quote = "“Hand in the demo problem set within two hours.”"
+        let drawn = Chrome.advance(quote, font)  // with kern 0, as the well draws it
+        let kerned = NSAttributedString(string: quote, attributes: [.font: font]).size().width
+        #expect(kerned < drawn - 0.5, "this text no longer separates the two ways of measuring: pick another")
+        let well = WrapLabelView(.well)
+        let inset = 10 + (Chrome.advance("x", font) / 2).rounded(.down) + 8  // the well's left and right insets
+        well.text = "x"
+        let line = well.height(for: 1000) - 12  // one line, plus 6 above and 6 below
+        well.text = quote
+        #expect(well.height(for: drawn - 0.5 + inset) == 12 + 2 * line)  // one point too narrow for how it is drawn: two lines
+        #expect(well.height(for: drawn + 1 + inset) == 12 + line)  // and room enough: one
+    }
+
     @Test func aNudgeShowsLabelTitleWhyAndDomainAndReportsTheThreeButtons() {
         let card = makeCard()
         var got: [NudgeBudget.Outcome] = []

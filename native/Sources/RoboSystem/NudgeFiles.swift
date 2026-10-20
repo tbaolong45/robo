@@ -1,7 +1,7 @@
 // The files of the nudges, in robo's data folder (`~/.local/share/robo`, 0700): `agenda.json` (what is coming up, from
 // `Agenda.encode`), `nudges.json` (the budget: what was shown today, snoozes, mutes, on/off; `NudgeState`), `reminders.json`
-// (which reminders were already shown) and `radar.json` (the daily radar: the day of its last run, what it already showed, what it
-// offers). They live here and not in `robo_state.json`, which is shared with the Python build
+// (which reminders were already shown), `radar.json` (the daily radar: the day of its last run, what it already showed, what it
+// offers) and `lms.json` (the LMS scan: its courses and the day each was last scanned). They live here and not in `robo_state.json`, which is shared with the Python build
 // and has one key. Every write is atomic (a temp file in the folder, 0600, renamed over the old one), so a crash or a power cut
 // leaves the old file or the new one, never half; a file that is missing or unreadable reads as empty.
 import Foundation
@@ -48,6 +48,24 @@ public struct RadarState: Codable, Equatable, Sendable {
     }
 }
 
+/// `lms.json`: the courses the LMS scan knows (names and course page addresses, from the agent's `list` run), the day that list was
+/// read, and for each course (by address) the day of its last good scan. What the scans found lives in `agenda.json`.
+public struct LMSState: Codable, Equatable, Sendable {
+    public var courses: [LMSPosts.Course] = []
+    public var coursesDay = ""
+    public var scanned: [String: String] = [:]
+    public init() {}
+
+    private enum CodingKeys: String, CodingKey { case courses, coursesDay, scanned }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        courses = try c.decodeIfPresent([LMSPosts.Course].self, forKey: .courses) ?? []
+        coursesDay = try c.decodeIfPresent(String.self, forKey: .coursesDay) ?? ""
+        scanned = try c.decodeIfPresent([String: String].self, forKey: .scanned) ?? [:]
+    }
+}
+
 public struct NudgeFiles {
     private static let log = Logger(subsystem: "ai.robo", category: "nudges")
     /// A fired reminder is forgotten after this long (its item is long past by then).
@@ -60,6 +78,7 @@ public struct NudgeFiles {
     public var nudgesFile: URL { dir.appendingPathComponent("nudges.json") }
     public var remindersFile: URL { dir.appendingPathComponent("reminders.json") }
     public var radarFile: URL { dir.appendingPathComponent("radar.json") }
+    public var lmsFile: URL { dir.appendingPathComponent("lms.json") }
 
     public init(dir: URL) { self.dir = dir }
 
@@ -103,9 +122,18 @@ public struct NudgeFiles {
         return radar
     }
 
+    public func loadLMS() -> LMSState { (try? Data(contentsOf: lmsFile)).flatMap { try? JSONDecoder().decode(LMSState.self, from: $0) } ?? LMSState() }
+
     // MARK: write
 
     @discardableResult public func save(_ items: [AgendaItem]) -> Bool { write(Agenda.encode(items), to: agendaFile) }
+
+    @discardableResult public func save(_ lms: LMSState) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(lms) else { return false }
+        return write(data, to: lmsFile)
+    }
 
     @discardableResult public func save(_ state: NudgeState) -> Bool { write(NudgeBudget.encode(state), to: nudgesFile) }
 

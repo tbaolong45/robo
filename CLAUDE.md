@@ -171,14 +171,39 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
 - **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
   `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;
   SOUL.md "Learning first" (hints before answers, graded work is never done for the student).
-- **LMS posts scan (planned, 2026-10-20; the skill exists, the Swift `Scout` and `robo setup` do not yet)**: deadlines live in Moodle
-  posts, not the calendar. `hermes/skills/school/school-posts` has two modes picked by the request's first line: `MODE: list` (courses
-  as a JSON array) and `MODE: scan` + `COURSE` / `SINCE` / `TODAY` (one fenced JSON array of `{course, post_url, posted, title, due, kind,
-  quote}`; `due` is `YYYY-MM-DDTHH:MM` or `null`, a date with no stated time is `null` too). One run per course (planned) keeps each run short
-  and lets a failed course be retried alone and the first scan resume. The app must decode strictly (https on the Moodle host
-  only, caps, sane dates) and show the quote, because the model can misread a date. The guarantees are the skill's Pitfalls (never open
-  quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the unattended asks being
-  denied; each is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
+- **LMS posts scan (Swift only, built 2026-10-20; NOT run live: the skill is not installed in the live profile until `robo setup`)**:
+  deadlines live in Moodle posts, not the calendar. `hermes/skills/school/school-posts` has two modes picked by the request's first line:
+  `MODE: list` (courses as a JSON array) and `MODE: scan` + `COURSE` / `SINCE` (a day) / `TODAY` (one fenced JSON array of `{course,
+  post_url, posted, title, due, kind, quote}`; `due` is `YYYY-MM-DDTHH:MM`, `YYYY-MM-DD` (read as 23:59 that day) or `null` (dropped: no
+  place in an agenda); `kind` deadline/exam/event). Pure half `RoboCore/LMSPosts.swift` (prompts, the strict decoder, `next` = the day's
+  plan), `RoboSystem`: `LMSState` / `lms.json` in `NudgeFiles` and `Setup.postsMoodle` (the Moodle address from the profile's `.env`, only
+  when `skills/school/school-posts/SKILL.md` is installed: until then the scan is OFF and silent), window half `RoboUI/Scout.swift`.
+  **Daily, no backfill (the user's choice)**: from the first tick after 07:00 local, one step at a time: the course list (again after 7
+  days), then one run per course since its last good scan (a never-scanned course reads back `firstLookbackDays` = 1). Each run has its
+  own session `robo-posts-<id>` (post text of one course must not reach the next run's context), every `approval.request` is denied by
+  id, 20 min at most, never touches the card; a request of the user cancels it (`ask()`), and none starts while the user's own run is in
+  flight; a failed step is retried after 30 min, 3 times a day; `ROBO_DAILY_TOKENS` applies; runs are logged to `usage.jsonl`. **The
+  decoder believes nothing**: exactly one fenced block that is a list; a course address must be `https://<host>/course/view.php?id=N` and
+  nothing else (the agent is never sent to a quiz page), a post link must be `/mod/forum/` or `/course/` on the host (Open puts it in
+  the user's browser); dates must exist, `posted` not after today nor over 400 days old, `due` not before the posted day nor over 2
+  years after; text is one clean line (control and bidi characters removed); a quote is required; same course + title = one item, the later
+  post wins; caps 60 items / 40 courses; dropped objects are counted in the log. Items are `AgendaItem(source: .lms, id lms:<course>:<title>)`
+  merged with the earlier ones (a scan reports only new posts), then the ordinary reminders (T-1 d, T-3 h) and `NudgeBudget` apply; the
+  card says "from a post: check the date" with the quote. Not done: a "new deadline posted" heads-up (an LMS item nudges only on the
+  ladder), a consent card (not needed without a backfill; installing the skill is the opt-in). **Verified** (fakes, temp dirs, 2026-10-20):
+  the decoder against hostile and malformed replies, the plan, the window flow (gates, session per run, denied asks, user cancel, limit,
+  failures and retries, merge, cap, list refresh), the state file. **Verified live (release test copy)**: with a throwaway `HOME` (dummy
+  `.hermes/profiles/robo/.env` with `MOODLE_BASE_URL`, a stub `skills/school/school-posts/SKILL.md`) and a loopback script imitating the
+  Hermes run API (`POST /v1/runs`, SSE `/events`, `/approval`, `/stop`; `ROBO_HERMES_URL` points the app at it): list, then the scan in
+  its own session, the ask answered `deny` by its `request_id`, the quiz-page and off-host links dropped ("1 dated items, 2 dropped"), the
+  quote card, `lms.json` / `agenda.json` 0600, the usage line. **Found there by looking at the picture**: `WrapLabelView.height` measured
+  without the `.kern: 0` that `draw` uses, so a line that just fit wrapped when drawn and the last line (the domain) was cut off (the
+  approval view had the same latent flaw); now measured with the draw attributes (`aWellMeasuresTextTheWayItIsDrawn`). A test of
+  `well.text` cannot see this: capture the window. **Not verified**: a real reply from the agent (does it load the skill
+  from a `MODE:` prompt that ends "Use the school-posts skill."? are real Moodle posts and links in the shape the decoder accepts?), the
+  cost per day, unattended 20-minute runs, `robo setup` installing the skill. The guarantees on the agent side are the skill's Pitfalls
+  (never open quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the denied asks; each
+  skill rule is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
 - **Nudges (Swift only, 2026-10-20; the Python tree has none)**: robo shows what is coming up on its card. Pure parts in RoboCore
   (`ICS`, `Agenda`, `Reminders`, `NudgeBudget`), `RoboSystem/CalendarLinks.swift` + `NudgeFiles.swift`, the window's side in
   `RoboUI/Nudges.swift`, `NudgeView` in `Card.swift`. Sources: calendar links (Outlook "publish", Moodle export) fetched off the main
@@ -284,6 +309,9 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
   (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
   `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
+  `~/Documents/Robo/Brain/` is the user's second brain (built 2026-10-20 at their request around the one course PDF already there, which a
+  live Hermes test had moved in on 2026-10-19: `Home.md`, `Courses/`, `Reading/`, `Projects/`, `Career/`, `Inbox/`, `Templates/`); robo
+  writes nothing there, and `robo-notes` does not file into it. The vault's Templates plugin is on but its folder setting is the user's to point at `Brain/Templates`.
 - **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse
   pressed: freeze) > Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) >
   `called` (request or card up: walks to the nearest corner of its screen at `CALL_SPEED` = 240 px/s,

@@ -544,7 +544,9 @@ final class WrapLabelView: NSView {
     /// The height the text needs at `width` (QLabel's height for width).
     func height(for width: CGFloat) -> CGFloat {
         let i = inset
-        let box = NSAttributedString(string: text, attributes: [.font: font]).boundingRect(
+        // The attributes of `draw` (its `.kern: 0` turns pair kerning off): measured without them a line that just fits wraps when
+        // drawn, and the last line falls out of the well.
+        let box = NSAttributedString(string: text, attributes: Chrome.attrs(font, ink)).boundingRect(
             with: NSSize(width: width - i.left - i.right, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin])
         return i.top + i.bottom + ceil(box.height)
     }

@@ -75,6 +75,9 @@ struct Machine {
     var radarOn = true
     var radarNow = false
     var radarFetcher: @Sendable (_ cacheDir: URL, _ extraHosts: Set<String>) -> RadarFetching = { RadarFetcher(cacheDir: $0, extraHosts: $1) }
+    /// The LMS posts scan (Scout.swift): the Moodle address when the scan may run (the profile has one AND `robo setup` installed the
+    /// school-posts skill), else nil. The real one reads the Hermes profile (read only); the rig answers nil, so no test reads it.
+    var postsMoodle: () -> String? = { nil }
     var confirmLink: (URL, String) -> Bool = BoxTextView.askToOpen  // the same alert as a link in a reply
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     static let awayS = 300.0
@@ -111,6 +114,8 @@ struct Machine {
         // can be looked at at night.
         if environment["ROBO_NUDGE_PRESENT"] == "1" { userAway = { false } }
         radarNow = environment["ROBO_RADAR_NOW"] == "1"
+        let profile = HermesProfile(home: home, env: environment)
+        postsMoodle = { Setup.postsMoodle(profile) }
         outputDir = home.appendingPathComponent("Robo")
         vaultDir = Vault.dir(home: home)
         themeFile = Themes.configPath()

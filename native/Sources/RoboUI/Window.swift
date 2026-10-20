@@ -78,6 +78,7 @@ final class RoboWindow {
 
     var nudge = NudgeModel()  // the agenda, the budget and the card that shows now (Nudges.swift)
     var radar = RadarModel()  // the daily radar: when it last ran, what it already showed, what it offers (Radar.swift)
+    var scout = ScoutModel()  // the LMS posts scan: its courses, the run in flight, its failures today (Scout.swift)
     var typerOpen = false  // the Type window is up (a nudge does not break in on it)
 
     var ear: Ear?
@@ -450,6 +451,7 @@ final class RoboWindow {
         shutdownWaiters.append(done)
         if shutdownStarted { return }
         shutdownStarted = true
+        scout.running?.cancel()  // best effort: the scan only reads, so a run that outlives the app is harmless
         panel.orderOut(nil)
         typer?.close()
         for t in [ticker, roamTimer, revealer, shadeTimer] { t?.invalidate() }

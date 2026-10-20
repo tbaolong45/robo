@@ -255,6 +255,9 @@ extension CardView {
     /// The radar (off unless `radar: true`, so no other test reads a vault or sees a nudge it did not ask for): what it downloads.
     let radarFake = RadarFakes()
     var away = false
+    /// The Moodle address the LMS posts scan may use: nil (the default) is "the profile has none or the skill is not installed", so no
+    /// test reads the real Hermes profile and no other test meets a scan.
+    var moodle: String?
     var openedLinks: [URL] = [], linkAsks: [URL] = [], linkAnswer = true
     var nudgeDir: URL { dir.appendingPathComponent("data") }
     var study: URL { nudgeDir.appendingPathComponent("study.md") }
@@ -302,6 +305,7 @@ extension CardView {
         m.calendarBodies = { [fake] in fake.bodies() }
         m.radarOn = radar
         m.radarNow = false  // whatever ROBO_RADAR_NOW the shell has
+        m.postsMoodle = { [weak self] in self?.moodle }  // never the real Hermes profile
         m.radarFetcher = { [radarFake] _, hosts in
             radarFake.hosts = hosts
             return radarFake

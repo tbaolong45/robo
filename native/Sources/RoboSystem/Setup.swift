@@ -366,6 +366,14 @@ public enum Setup {
         return try moodleURL(lms)
     }
 
+    /// The Moodle address for the LMS posts scan, or nil: the profile has none, or the `school-posts` skill is not installed in it
+    /// (`robo setup` installs it). The scan stays off until both are there. Reads only.
+    public static func postsMoodle(_ p: HermesProfile) -> String? {
+        let skill = p.dir.appendingPathComponent("skills/school/school-posts/SKILL.md")
+        guard FileManager.default.fileExists(atPath: skill.path) else { return nil }
+        return (try? signinMoodle(p)) ?? nil
+    }
+
     static func signinNotice(lms: Bool) -> String {
         "Sign in to Outlook, Teams" + (lms ? " and your LMS" : "") + " in the Brave window that opened. "
             + "When Microsoft asks \"Stay signed in?\", choose Yes, or the sign-in is lost when robo's browser restarts."
