@@ -311,7 +311,14 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
   `~/Documents/Robo/Brain/` is the user's second brain (built 2026-10-20 at their request around the one course PDF already there, which a
   live Hermes test had moved in on 2026-10-19: `Home.md`, `Courses/`, `Reading/`, `Projects/`, `Career/`, `Inbox/`, `Templates/`); robo
-  writes nothing there, and `robo-notes` does not file into it. The vault's Templates plugin is on but its folder setting is the user's to point at `Brain/Templates`.
+  The app never writes there. The skill `robo-brain` (2026-10-20) files into it ONLY on an explicit request ("save this to my brain"),
+  never as a side effect and never from `robo-notes`' own initiative: new notes never overwrite (` 2` suffix), an existing note is
+  appended to with `patch` (robo-guard records `write_file` and `patch` receipts but not a terminal `>>`, so the card's `Receipt` footer
+  can back a "saved" claim; without a receipt it shows "⚠ unverified: saved"), no file in `Brain/` is moved or deleted, the sections that
+  are the user's own thinking stay empty, no answers to graded work. `Vault.opened` (= `Vault.folders` + `Brain`) is what
+  `RoboWindow.made` scans to open a note written during a run in Obsidian; `Vault.folders` is unchanged (it is what `Vault.ensure`
+  makes: the brain is the user's to make). Rules are pinned in `tests/test_templates.py` and `TemplatesTests.swift`; not yet run against
+  the live agent (needs `robo setup`). The vault's Templates plugin is on but its folder setting is the user's to point at `Brain/Templates`.
 - **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse
   pressed: freeze) > Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) >
   `called` (request or card up: walks to the nearest corner of its screen at `CALL_SPEED` = 240 px/s,

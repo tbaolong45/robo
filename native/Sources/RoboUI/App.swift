@@ -569,10 +569,10 @@ extension RoboWindow {
         return (walk?.lazy.compactMap { $0 as? URL }).map { AnySequence($0) } ?? AnySequence([])
     }
 
-    /// What was written under the output folder and the vault's Drafts, Plans and Notes since `started`: up to
+    /// What was written under the output folder and the vault's Drafts, Plans, Notes and Brain since `started`: up to
     /// `openMax` notes first, then pages for what is left of the limit. Reads folders: not for the main thread.
     static func made(output: URL, vault: URL, since started: Double) -> Made {
-        let notes = Vault.folders.flatMap { folder in
+        let notes = Vault.opened.flatMap { folder in
             newest(files(under: vault.appendingPathComponent(folder)).filter { $0.pathExtension == "md" }, since: started)
         }
         let top = newest(notes, since: started)

@@ -7,6 +7,9 @@ import Foundation
 
 public enum Vault {
     public static let folders = ["Drafts", "Plans", "Notes"]  // notes are .md files directly inside these
+    /// Where a note written during a run is opened in Obsidian: those folders, and the user's second brain (`Brain/`, its notes are in
+    /// sub-folders; robo-brain files into it only when asked). `folders` stays what `ensure` makes: the brain is the user's to make.
+    public static let opened = folders + ["Brain"]
 
     /// The one source of truth for the vault; templates get it as {{VAULT}}.
     public static func dir(home: URL) -> URL {

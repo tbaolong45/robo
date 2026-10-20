@@ -415,6 +415,22 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(shown(r) == reply && !r.window.tw.text.contains("✓"))  // the footer is not part of the reply
     }
 
+    @Test func aNoteFiledInTheSecondBrainOpensLikeAnyOtherAndItsFilesBesideItDoNot() async {
+        let r = Rig([completed("Saved it.")])
+        defer { r.close() }
+        r.hermes.onAsk = {
+            write([r.vault.appendingPathComponent("Brain/Reading/Attention is all you need.md"): "x",
+                   r.vault.appendingPathComponent("Brain/Communication/slides.pdf"): "%PDF"])
+            // robo-guard records a write_file like this, so "saved" is a backed claim (a terminal `>>` is not recorded: the skill uses patch)
+            Usage.append(receipt(wallNow(), tool: "write_file", what: "Brain/Reading/Attention is all you need.md", host: ""), to: r.receipts)
+        }
+        r.window.ask("save this paper to my brain")
+        #expect(await pump(!r.window.busy))
+        #expect(r.window.card.footerShown == "📓 In Obsidian: Attention is all you need\n✓ saved · Attention is all you need.md")  // backed: no ⚠
+        #expect(await pump(r.notes.count == 1))
+        #expect(r.notes.map(\.url.lastPathComponent) == ["Attention is all you need.md"] && r.files.isEmpty)
+    }
+
     @Test func aClaimWithoutARecordIsFlaggedAndNoClaimNeedsNoLine() async {
         let r = Rig([completed("I sent the email.")])
         defer { r.close() }
