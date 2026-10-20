@@ -249,7 +249,7 @@ def setup(
     if moodle and set_env(robo_env, {"MOODLE_BASE_URL": moodle}):
         done.append(f"set your Moodle address to {moodle}")
     fill = {"MOODLE_BASE_URL": read_env(robo_env).get("MOODLE_BASE_URL") or "not set",
-            "ROBO_PROJECT": str(PROJECT),
+            "ROBO": f"uv run --project {PROJECT} robo",  # skills run `{{ROBO}} plan ...`
             "VAULT": str(vault.VAULT),  # where drafts, plans and notes go; see robo.vault
             "DESKTOP_APPS": DESKTOP_APPS["darwin" if sys.platform == "darwin" else "linux"]}
     if _copy_tree(templates, profile_dir(), fill):
@@ -277,13 +277,15 @@ CONFIG: dict[str, str] = {
     # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server". The user gave
     # robo the whole laptop: apps (computer_use), terminal, files, browser, web.
     "platform_toolsets.api_server": json.dumps(TOOLSETS),
-    # The user granted robo all permissions: nothing asks (Hermes approves robo-guard's "ask"s
-    # too). "manual" turns the Allow/Deny prompts in the bubble back on.
-    "approvals.mode": "off",
-    # These still hold with approvals off: no request may touch robo's own Hermes setup
+    # Reads, notes and undoable steps run unasked; robo-guard's "ask"s (send, reply, forward,
+    # delete, move, invites, Moodle submit) show Allow/Deny in the card, and one nobody answers is
+    # denied after 120 s. "off" approves every ask (the setting until 2026-10-19). A change here
+    # reaches the live profile only when the user runs `robo setup`.
+    "approvals.mode": "manual",
+    # These hold in every mode: no request may touch robo's own Hermes setup
     # (persona, plugins, config). robo-guard blocks file writes and skill edits there too.
     "approvals.deny": '["*hermes*"]',
-    "approvals.timeout": "300",
+    "approvals.timeout": "120",
     # GNOME Wayland: the native backend has no target-activation adapter here (`hermes
     # computer-use doctor`), so robo drives X11/XWayland windows; SOUL.md says how to open apps so.
     "computer_use.native_wayland": "false",

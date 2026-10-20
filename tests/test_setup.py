@@ -126,8 +126,8 @@ def test_moodle_url_is_stored_and_filled_into_skills(tmp_path, monkeypatch):
     assert (robo / "skills/m/SKILL.md").read_text() == "Moodle is https://moodle.uni.example."
 
 
-def test_project_path_is_filled_into_skills(tmp_path, monkeypatch):
-    """Skills run `uv run --project <this checkout> robo ...`, wherever it was cloned."""
+def test_robo_command_is_filled_into_skills(tmp_path, monkeypatch):
+    """Skills run `{{ROBO}} ...`: here `uv run --project <this checkout> robo`."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n")
     robo = tmp_path / "profiles" / "robo"
@@ -135,10 +135,11 @@ def test_project_path_is_filled_into_skills(tmp_path, monkeypatch):
     (robo / ".env").write_text("API_SERVER_KEY=r\n")
     templates = tmp_path / "templates"
     (templates / "skills" / "p").mkdir(parents=True)
-    (templates / "skills" / "p" / "SKILL.md").write_text("uv run --project {{ROBO_PROJECT}} robo")
+    (templates / "skills" / "p" / "SKILL.md").write_text("{{ROBO}} activity --days 1")
 
     setup.setup(templates=templates, config={}, run=lambda cmd: None, wait=lambda: True)
-    assert (robo / "skills/p/SKILL.md").read_text() == f"uv run --project {setup.PROJECT} robo"
+    filled = (robo / "skills/p/SKILL.md").read_text()
+    assert filled == f"uv run --project {setup.PROJECT} robo activity --days 1"
     assert (setup.PROJECT / "pyproject.toml").is_file()
 
 

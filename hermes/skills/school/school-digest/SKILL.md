@@ -7,7 +7,7 @@ metadata:
   hermes:
     tags: [School, Digest, Daily]
     requires_toolsets: [browser]
-    related_skills: [school-timetable, school-mail, school-teams, school-moodle, study-plan, robo-notes]
+    related_skills: [school-timetable, school-mail, school-teams, school-moodle, study-plan, study-ledger, robo-notes]
 ---
 
 # School digest
@@ -27,6 +27,10 @@ user (its one write is the plan note in step 5):
    fetch them again). It writes the plan as a Plans note (`robo-notes`) and adds nothing to
    the calendar until the user says yes. The digest shows only one line saying the plan is in
    Obsidian, then the calendar question; it does not list the blocks.
+6. `study-ledger`, **Exam readiness** (never Moodle course pages here): for the nearest exam
+   within 14 days, ONE bullet with its colour and weakest topic. It is the day's one nudge, so
+   no second bullet and no reminders. Leave it out outside 08:00-22:00, and while the ledger
+   has `snooze nudges until <date>` with today before that date.
 
 If a source fails or is not signed in, still report the others and add one bullet naming the
 source that needs `robo signin`.
@@ -34,8 +38,8 @@ source that needs `robo signin`.
 ## Output
 It shows in a small bubble: at most 8 digest bullets, one per item, most urgent first, and
 leave out empty sources (after 20:00 there is no plan: leave out the **Plan** line and the
-calendar question). Feel `concerned` if anything is overdue or due within 48 h, otherwise
-`happy` or `calm`:
+calendar question). Feel `concerned` if anything is overdue, due within 48 h or red for an
+exam, otherwise `happy` or `calm`:
 
 ```
 [[feel:concerned]]
@@ -44,6 +48,7 @@ calendar question). Feel `concerned` if anything is overdue or due within 48 h, 
 - **Today** 09:00 Calculus (B2.14), 13:00 Physics lab
 - **Mail** Prof Lee: Lab 3 feedback
 - **Teams** PHYS101 chat: quiz moved to Thursday
+- **Ready?** MATH201 midterm in 4 days: amber, last quiz 60%, weakest eigenvalues
 
 **Plan** is in Obsidian: 2 blocks today, Lab report 2 first.
 Put the plan in your Robo Plan calendar?

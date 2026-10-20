@@ -385,11 +385,95 @@ def test_drag_hands_the_move_to_the_compositor_and_pins_where_dropped(tmp_path):
     assert (win.roamer.pos[0], win.roamer.pos[1]) == (200, 300)
 
 
+def test_a_drag_robo_moves_itself_is_not_pulled_back_by_the_roam_tick(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win._system_move = lambda: False  # no compositor drag: robo follows the mouse itself
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    start = win.pos()
+    QTest.mousePress(win.face, Qt.MouseButton.LeftButton, pos=QPoint(60, 10))
+    QTest.mouseMove(win.face, QPoint(10, 10))
+    assert win.pos() == start + QPoint(-50, 0)
+    pump(win, lambda: False, timeout=0.3)  # ten roam ticks
+    assert win.pos() == start + QPoint(-50, 0)
+    assert win.roamer.held_until > time.monotonic() + 60
+
+
+def test_the_roam_tick_walks_it_to_a_corner_when_called_and_freezes_it_on_a_press(tmp_path):
+    from PySide6.QtCore import QPoint
+
+    win, _ = floating(tmp_path, FakeClient([]))
+    flags, real = [], win.roamer.step
+    win.roamer.step = lambda now, activity, engaged, called=False: (
+        flags.append((engaged, called)) or real(now, activity, engaged, called))
+    win._roam()
+    assert flags[-1] == (False, False)
+    win.busy = True  # a request is running
+    win._roam()
+    assert flags[-1] == (False, True)
+    win.press = QPoint(1, 1)  # and the user has hold of the face
+    win._roam()
+    assert flags[-1] == (True, True)
+    win.press, win.busy = None, False
+
+
+def test_the_right_click_menu_does_not_call_it_to_a_corner_but_the_bubble_does(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    flags, real = [], win.roamer.step
+    win.roamer.step = lambda now, activity, engaged, called=False: (
+        flags.append(called) or real(now, activity, engaged, called))
+    win._show_menu()  # opens the bubble with the menu in it, closing by itself after 8 s
+    win._roam()
+    assert not win.panel.isHidden() and not win.menu.isHidden()
+    assert flags[-1] is False and win.roamer.mode != "come"  # it may be about to press Stay
+    win._hide_menu()  # a button was pressed and the bubble stays up
+    win._roam()
+    assert flags[-1] is True and win.roamer.mode == "come"
+    win._close_bubble()
+
+
+def test_a_request_after_a_drop_ends_the_hold_but_a_stay_outlasts_it(tmp_path):
+    win, _ = floating(tmp_path, FakeClient([]))
+    win.roamer.hold(time.monotonic(), (200, 200))  # dropped by the user
+    win.busy = True
+    win._roam()
+    assert win.roamer.mode == "come" and win.roamer.held_until < 0  # it walks to the nearest corner
+    win.busy = False
+    win._toggle_stay()  # the menu's Stay
+    assert win.roamer.stays(time.monotonic())
+    win.busy = True
+    win._roam()
+    assert win.roamer.mode == "held"
+    win.busy = False
+
+
+def test_roaming_follows_the_monitors_that_are_plugged_in(tmp_path, monkeypatch):
+    from robo.roam import Rect
+
+    win, _ = floating(tmp_path, FakeClient([]))
+    two = (Rect(0, 0, 800, 600), Rect(800, 0, 1920, 1080))
+    monkeypatch.setattr(robo_app, "_screen_rects", lambda: two)
+    win._screens_changed()  # an external monitor was plugged in
+    assert pump(win, lambda: win.roamer.screens == two)
+    win.roamer.hold(time.monotonic(), (1500, 400))
+    assert win.roamer.pos == (1500, 400)  # a drop on the second screen stays there
+    monkeypatch.setattr(robo_app, "_screen_rects", lambda: ())
+    win._screens_changed()  # a display asleep for a moment lists no screens
+    pump(win, lambda: False, timeout=0.1)
+    assert win.roamer.screens == two
+    monkeypatch.setattr(robo_app, "_screen_rects", lambda: two[:1])
+    win._screens_changed()  # and it was unplugged: robo comes back to the one left
+    assert pump(win, lambda: win.roamer.screens == two[:1])
+    assert win.roamer.pos == (800 - win.width(), min(400, 600 - win.height()))
+
+
 def test_type_opens_its_own_focusable_window_and_asks(tmp_path):
     client = FakeClient([RunEnded("completed", "ok")])
     win, _ = floating(tmp_path, client)
     win._type()
     box = win.typer
+    assert box.screen() is win.screen()  # beside robo, not on the primary screen
     assert box.parent() is None and box.isVisible()  # a top-level window XWayland can focus
     assert box.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     box.setTextValue("what is 2+2")

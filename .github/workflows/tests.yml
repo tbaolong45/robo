@@ -14,6 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
+      UV_PYTHON: "3.13"  # not the newest on the runner: macos-latest got Python 3.15 and onnxruntime 1.31 has no wheel for it (2026-10-20)
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

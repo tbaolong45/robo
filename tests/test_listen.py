@@ -1,4 +1,5 @@
 import itertools
+import os
 import queue
 import sys
 import threading
@@ -125,6 +126,21 @@ def test_parakeet_loads_on_the_cpu_only(monkeypatch):
     listen.Parakeet()
     assert loaded == {"name": listen.STT_MODEL, "quantization": "int8",
                       "providers": ["CPUExecutionProvider"]}
+
+
+def test_parakeet_keeps_onnxruntime_from_reporting_to_microsoft(monkeypatch):
+    """onnxruntime 1.30+ opens a connection to a Microsoft server unless this is set first."""
+    monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "unset below")
+    monkeypatch.delenv("ORT_DISABLE_TELEMETRY")  # so the test restores "not set" afterwards
+    seen = {}
+
+    def load_model(name, **kwargs):
+        seen["telemetry"] = os.environ.get("ORT_DISABLE_TELEMETRY")  # when onnx_asr starts ORT
+        return object()
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    listen.Parakeet()
+    assert seen == {"telemetry": "1"}
 
 
 def test_parakeet_hears_every_utterance_at_the_same_level(monkeypatch):
@@ -430,31 +446,15 @@ def test_other_speech_gets_only_the_quick_check():
     assert events.empty() and calls == ["quick"]
 
 
-def test_saying_over_ends_the_command_even_while_the_tv_keeps_talking():
-    seen = []
-
-    class Quick(FakeStt):
-        def __call__(self, audio):
-            seen.append(len(audio) // FRAME)
-            return "Robo, what's the date" if len(seen) == 1 else "what's the date, over."
-
-    noisy = frames(0, 8) + frames(8, 208, SPEECH)  # 16 s of sound: the room never goes quiet
+def test_the_word_over_does_not_end_a_request():
+    # 16 s of sound, then quiet: only the quiet ends it, and "over" stays in the text
+    clip = frames(0, 8) + frames(8, 208, SPEECH) + frames(208, 260)
     stt = FakeStt("Robo, what's the date, over.")
-    lis, events = start(FakeMic(noisy), stt, quick=Quick())
+    lis, events = start(FakeMic(clip), stt, quick=FakeStt("Robo, what's the date"))
     assert events.get(timeout=5) == "wake"
-    assert events.get(timeout=5) == ("text", "what's the date")
+    assert events.get(timeout=5) == ("text", "what's the date, over.")
     lis.stop()
-    assert len(stt.heard[0]) // FRAME < 60  # ended at "over", not at the 15 s limit
-
-
-@pytest.mark.parametrize(("text", "command"), [
-    ("Robo, what's the date, over.", "what's the date"),
-    ("what's the date over", "what's the date"),
-    ("Robo, flip the page over", "flip the page over"),  # not ended by the word: kept
-])
-def test_over_is_dropped_only_when_it_ended_the_command(text, command):
-    ended = text != "Robo, flip the page over"
-    assert listen.without_name(listen.without_over(text) if ended else text) == command
+    assert len(stt.heard) == 1 and len(stt.heard[0]) // FRAME > 200
 
 
 def test_one_model_serves_the_quick_checks_by_default():
@@ -471,15 +471,15 @@ def test_one_model_serves_the_quick_checks_by_default():
 
 
 def test_once_robo_is_listening_a_thinking_pause_does_not_end_the_request():
-    # woke by name, then 1.2 s of silence mid-request, then more words
-    clip = (frames(0, 8) + frames(8, 20, SPEECH) + frames(20, 35) + frames(35, 45, SPEECH)
-            + frames(45, 80))
+    # woke by name, then 2.4 s of silence mid-request, then more words; 3.2 s of silence ends it
+    clip = (frames(0, 8) + frames(8, 20, SPEECH) + frames(20, 50) + frames(50, 60, SPEECH)
+            + frames(60, 100))
     stt = FakeStt("Robo, plan my day and also check my mail")
     lis, events = start(FakeMic(clip), stt, quick=FakeStt("Robo, plan my"))
     assert events.get(timeout=5) == "wake"
     assert events.get(timeout=5) == ("text", "plan my day and also check my mail")
     lis.stop()
-    assert len(stt.heard) == 1 and 44 in tags(stt.heard[0])  # one request, both halves
+    assert len(stt.heard) == 1 and 59 in tags(stt.heard[0])  # one request, both halves
 
 
 def test_a_long_request_is_not_cut_at_fifteen_seconds():

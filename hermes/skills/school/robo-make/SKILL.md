@@ -7,7 +7,7 @@ metadata:
   hermes:
     tags: [Create, Diagram, HTML, Chart]
     requires_toolsets: [file]
-    related_skills: [study-plan, robo-notes]
+    related_skills: [study-plan, study-quiz, robo-notes]
 ---
 
 # Make things (diagrams, web pages, charts, slides)
@@ -15,8 +15,9 @@ metadata:
 ## When to Use
 The user asks you to create, draw, design or visualise something that needs a browser: a
 diagram or mind map, a web page or HTML design, a chart of their data or results, slides,
-flashcards, a quiz. Notes, summary sheets, study guides, essay drafts and plans are text, not
-this skill: follow `robo-notes`, which writes them into the user's Obsidian vault.
+flashcards. Notes, summary sheets, study guides, essay drafts and plans are text, not this skill:
+follow `robo-notes`, which writes them into the user's Obsidian vault. Quizzes are not this
+skill either: follow `study-quiz`.
 
 ## Where
 Write ONE self-contained file in `~/Robo/` (create the folder if needed), named
@@ -35,7 +36,7 @@ older one unless the user asks to change it.
 - Chart of numbers (grades, study time from `robo activity`): `.html` with Chart.js from
   `https://cdn.jsdelivr.net/npm/chart.js@4`.
 - Slides: one `.html` where each `<section>` fills the screen and arrow keys move between them.
-- Flashcards / quiz: one `.html` with click-to-flip cards or a self-checking quiz.
+- Flashcards: one `.html` with click-to-flip cards.
 - Code the user asked for: the right extension (`.py`, ...), runnable as is.
 Check the file is complete (closing tags, no placeholders) before you finish.
 

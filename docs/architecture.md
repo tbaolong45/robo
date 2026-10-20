@@ -137,7 +137,7 @@ sequenceDiagram
     Note over L: 80 ms frames, speech gate,<br/>pre-roll keeps the first syllable
     L->>W: about 1.2 s in: the name was heard, face perks up
     Note over W: mind: listening
-    L->>L: 1.6 s of silence ends the request,<br/>level the audio, Parakeet transcribes
+    L->>L: 3 s of silence ends the request,<br/>level the audio, Parakeet transcribes
     L->>W: heard: "what's due this week"
     W->>W: show your question in the card, mind: thinking
     W->>B: ask(text), new worker thread
@@ -156,7 +156,7 @@ sequenceDiagram
     H-->>B: RunEnded (completed)
     B-->>W: RunEnded, mind: idle
     W->>O: open the new note (obsidian://open)
-    W->>L: follow_up(10 s from now): the next sentence needs no "Robo"
+    W->>L: follow_up(10 s from now; Swift: 15 s from the last typed letter): the next sentence needs no "Robo"
     Note over W: when the last letter is typed the footer<br/>"📓 In Obsidian: ..." shows, and the card<br/>closes 20 s after that
 ```
 
@@ -170,8 +170,9 @@ Things worth knowing about this flow:
   and turns it into the face's emotion before the first word is shown.
 - A new question while a run is going stops that run and asks the new one after it. Speaking over
   Robo interrupts its answer.
-- If Hermes asks to approve a step (only when `approvals.mode` is `manual`), the card shows
-  Allow/Deny and the face goes to `waiting`. Desktop steps (`computer_use`) are approved
+- If Hermes asks to approve a step (`approvals.mode` is `manual` in robo's config, after
+  `robo setup`; with `off` nothing asks), the card shows Allow/Deny and the face goes to
+  `waiting`. An ask nobody answers is denied after `approvals.timeout` (120 s). Desktop steps (`computer_use`) are approved
   automatically for the rest of that request, with no buttons, and the face shows `waiting` until
   the next event arrives.
 - If the stream drops, `HermesClient` resumes it once; if that fails the run is stopped so it never
@@ -224,8 +225,9 @@ ends in `idle` or `error`.
   is being answered and for 8 s after the run completes.
 - When idle, Robo looks at your mouse pointer, glances around and now and then shows a mood
   (curious, happy, playful, calm), so it never looks frozen. `roam.py` makes it rest 20 to 60 s,
-  drift along the bottom or a side edge, and nap in the bottom-right corner. If you drag it, it
-  stays where you dropped it for 10 minutes.
+  drift along the bottom or a side edge, and nap in the corner nearest to where it is. If you drag
+  it, it stays where you dropped it for 10 minutes unless you call it (a call beats a drop and sends
+  it to the nearest corner; the menu's Stay holds even through a call).
 
 ## 5. How a reply is typed
 
@@ -252,7 +254,7 @@ bullet, an open code fence) never flashes on screen. See `src/robo/typewriter.py
 | Pages, charts, slides, flashcards | `~/Robo/` | Hermes (`robo-make` skill) |
 | Activity log (app, window, idle, sites, files) | `~/.local/share/robo/activity.db` (0600, 30 days) | Robo's activity watcher |
 | Study ledger (goals, exams, results) | `~/.local/share/robo/study.md` (0600) | Created by Robo at start, edited by Hermes (`study-ledger` skill) |
-| Theme | `~/.config/robo/theme.json` | You, or the 🎨 Theme menu |
+| Theme tokens (hue, bot name, typing speed...) | `~/.config/robo/theme.json` | You (the Swift app has no Theme menu; the Python build still writes the `theme` key from its 🎨 menu) |
 | "Digest already done today" | `data/robo_state.json` in the checkout | Robo |
 | Persona, skills, guard plugin, `config.yaml`, API key | `~/.hermes/profiles/robo/` | `robo setup` |
 | Robo's private browser profile | `~/.hermes/profiles/robo/brave/` | Created when Robo first starts; your logins are added by `robo signin` |
@@ -294,16 +296,23 @@ features without the window.
 
 ## 8. What can and cannot happen
 
-- Robo has **all permissions** by your choice (`approvals.mode: off`): the terminal, files, the
-  desktop, its own browser. Its persona tells it to do exactly what you asked, and to send, post,
-  submit, delete or pay only when your request says so; it does not stop to ask. Switch
-  `approvals.mode` back to `manual` to get the Allow/Deny prompts back.
+- Robo has **all permissions** by your choice: the terminal, files, the desktop, its own browser.
+  Reads, notes and reversible actions run without asking; irreversible steps (send, reply, forward,
+  delete, move, invites, Moodle submit) ask for one click in the card (`approvals.mode: manual`,
+  120 s to answer, no answer is a Deny). Its persona tells it to do exactly what you asked, and to
+  send, post, submit, delete or pay only when your request says so. Graded work is refused: it
+  never writes, submits or takes it. The setting reaches the live profile only when you run
+  `robo setup`; set `approvals.mode` to `off` in both setup files and run it again to get no
+  questions at all.
 - The `robo-guard` Hermes plugin still blocks two things however you ask: changing Robo's own
   Hermes setup (`~/.hermes`, the `hermes` CLI) and editing its installed school skills.
 - Text Robo reads from mail, chats or web pages is data, not instructions; that is a rule in the
   persona, not a technical barrier (see "Prompt injection" in the README).
-- The microphone stays on while Robo runs. A sentence is acted on only when it uses Robo's name,
-  or follows an answer within 10 s, or comes right after you click the face.
+- The microphone stays on while Robo runs. In the Swift app a sentence is acted on only while you
+  hold Ctrl+Q, after a tap of it or a click on the face, or within 15 s of the last typed letter of
+  an answer (a request that sends, deletes, books or only says "yes" needs the key held, and a
+  knock does not wake it); the name is not listened for unless macOS refuses the key. The Python build acts on a sentence that
+  uses Robo's name, follows an answer within 10 s, or comes right after a click on the face.
 
 ## 9. Where to read the code first
 

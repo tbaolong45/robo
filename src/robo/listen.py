@@ -5,6 +5,7 @@ in the few seconds after it answers, or after a click on its face. Nothing leave
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
 import threading
@@ -24,18 +25,16 @@ PRE_ROLL_FRAMES = 6  # ~0.5 s kept from before the voice crossed the gate (soft 
 NOISE_FRAMES = 62  # ~5 s of quiet RMS for the noise floor
 NOISE_PERCENTILE = 20
 GATE_FACTOR = 2.5  # speech = RMS above 2.5x the room's noise floor...
-MIN_GATE = 0.02  # ...and above this (float RMS, -1..1)
+MIN_GATE = 0.008  # ...and above this (float RMS, -1..1); a real "Robo" on a MacBook mic peaks ~0.03
 END_SILENCE_S = 0.7  # other speech (TV, people): short, so little is transcribed
 NO_SPEECH_S = 6.0
 MAX_UTTERANCE_S = 15.0
-PATIENT_SILENCE_S = 1.6  # talking to robo: a pause to think does not end the request ("over" does)
+PATIENT_SILENCE_S = 3.0  # talking to robo: a pause to think does not end the request (no end word)
 PATIENT_MAX_S = 120.0
 MIN_SPEECH_FRAMES = 4  # ~0.3 s above the gate, or it was a knock, not a sentence
 READ_TIMEOUT = 0.5
 STT_MODEL = "nemo-parakeet-tdt-0.6b-v2"  # int8 ONNX: ~0.4 s for 3 s of speech on this CPU
 EARLY_FRAMES = 15  # ~1.2 s into a sentence, check whether it starts with robo's name
-OVER_EVERY = 10  # ~0.8 s: while you talk to robo, check whether you just said "over"
-OVER_WINDOW = 25  # ~2 s of the latest audio for that check
 MIC_STALL_S = 5.0  # no frame for this long: the mic is gone (unplugged, or stuck after a sleep)
 MIC_RETRY_S = 5.0  # ...then it is reopened this often
 SILENT_FRAMES = 38  # ~3 s of exact zeros: that is what a microphone without permission delivers
@@ -58,14 +57,6 @@ def addressed(text: str) -> str | None:
     if not (_LEAD.match(text) or _TAIL.search(text) or _ANYWHERE.search(text)):
         return None
     return without_name(text)
-
-
-_OVER = re.compile(r"[\W_]*\bover(?:\s+and\s+out)?\W*$", re.I)
-
-
-def without_over(text: str) -> str:
-    """`text` without the closing "over" that ended it."""
-    return _OVER.sub("", text)
 
 
 def without_name(text: str) -> str:
@@ -154,6 +145,9 @@ class Parakeet:
     (downloaded once, ~650 MB, into the Hugging Face cache)."""
 
     def __init__(self):
+        # onnxruntime 1.30+ opens a connection to a Microsoft server to report usage unless this is
+        # set before it starts (checked 2026-10-13 on 1.31); robo is an offline assistant.
+        os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
         import onnx_asr
 
         # CPU only: CoreML (macOS default) loads 3x slower, runs 2x slower, hears differently
@@ -167,12 +161,11 @@ class Parakeet:
 class Listener:
     """Hears every sentence on a daemon thread; callbacks run on that thread.
 
-    `on_wake()` when robo is called by name, then `on_text(request)`. Saying "over" ends a
-    request at once, even when the room never goes quiet (TV). A sentence also counts
-    without the name while robo expects one: after `listen_now()` (a click; `on_text("")` if
-    nothing is said within NO_SPEECH_S), after `follow_up(seconds)` (it just answered), or right
-    after a bare "robo". A mic that stops delivering is reopened; one that only gives silence
-    is reported.
+    `on_wake()` when robo is called by name, then `on_text(request)`. A request ends after
+    PATIENT_SILENCE_S of quiet. A sentence also counts without the name while robo expects
+    one: after `listen_now()` (a click; `on_text("")` if nothing is said within NO_SPEECH_S),
+    after `follow_up(seconds)` (it just answered), or right after a bare "robo". A mic that
+    stops delivering is reopened; one that only gives silence is reported.
     """
 
     def __init__(self, on_wake: Callable[[], None], on_text: Callable[[str], None],
@@ -267,11 +260,11 @@ class Listener:
                 woke = self._clock() < self._open_until  # robo expects this sentence: show it now
                 if woke:
                     self.on_wake()
-                frames, loud, woke, over = self._record(mic, [*pre_roll, frame], gate, woke)
+                frames, loud, woke = self._record(mic, [*pre_roll, frame], gate, woke)
                 pre_roll.clear()
                 if loud >= MIN_SPEECH_FRAMES:
                     text = self._stt(np.concatenate(frames)) if self._stt else ""
-                    self._heard(without_over(text) if over else text, woke)
+                    self._heard(text, woke)
         except Exception as e:  # the mic or the recogniser failed: say so, stop listening
             log.exception("listener stopped")
             self.on_error(f"Voice input stopped: {e}")
@@ -327,10 +320,9 @@ class Listener:
             self._open(NO_SPEECH_S, asked=True)
 
     def _record(self, mic: Mic, frames: list[np.ndarray], gate: float, woke: bool
-                ) -> tuple[list[np.ndarray], int, bool, bool]:
-        """Frames until the sentence ends (or stop()), how many were above the gate, whether
-        robo woke up (a quick early check found its name at the start), and whether "over"
-        ended it."""
+                ) -> tuple[list[np.ndarray], int, bool]:
+        """Frames until the sentence ends (or stop()), how many were above the gate, and whether
+        robo woke up (a quick early check found its name at the start)."""
         ep, loud, start = Endpointer(gate), 1, len(frames)
         ep.feed(rms(frames[-1]))  # the frame that crossed the gate
         if woke:
@@ -346,15 +338,9 @@ class Listener:
             loud += level > gate
             if ep.feed(level):
                 break
-            n = len(frames) - start
-            if not self._quick or n < min(EARLY_FRAMES, OVER_EVERY):
-                continue
-            if not woke and n == EARLY_FRAMES:
+            if self._quick and not woke and len(frames) - start == EARLY_FRAMES:
                 woke = addressed(self._quick(np.concatenate(frames))) is not None
                 if woke:
                     self.on_wake()
                     ep.end_silence, ep.max_s = PATIENT_SILENCE_S, PATIENT_MAX_S
-            elif woke and n % OVER_EVERY == 0:
-                if _OVER.search(self._quick(np.concatenate(frames[-OVER_WINDOW:]))):
-                    return frames, loud, woke, True
-        return frames, loud, woke, False
+        return frames, loud, woke

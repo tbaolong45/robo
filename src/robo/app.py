@@ -82,6 +82,12 @@ def open_file(path: Path) -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+def _screen_rects() -> tuple[Rect, ...]:
+    """The usable area (below the menu bar, beside the Dock) of every connected screen."""
+    areas = (s.availableGeometry() for s in QGuiApplication.screens())
+    return tuple(Rect(a.x(), a.y(), a.width(), a.height()) for a in areas)
+
+
 def _newest(found: Iterable[Path], started: float) -> list[Path]:
     """The files among `found` written since `started`, newest first, at most OPEN_MAX."""
     try:
@@ -167,13 +173,15 @@ class RoboWindow(QWidget):
         self.roamer: Roamer | None = None
         self._build()
         if floating:
-            area = QGuiApplication.primaryScreen().availableGeometry()
-            self.roamer = Roamer(Rect(area.x(), area.y(), area.width(), area.height()),
-                                 (self.width(), self.height()))
+            self.roamer = Roamer(_screen_rects(), (self.width(), self.height()))
             self.move(*map(int, self.roamer.pos))
             QTimer(self, interval=33, timeout=self._roam).start()
-            QGuiApplication.primaryScreen().availableGeometryChanged.connect(
-                lambda g: self.roamer.set_screen(Rect(g.x(), g.y(), g.width(), g.height())))
+            gui = QGuiApplication.instance()
+            gui.screenAdded.connect(self._screen_added)
+            for screen in QGuiApplication.screens():
+                screen.availableGeometryChanged.connect(self._screens_changed)
+            for signal in (gui.screenRemoved, gui.primaryScreenChanged):
+                signal.connect(self._screens_changed)
         self.ticker = QTimer(self, interval=100, timeout=self._tick)
         self.ticker.start()
         self.watcher = WakeWatcher(self.resumed.emit) if watch_wake else None
@@ -674,9 +682,25 @@ class RoboWindow(QWidget):
             self.roamer.resize((self.width(), self.height()))  # and keep it on screen
             self.move(*map(int, self.roamer.pos))
 
+    def _screen_added(self, screen) -> None:
+        screen.availableGeometryChanged.connect(self._screens_changed)
+        self._screens_changed()
+
+    def _screens_changed(self, *_) -> None:
+        """A monitor came, went or resized: keep robo on the screens that are left. Looked up
+        after the event, because a removed screen is still listed while its signal runs."""
+        def refit() -> None:
+            rects = _screen_rects()
+            if rects:  # none for a moment while a display sleeps: keep the last layout
+                self.roamer.set_screens(rects)
+        QTimer.singleShot(0, refit)
+
     def _roam(self) -> None:
-        engaged = self.busy or not self.panel.isHidden() or self.press is not None
-        x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged)
+        engaged = self.press is not None or self.moving  # the user has it: freeze
+        # it walks to a corner and stays; the right-click menu opens the bubble too, but it must
+        # not leave before the user can press Stay
+        called = self.busy or (not self.panel.isHidden() and self.menu.isHidden())
+        x, y = self.roamer.step(time.monotonic(), self.mind.activity, engaged, called)
         if (x, y) != (self.x(), self.y()):
             self.move(x, y)
 
@@ -704,7 +728,10 @@ class RoboWindow(QWidget):
                     self.press, self.moving = None, True  # Mutter moves it; see moveEvent
                     self.drag_end.start()
                 elif self.floating:
-                    self.move(here - self.grab_at)
+                    to = here - self.grab_at
+                    self.move(to)
+                    if self.roamer:  # else the roam tick pulls it back to where it was
+                        self.roamer.hold(time.monotonic(), (to.x(), to.y()))
         elif kind == ev.Type.MouseButtonRelease and left and self.press is not None:
             if self.dragged and self.roamer:
                 self.roamer.hold(time.monotonic(), (self.x(), self.y()))
@@ -747,8 +774,7 @@ class RoboWindow(QWidget):
             self.theme_stamp = themes.stamp()
             self.apply_theme(themes.load())
         self.stay.setText(
-            "🧭 Wander" if self.roamer and self.roamer.held_until > time.monotonic() + 3600
-            else "📌 Stay")
+            "🧭 Wander" if self.roamer and self.roamer.stays(time.monotonic()) else "📌 Stay")
         self.watch.setText("▶ Watch" if self.watcher_ and self.watcher_.paused else "⏸ Watch")
         self.watch.setVisible(bool(self.watcher_))
         self._fit(self.menu.show)
@@ -799,6 +825,7 @@ class RoboWindow(QWidget):
     def _type(self) -> None:
         """A small window of its own: XWayland never focuses robo's Tool window."""
         self.typer = QInputDialog(None, Qt.WindowType.WindowStaysOnTopHint)
+        self.typer.setScreen(self.screen())  # beside robo, not on the primary screen
         self.typer.setWindowTitle("Ask robo")
         self.typer.setLabelText("Ask robo:")
         self.typer.setStyleSheet(f"QWidget {{ background: {self.theme.bg_top}; "
@@ -821,7 +848,7 @@ class RoboWindow(QWidget):
     def _toggle_stay(self) -> None:
         if not self.roamer:
             return
-        stay = self.roamer.held_until > time.monotonic() + 3600
+        stay = self.roamer.stays(time.monotonic())
         self.roamer.hold(time.monotonic(), (self.x(), self.y()), seconds=0 if stay else 10**9)
 
     def _escape(self) -> None:
