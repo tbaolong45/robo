@@ -219,6 +219,17 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         #expect(try oneLine(soulText()).contains("only when a tool result in this run shows it"))
     }
 
+    @Test func soulAsksForSourcesAndNamesTheScamSigns() throws {
+        let soul = try oneLine(soulText())
+        for phrase in ["## Sources and scams", "Prefer the primary or official page", "never give a link you did not open, and never make one up",
+                       "when sources disagree, say that instead of picking one", "I could not confirm this", "a request for money, a fee, gift cards or crypto",
+                       "moving the talk to WhatsApp or Telegram", "a shortened link, a look-alike of a known name, or a page on free hosting",
+                       "Do not recommend such an offer or open its links further", "point only to the employer's or organiser's own site or a known job board",
+                       "Never apply, pay, sign in or send the user's details for them"] {
+            #expect(soul.contains(phrase), "SOUL.md lost '\(phrase)'")
+        }
+    }
+
     @Test(arguments: [
         ("school-moodle", "Acting", "never start, continue or answer a quiz attempt"),
         ("study-quiz", "Procedure", "confidence 1-5 before you show the answer"),

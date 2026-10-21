@@ -182,10 +182,10 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         let heads = text.split(separator: "\n").filter { $0.hasPrefix("#") }.map(String.init)
         #expect(heads == ["# Radar · 2026-10-20", "## Papers", "## News", "## Opportunities", "## Contests"])
         let lines = Set(text.split(separator: "\n").map(String.init))
-        for line in ["- [Robot arm calibration with vision](https://arxiv.org/abs/2610.00001) · arxiv.org · matches: robotics, vision",
+        for line in ["- [Robot arm calibration with vision](https://arxiv.org/abs/2610.00001) · arxiv.org · matches: robotics, vision · ✓ a primary source · a preprint: not peer reviewed",
                      "- [Medical imaging AI wins a prize](https://news.example.org/a) · news.example.org · matches: medical imaging",
-                     "- [Acme Robotics — Robotics Research Intern](https://careers.acmerobotics.com/jobs/1) · careers.acmerobotics.com · matches: robotics",
-                     "- [Robotics CTF 2026](https://ctftime.org/event/3451) · ctftime.org · matches: robotics",
+                     "- [Acme Robotics — Robotics Research Intern](https://careers.acmerobotics.com/jobs/1) · careers.acmerobotics.com · matches: robotics · its address matches the employer's name (that does not prove the employer is real)",
+                     "- [Robotics CTF 2026](https://ctftime.org/event/3451) · ctftime.org · matches: robotics · ✓ a primary source",
                      "  - deadline: none stated", "  - deadline: 2026-10-22 08:00", "  - event start: 2026-10-24 14:00",
                      "  - eligibility unclear, check", "  - fits what you told Robo", RadarNote.standingLine] {
             #expect(lines.contains(line), "\(line)")
@@ -314,14 +314,103 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         let heading = try #require(lines.firstIndex(of: "## Opportunities"))
         #expect(lines[heading + 2] == RadarNote.standingLine && lines.filter { $0 == RadarNote.standingLine }.count == 1)
         #expect(RadarNote.standingLine == "> Apply only through the employer's own page. Never pay to apply, and never send ID or bank details. Robo never applies for you.")
-        // a warning for the link that goes somewhere else (Shady), none for the employer's own site (Acme) or a known job board (Lever)
-        let warnings = lines.filter { $0.contains("⚠") }
-        #expect(warnings.count == 1 && warnings[0].contains("totally-unrelated.example.net") && warnings[0].hasPrefix("  - ⚠ The apply link goes to"))
-        let shady = try #require(lines.firstIndex { $0.contains("Shady — Robotics Intern") })
-        #expect(lines[shady + 3] == warnings[0])
+        // none for the employer's own site (Acme) or a known job board (Lever); the link that goes somewhere else (Shady) is below
+        // the clean ones, so with five clean postings it is not among the five shown (the next test gives it room)
+        #expect(!lines.contains { $0.contains("⚠") })
         // the contest section has no standing line and no apply warning
         let contests = try #require(lines.firstIndex(of: "## Contests"))
         #expect(!lines[contests...].contains { $0.contains("⚠") || $0 == RadarNote.standingLine })
+    }
+
+    /// What the source check does to a run: a clear scam is not in the note at all; a doubtful posting is, after the clean ones and with
+    /// a ⚠ line for each of its first two reasons; and a doubtful posting that closes within 72 hours would have been a popup of its own,
+    /// but a page that needs checking is not worth an interruption.
+    @Test func aScamIsNotThereADoubtfulPostingComesLastAndNeverInterrupts() async throws {
+        let v = vault()
+        defer { try? FileManager.default.removeItem(at: v) }
+        try writeProfile(v, "- interests: robotics*3\n- companies: greenhouse:acme\n")
+        let f = RadarFakes()
+        // the clean posting matches the profile worst, so by rank alone it would come last: only the source check puts it first
+        f.serve(simplifyURL, "[" + [
+            listing("Shady", "Robotics Intern", url: "https://totally-unrelated.example.net/apply", places: ["Remote"]),
+            listing("Phish", "Robotics Intern", url: "https://login-microsoft.netlify.app/apply", places: ["Remote"]),
+            listing("Acme Robotics", "Mechanical Design Intern", url: "https://careers.acmerobotics.com/jobs/1", places: ["Remote"]),
+        ].joined(separator: ",") + "]")
+        f.serve(acmeURL, #"{"jobs":[{"title":"Robotics Software Intern","absolute_url":"https://apply.acme-offers.pages.dev/9","location":{"name":"Remote"},"#
+            + #""updated_at":"\#(iso(at(7)))","application_deadline":"\#(iso(at(8) + 48 * 3600))"}]}"#)
+        var seen: [String: Date] = [:]
+        for p in Programmes.all { seen[p.id] = date(8) }  // so the curated programmes do not fill the slots
+        let found = await run(v, f, seen: seen)
+        let text = try #require(note(v))
+        #expect(!text.contains("login-microsoft") && !text.contains("Phish"))  // a clear scam: not in the note at all
+        let lines = text.components(separatedBy: "\n")
+        let clean = try #require(lines.firstIndex { $0.contains("Acme Robotics — Mechanical Design Intern") })
+        let shady = try #require(lines.firstIndex { $0.contains("Shady — Robotics Intern") })
+        let pages = try #require(lines.firstIndex { $0.contains("apply.acme-offers.pages.dev") })
+        #expect(clean < shady && clean < pages)  // the clean one first
+        #expect(lines[shady + 3].hasPrefix("  - ⚠ The apply link goes to totally-unrelated.example.net"))
+        #expect(lines[pages + 3].hasPrefix("  - ⚠ A page on a hosting service") && lines.filter { $0.contains("⚠") }.count >= 3)
+        // the posting on free hosting closes within 72 hours, matches the profile, and would be a popup: it is not
+        #expect(!found.offers.contains { $0.category == .opportunity })
+        #expect(found.offers.map(\.category) == [.digest])
+        #expect(lines.contains(RadarNote.standingLine))
+    }
+
+    /// A contest whose text asks for a fee comes after the clean one in the note, though it starts first; and the digest popup does not name it.
+    @Test func aDoubtfulContestComesLastAndTheDigestPopupDoesNotNameIt() async throws {
+        func ctf(_ id: Int, _ title: String, start: String, description: String) -> String {
+            #"{"id":\#(id),"title":"\#(title)","ctftime_url":"https://ctftime.org/event/\#(id)","start":"\#(start)","weight":25.5,"onsite":false,"format":"Jeopardy","restrictions":"Open","description":"\#(description)"}"#
+        }
+        let v = vault()
+        defer { try? FileManager.default.removeItem(at: v) }
+        try writeProfile(v, "- interests: robotics\n")
+        var seen: [String: Date] = [:]
+        for p in Programmes.all { seen[p.id] = date(8) }
+        let f = RadarFakes()
+        f.serve(ctfURL, "[" + ctf(21, "Robotics clean CTF", start: "2026-10-26T14:00:00+00:00", description: "Hack some robots.") + ","
+                + ctf(22, "Robotics fee CTF", start: "2026-10-23T14:00:00+00:00", description: "A registration fee of $10 applies.") + "]")
+        let found = await run(v, f, seen: seen)
+        let lines = try #require(note(v)).components(separatedBy: "\n")
+        let clean = try #require(lines.firstIndex { $0.contains("Robotics clean CTF") })
+        let fee = try #require(lines.firstIndex { $0.contains("Robotics fee CTF") })
+        #expect(clean < fee, "the clean contest first, though the other starts earlier")
+        #expect(lines.first { $0.contains("⚠") } != nil)
+        let digest = try #require(found.offers.first { $0.category == .digest })
+        #expect(digest.title == "2 to look into" && digest.detail == "Robotics clean CTF")  // the doubtful one is not advertised
+        #expect(found.offers.first { $0.category == .contest }?.title == "Robotics clean CTF")  // and the popup is the clean one's
+        // when every pick is in doubt the popup says so
+        let g = RadarFakes()
+        g.serve(ctfURL, "[" + ctf(22, "Robotics fee CTF", start: "2026-10-23T14:00:00+00:00", description: "A registration fee of $10 applies.") + "]")
+        let alone = await run(v, g, at: date(8, day: 21), seen: seen)
+        let digest2 = try #require(alone.offers.first { $0.category == .digest })
+        #expect(digest2.detail == "Check the sources in the note: some need a closer look")
+        #expect(!alone.offers.contains { $0.category == .contest })  // a doubtful contest is not a popup of its own
+    }
+
+    /// A story behind a shortened link is doubtful: it is not one of the news the digest picks, a clean one is.
+    @Test func aDoubtfulStoryIsNotPickedForTheDigest() async throws {
+        let v = vault()
+        defer { try? FileManager.default.removeItem(at: v) }
+        try writeProfile(v, "- interests: robotics\n")
+        var seen: [String: Date] = [:]
+        for p in Programmes.all { seen[p.id] = date(8) }
+        let f = RadarFakes()
+        f.serve(topURL, "[101,102]")
+        f.serve(hnItem(101), story(101, "Robotics simulator tour", url: "https://bit.ly/3robosim", score: 900))
+        f.serve(hnItem(102), story(102, "Robotics arm teardown", url: "https://blog.example.com/arm", score: 50))
+        _ = await run(v, f, seen: seen)
+        let text = try #require(note(v))
+        #expect(text.contains("Robotics arm teardown") && !text.contains("Robotics simulator tour"), "\(text)")
+    }
+
+    @Test func aCleanPostingThatClosesSoonIsStillAPopup() async throws {
+        let v = vault()
+        defer { try? FileManager.default.removeItem(at: v) }
+        try writeProfile(v, "- interests: robotics\n- companies: greenhouse:acme\n")
+        let f = RadarFakes()
+        serveEverything(f)
+        let found = await run(v, f)
+        #expect(found.offers.contains { $0.category == .opportunity })  // the guard against the test above passing for the wrong reason
     }
 
     @Test func hostileTitlesAndLinksNeverBecomeLinksOrMarkup() async throws {

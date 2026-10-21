@@ -14,6 +14,8 @@
 //     conditions, `enabled`). There is no second scheduler for showing.
 //   - robo reads public pages. It never applies, signs in, pays or sends anything for you, and nothing from the profile leaves the Mac:
 //     a source only learns the Mac's address and which category, company or feed is watched.
+//   - every item goes through `SourceCheck` (offline: the address and the wording, no request): a clear scam never reaches the note, a doubtful
+//     one comes last with a ⚠ line and is never a popup of its own, a primary source is marked ✓ and a preprint "not peer reviewed".
 import AppKit
 import RoboCore
 import RoboSystem
@@ -117,18 +119,27 @@ enum Radar {
             return out
         }
 
-        let pool = found.items + Programmes.all
+        // The source check (SourceCheck, offline): an item with a strong scam signal is dropped (only its host is logged); a doubtful one stays
+        // for opportunities, after the clean ones and with its reasons in the note, but is never a popup of its own; doubtful news and papers
+        // are left out of the digest, where they would only take a slot.
+        let checked = (found.items + Programmes.all).map { ($0, SourceCheck.assess($0)) }
+        let unsafe = checked.filter { $0.1.hidden }
+        if !unsafe.isEmpty { log.notice("hid \(unsafe.count, privacy: .public) unsafe item(s) from: \(unsafe.map { $0.0.host }.joined(separator: ", "), privacy: .public)") }
+        let doubtful = Set(checked.filter { $0.1.level == .doubtful }.map { $0.0.id })
+        let pool = checked.filter { !$0.1.hidden }.map(\.0)
+        func cleanFirst(_ ranked: [Rank.Ranked]) -> [Rank.Ranked] { ranked.filter { !doubtful.contains($0.item.id) } + ranked.filter { doubtful.contains($0.item.id) } }
         let taken = Set(seen.keys)
         func fits(_ item: RadarItem) -> Bool { profile.eligibility(for: item) != .excluded }
-        let opportunities = Rank.rank(pool.filter { ($0.kind == .internship || $0.kind == .program) && fits($0) }, profile: profile, now: now)
-        let contests = Rank.rank(pool.filter { ($0.kind == .contest || $0.kind == .hackathon) && fits($0) }, profile: profile, now: now)
-        let digest = Rank.digest(items: pool, profile: profile, now: now, seen: taken)
+        let opportunities = cleanFirst(Rank.rank(pool.filter { ($0.kind == .internship || $0.kind == .program) && fits($0) }, profile: profile, now: now))
+        let contests = cleanFirst(Rank.rank(pool.filter { ($0.kind == .contest || $0.kind == .hackathon) && fits($0) }, profile: profile, now: now))
+        let digest = Rank.digest(items: pool.filter { !doubtful.contains($0.id) }, profile: profile, now: now, seen: taken)
         var picks = RadarNote.Picks()
         picks.papers = digest.filter { $0.kind == .paper }
         picks.news = digest.filter { $0.kind == .news }
         picks.opportunities = opportunities.filter { !taken.contains($0.item.id) }.prefix(5).map(\.item)
-        picks.contests = contests.filter { !taken.contains($0.item.id) }.prefix(3).map(\.item)
-            .sorted { ($0.deadline ?? .distantFuture) < ($1.deadline ?? .distantFuture) }  // the next one first
+        func soonest(_ a: RadarItem, _ b: RadarItem) -> Bool { (a.deadline ?? .distantFuture) < (b.deadline ?? .distantFuture) }
+        let three = contests.filter { !taken.contains($0.item.id) }.prefix(3).map(\.item)
+        picks.contests = three.filter { !doubtful.contains($0.id) }.sorted(by: soonest) + three.filter { doubtful.contains($0.id) }.sorted(by: soonest)  // the next one first, doubtful ones last
 
         let day = dayKey(now, zone: zone)
         let cal = calendar(zone)
@@ -138,7 +149,7 @@ enum Radar {
             do {
                 try FileManager.default.createDirectory(at: folder(vault), withIntermediateDirectories: true)
                 try Data(RadarNote.markdown(day: day, picks: picks, profile: profile, zone: zone).utf8).write(to: note, options: .atomic)
-                out.offers.append(RadarNote.digestOffer(picks, day: day, until: until))
+                out.offers.append(RadarNote.digestOffer(picks, day: day, until: until, flagged: doubtful))
                 out.seen = picks.all.map(\.id)
             } catch {
                 log.warning("could not write today's radar note")  // nothing counts as shown: tomorrow's run finds the same items
@@ -147,10 +158,10 @@ enum Radar {
         // The best matching contest to come, and a matching internship that closes within 72 hours, are nudges of their own (the
         // budget caps them). They come from everything ranked, shown in an earlier note or not: that is what the deadline is for.
         let soon = now.addingTimeInterval(opportunityHours * 3600)
-        if let best = contests.first(where: { !$0.matched.isEmpty && ($0.item.deadline ?? .distantPast) > now }) {
+        if let best = contests.first(where: { !$0.matched.isEmpty && ($0.item.deadline ?? .distantPast) > now && !doubtful.contains($0.item.id) }) {
             out.offers.append(RadarNote.offer(best.item, id: "radar-contest-", category: .contest, label: "starts", profile: profile, now: now, zone: zone, until: until))
         }
-        if let best = opportunities.first(where: { !$0.matched.isEmpty && ($0.item.deadline ?? .distantPast) > now && ($0.item.deadline ?? .distantFuture) <= soon }) {
+        if let best = opportunities.first(where: { !$0.matched.isEmpty && ($0.item.deadline ?? .distantPast) > now && ($0.item.deadline ?? .distantFuture) <= soon && !doubtful.contains($0.item.id) }) {
             out.offers.append(RadarNote.offer(best.item, id: "radar-opp-", category: .opportunity, label: "deadline", profile: profile, now: now, zone: zone, until: until))
         }
         return out
@@ -301,17 +312,29 @@ enum RadarNote {
         return out.joined(separator: "\n") + "\n"
     }
 
-    /// `[title](link) · where · why`; an opportunity adds its deadline ("none stated" is said), who it fits, and for an internship the
-    /// warning about an apply link that is neither the employer's nor a known job board.
+    /// `[title](link) · where · why · what is known of the source`; an opportunity adds its deadline ("none stated" is said) and who it fits;
+    /// anything the source check finds doubtful (for an internship also an apply link that is neither the employer's nor a known job board)
+    /// gets a ⚠ line for each of its first two reasons.
     static func lines(_ item: RadarItem, profile: Profile, zone: TimeZone) -> [String] {
-        var out = ["- [\(escape(item.title))](\(target(item.url))) · \(escape(item.host)) · \(escape(Rank.why(item: item, profile: profile)))"]
-        guard item.isOpportunity else { return out }
-        out.append("  - \(deadline(item, zone: zone))")
-        var fit = profile.eligibility(for: item).note
-        if let says = item.eligibility { fit += " (the listing says: \(says))" }
-        out.append("  - \(escape(fit))")
-        if item.kind == .internship, let warning = Feeds.applyWarning(for: item.url, company: item.company ?? "") { out.append("  - ⚠ \(escape(warning))") }
+        let verdict = SourceCheck.assess(item)
+        var head = "- [\(escape(item.title))](\(target(item.url))) · \(escape(item.host)) · \(escape(Rank.why(item: item, profile: profile)))"
+        if let known = trust(verdict) { head += " · " + escape(known) }
+        var out = [head]
+        if item.isOpportunity {
+            out.append("  - \(deadline(item, zone: zone))")
+            var fit = profile.eligibility(for: item).note
+            if let says = item.eligibility { fit += " (the listing says: \(says))" }
+            out.append("  - \(escape(fit))")
+        }
+        if verdict.warns { out += verdict.reasons.prefix(2).map { "  - ⚠ \(escape($0))" } }
         return out
+    }
+
+    /// What the source check knows that is good or worth knowing: "✓ a primary source · a preprint: not peer reviewed", "written by anyone: ...".
+    /// Nothing for a source that is doubtful (its ⚠ lines say it) or one about which there is nothing to say.
+    static func trust(_ v: SourceCheck.Verdict) -> String? {
+        guard !v.warns, !v.notes.isEmpty else { return nil }
+        return (v.level == .official ? "✓ " : "") + v.notes.joined(separator: " · ")
     }
 
     static func deadline(_ item: RadarItem, zone: TimeZone) -> String {
@@ -348,11 +371,14 @@ enum RadarNote {
 
     /// The digest as a nudge: how much there is to read (papers, news) and to look into (opportunities, contests), and the first two
     /// titles. A half with nothing in it is left out. Open shows the note.
-    static func digestOffer(_ picks: Picks, day: String, until: Date) -> RadarOffer {
+    /// The titles it names are those of items whose source is not in doubt (a popup does not advertise a page that needs checking); when
+    /// every pick is in doubt it says so instead.
+    static func digestOffer(_ picks: Picks, day: String, until: Date, flagged: Set<String> = []) -> RadarOffer {
         let reads = picks.papers.count + picks.news.count, looks = picks.opportunities.count + picks.contests.count
         let title = [reads > 0 ? "\(reads) to read" : nil, looks > 0 ? "\(looks) to look into" : nil].compactMap { $0 }.joined(separator: ", ")
+        let named = picks.all.filter { !flagged.contains($0.id) }.prefix(2).map { short($0.title, 70) }.joined(separator: " · ")
         return RadarOffer(id: "radar-digest-\(day)", category: .digest, title: title,
-                          detail: picks.all.prefix(2).map { short($0.title, 70) }.joined(separator: " · "), note: "Radar/\(day).md", until: until)
+                          detail: named.isEmpty && !picks.all.isEmpty ? "Check the sources in the note: some need a closer look" : named, note: "Radar/\(day).md", until: until)
     }
 
     /// One contest or internship as a nudge of its own: when it starts or closes, where, and whether it fits. Open opens its page.

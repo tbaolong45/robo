@@ -215,6 +215,37 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   cost per day, unattended 20-minute runs, `robo setup` installing the skill. The guarantees on the agent side are the skill's Pitfalls
   (never open quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the denied asks; each
   skill rule is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
+- **Source check (Swift only, 2026-10-21, user request: "sources validation and verification - prevent the robo from providing the users
+  with some scams or unreliable stuffs")**. `RoboCore/SourceCheck.swift` is pure and OFFLINE (the user chose "offline checks only"; a daily
+  phishing-domain list was offered and declined, measured recall below is why it may be asked again): `assess(item)` for radar items,
+  `assess(url:words:)` and `linkNotice` for links. Levels official < ordinary < doubtful < scam; any "hard" flag = scam (a `name@`, a numeric
+  host, mixed-script or all-lookalike letters, a brand's name before another domain or beside a login word, a brand typo with a digit/`rn`, link
+  words naming another site, wording that asks for ID/gift cards/a chat-app interview/"guaranteed" income); a sum of weaker flags (>= 2, or >= 1
+  for an opportunity) = doubtful. Policy: `Radar.run` drops scams (logs only the host), puts doubtful items after clean ones with up to two ⚠
+  lines, never makes them a popup, and leaves doubtful news/papers out of the digest; the note marks `✓ a primary source`, `the employer's own
+  site`, `a preprint: not peer reviewed`, `written by anyone`; `BoxTextView.alertText` adds the verdict to the link alert ("Open anyway",
+  Cancel stays the default). The wording rules run only for opportunities (a news headline about gift-card scams must not hide), and a
+  denial in the same sentence ("we will never ask for your passport", "no application fee") cancels a match. **Real data found what hand-made
+  cases did not**, so after ANY rule or list change re-run it: a throwaway test that reads `Feeds.simplify(listings.json)` (the 2,000+ real
+  internship postings from the SimplifyJobs file the radar already downloads), the Tranco top list, Hacker News story links and the OpenPhish
+  feed (download them into a scratch folder; they are strings to parse, never visit). First version: 11 real NVIDIA/Adobe postings hidden as
+  "scams" (a company name before `myworkdayjobs.com` is how those boards work: brand-in-subdomain is skipped on `boards`), 13.5% of
+  internships doubtful (Oracle/Taleo hosts missing from `boards`; the company's own domain in forms like `datadoghq.com`, `itw.com`,
+  `towerresearch` now matches in `nameMatches`), and ~40 brand-owned domains (`google.org`, `microsoft.net`) doubtful (a brand's name alone
+  on another domain is only weight 1). Final (2026-10-21, after two review rounds with a red team of ~600 scam shapes and a hunter of ~1,000 legitimate
+  inputs): 0 of 20,000 popular domains hidden (40 doubtful, mostly shorteners and form sites on purpose), 0 of 296 Hacker News links hidden (1
+  doubtful), 0 of 2,000 real postings hidden (11 doubtful, genuinely unrelated-looking domains), **236 of 300 live phishing URLs flagged (235
+  doubtful, 1 hidden)** and 76 of 2,000 URLhaus malware hosts doubtful: offline shape checks cannot condemn a random page on free hosting, so this is a guard against
+  impersonation and offer scams, not a phishing filter. Lists (`primary`, `boards`, `brands` with their owners, `hosting`, `shorteners`,
+  `offPlatform`) are dated `SourceCheck.verified`; add a real brand domain to its `owned` set when a legitimate site is flagged. The agent's side
+  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); it reaches the live agent only at
+  the next `robo setup`. The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
+  innocent-looking domain, scams in other languages, and a company name taken from the feed (it never vouches; a match is only a note) pass; the
+  micro-sign homograph `µtorrent.com` is hidden as a look-alike (3 of ~1,000 legitimate inputs in the hunter run were hidden, that one among them).
+  The main safeguards were mutation-checked on 2026-10-21 (about 30 mutants of `SourceCheck` and the Radar/alert wiring; each failed a test).
+  **Not verified**: a live radar run and the alert on the installed app, a real
+  scam link in a reply, whether the agent follows the new SOUL rules. The `KeyboardTests`/`EditKeyTests` suites (10 issues, all at `makeKeyOffscreen()`) failed
+  on 2026-10-21 while the screen was locked and had passed earlier that day; unlock the Mac before running them.
 - **Reminder ladder (`Reminders`, 2026-10-21)**: deadline T-5 d (`days5`, added at the user's request), T-1 d, T-3 h; exam T-7 d, T-1 d, T-3 h; meeting T-30 min;
   opportunity T-3 d, T-1 d. The tightest due rung stands for the looser ones, so a deadline first seen with 4 days left gets ONE `days5` card; the
   card still says "new"/"moved" then, because `Nudges.candidate` asks whether the reminder `covered` the `newEvent` key (not whether its rung is

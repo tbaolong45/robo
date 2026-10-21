@@ -1200,6 +1200,26 @@ private extension MicroLabel {
         #expect(words == ["https://example.com/a", ""])
     }
 
+    /// The alert also says what the source check found (it needs no request, so the text is a pure function of the address and the words).
+    @Test func theLinkAlertSaysWhatTheSourceCheckFound() throws {
+        func text(_ link: String, _ words: String = "") -> (title: String, body: String, open: String) {
+            BoxTextView.alertText(for: URL(string: link)!, words: words)
+        }
+        let known = text("https://arxiv.org/abs/2410.01234", "the paper")
+        #expect(known.title == "Open this link?" && known.open == "Open")
+        #expect(known.body.hasPrefix("https://arxiv.org/abs/2410.01234\n\nThe link text says “the paper”.\n\n✓ A primary source (arxiv.org)."))
+        let plain = text("https://example.org/page")
+        #expect(plain.title == "Open this link?" && plain.open == "Open" && plain.body.contains("Not on Robo's list of known sources"))
+        let careful = text("https://bit.ly/3abc")
+        #expect(careful.title == "Open this link?" && careful.open == "Open anyway" && careful.body.contains("⚠ Be careful with this link.") && careful.body.contains("shortened"))
+        let scam = text("https://paypal.com.evil.xyz/login")
+        #expect(scam.title == "This link looks like a scam" && scam.open == "Open anyway" && scam.body.contains("⚠ This looks like a scam."))
+        // the classic: words that name one site on a link that goes to another
+        let mismatch = text("https://evil.example.xyz/collect", "paypal.com")
+        #expect(mismatch.title == "This link looks like a scam" && mismatch.body.contains("The link says “paypal.com” but goes to evil.example.xyz"))
+        #expect(!text("mailto:a@b.example").body.contains("Robo's list"))  // a mail address is not a website
+    }
+
     /// With no running app (every test) the default asks nothing and says no, so a test that forgets to replace it opens nothing.
     @Test func theDefaultAnswerWithoutARunningAppIsNo() throws {
         try #require(!NSApplication.shared.isRunning)
