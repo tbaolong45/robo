@@ -238,8 +238,8 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   doubtful, 1 hidden)** and 76 of 2,000 URLhaus malware hosts doubtful: offline shape checks cannot condemn a random page on free hosting, so this is a guard against
   impersonation and offer scams, not a phishing filter. Lists (`primary`, `boards`, `brands` with their owners, `hosting`, `shorteners`,
   `offPlatform`) are dated `SourceCheck.verified`; add a real brand domain to its `owned` set when a legitimate site is flagged. The agent's side
-  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); it reaches the live agent only at
-  the next `robo setup`. The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
+  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); `robo setup` put it in the live
+  profile on 2026-10-22 (only SOUL.md differed; approvals stayed `manual`; backup of the replaced files was kept outside the repo). The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
   innocent-looking domain, scams in other languages, and a company name taken from the feed (it never vouches; a match is only a note) pass; the
   micro-sign homograph `µtorrent.com` is hidden as a look-alike (3 of ~1,000 legitimate inputs in the hunter run were hidden, that one among them).
   The main safeguards were mutation-checked on 2026-10-21 (about 30 mutants of `SourceCheck` and the Radar/alert wiring; each failed a test).
