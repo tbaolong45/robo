@@ -178,6 +178,21 @@ def test_soul_claims_an_action_only_when_a_tool_result_shows_it():
     assert "only when a tool result in this run shows it" in soul
 
 
+def test_soul_asks_for_sources_and_names_the_scam_signs():
+    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    for phrase in ("## Sources and scams", "Prefer the primary or official page",
+                   "never give a link you did not open, and never make one up",
+                   "when sources disagree, say that instead of picking one",
+                   "I could not confirm this",
+                   "a request for money, a fee, gift cards or crypto",
+                   "moving the talk to WhatsApp or Telegram",
+                   "a shortened link, a look-alike of a known name, or a page on free hosting",
+                   "Do not recommend such an offer or open its links further",
+                   "point only to the employer's or organiser's own site or a known job board",
+                   "Never apply, pay, sign in or send the user's details for them"):
+        assert phrase in soul, f"SOUL.md lost '{phrase}'"
+
+
 @pytest.mark.parametrize(("name", "heading", "phrase"), [
     ("school-moodle", "Acting", "never start, continue or answer a quiz attempt"),
     ("study-quiz", "Procedure", "confidence 1-5 before you show the answer"),

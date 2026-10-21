@@ -474,18 +474,29 @@ final class BoxTextView: NSTextView {
     /// default button, so a stray key opens nothing. With no running app (a test) nothing is asked and the answer is no.
     static func askToOpen(_ url: URL, _ words: String) -> Bool {
         guard NSApplication.shared.isRunning else { return false }
-        let address = url.absoluteString
+        let text = alertText(for: url, words: words)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Open this link?"
-        alert.informativeText = address + (words.isEmpty || words == address ? "" : "\n\nThe link text says “\(words.prefix(120))”.")
+        alert.messageText = text.title
+        alert.informativeText = text.body
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: text.open)
         let front = Focus().other()  // an accessory app takes the activation to show the alert and gives it back when nothing opens
         NSApp.activate()
         let open = alert.runModal() == .alertSecondButtonReturn
         if !open { Focus().handBack(to: front) }
         return open
+    }
+
+    /// What the alert says: the full address, the words that showed it when they say something else, and what the source check
+    /// (`SourceCheck`, offline) found: a known source, a look-alike, a link whose words name another site, a shortened link... A link that
+    /// looks like a scam is named so, and its button says "Open anyway"; Cancel is still the default.
+    static func alertText(for url: URL, words: String) -> (title: String, body: String, open: String) {
+        let address = url.absoluteString
+        var body = address + (words.isEmpty || words == address ? "" : "\n\nThe link text says “\(words.prefix(120))”.")
+        let verdict = SourceCheck.assess(url: address, words: words)
+        if let notice = SourceCheck.linkNotice(url: address, words: words) { body += "\n\n" + notice }
+        return (verdict.level == .scam ? "This link looks like a scam" : "Open this link?", body, verdict.warns ? "Open anyway" : "Open")
     }
 
     /// NSTextView tracks the whole press-drag-release inside `mouseDown`, so the release (the last event the tracking loop took)
