@@ -25,7 +25,7 @@ final class RoboPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }  // Escape and Cmd-C reach it once a text view asks for the keys
     override var canBecomeMain: Bool { false }
-    /// The roamer decides where it may be (across displays, the menu bar line included), not AppKit.
+    /// The roamer decides where it may be (on the main display, the menu bar line included), not AppKit.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     override func cancelOperation(_ sender: Any?) { onEscape?() }
     override func becomeKey() {

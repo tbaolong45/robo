@@ -525,6 +525,24 @@ enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, li
         #expect(Nudges.candidate(first(make(.deadline, title: String(repeating: "x", count: 500))), now: date(9), zone: utc).title.count == 120)
     }
 
+    /// A deadline found (or moved by a later post) with under 5 days left has its 5-day rung due at once, and that one reminder stands
+    /// for the announcement: the card must still say "new" or "moved", and only the last hours drop it.
+    @Test func aNewOrMovedDeadlineIsStillCalledThatWhenTheFiveDayRungIsDueWithIt() {
+        func card(left: Double, changed: Bool = false, post: Bool = false) -> NudgeCandidate {
+            let item = AgendaItem(id: "d", title: "Report", kind: .deadline, when: date(9).addingTimeInterval(left), source: post ? .lms : .ics,
+                                  quote: post ? "due Friday" : nil, firstSeen: changed ? date(0, day: 1) : date(8), changed: changed)
+            let r = Reminders.due(items: [item], fired: [], now: date(9), zone: utc)[0]
+            return Nudges.candidate(r, now: date(9), zone: utc)
+        }
+        let day = 86_400.0
+        #expect(card(left: 3 * day).detail == "new in your calendar · Fri 09:00")  // the 5-day rung is due, and says new
+        #expect(card(left: 3 * day, changed: true).detail == "moved · Fri 09:00")
+        #expect(card(left: 3 * day, post: true).detail == "new · Fri 09:00\n“due Friday”\nfrom a post: check the date")
+        #expect(card(left: 3 * day, changed: true, post: true).detail.hasPrefix("moved · Fri 09:00\n"))
+        #expect(card(left: 2 * 3600).detail == "in 2 hours · 11:00" && card(left: 2 * 3600).urgent)  // the last hours just count the time
+        #expect(card(left: 6 * day, changed: true).detail == "moved · Mon 09:00")  // beyond 5 days it is the announcement rung itself
+    }
+
     @Test func theSnoozeLineIsReadFromTheNotesOnly() {
         func snooze(_ text: String, zone: TimeZone = utc) -> Date? { Nudges.snoozeUntil(in: text, zone: zone) }
         let notes = "# Study ledger\n\n## Notes\n- 2026-10-12 · Snooze Nudges Until 2026-10-26\n- 2026-10-01 · snooze nudges until 2026-10-05\n"

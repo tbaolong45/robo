@@ -1,5 +1,7 @@
 // Where the floating face goes: a pure, time-stepped wander along the screen edges.
-// Port of src/robo/roam.py (multi-screen version): no AppKit, time comes in as an argument.
+// Port of src/robo/roam.py (multi-screen version): no AppKit, time comes in as an argument. Unlike the Python tree, the
+// app gives it ONE screen (the main display; see `ScreenSpace.roamArea`), a drift ends on a wall of it and the pet
+// rebounds off that wall a little (`Roam.bounce`), since 2026-10-21 at the user's request.
 import Foundation
 
 public typealias Vec = SIMD2<Double>
@@ -16,10 +18,17 @@ public enum Roam {
     public static let speed = 40.0  // px/s average travel speed (ease-in-out peaks at 1.5x)
     public static let callSpeed = 240.0  // px/s: the walk to a corner when called; a drift's pace would take a minute
     public static let rest = 20.0...60.0  // s to rest between drifts
-    public static let margin = 160.0  // px: drift targets lie this close to the bottom, left or right edge
     public static let edge = 24.0  // px gap from the screen corner where it waits when called or asleep
     public static let hold = 600.0  // s to stay where the user dropped it
     public static let maxDT = 0.25  // s: a longer gap (a suspended laptop) counts as one capped frame
+    public static let bounceHeight = 16.0  // px: the scale of a rebound off a wall (the first hop reaches about 3/4 of it)
+    public static let bounceS = 0.6  // s a rebound lasts
+
+    /// How far (px) a rebound has pushed it back from the wall `t` seconds after it touched it: two hops, the second lower,
+    /// that end on the wall again. 0 before and after; never negative, so it never goes through the wall.
+    public static func bounce(_ t: Double) -> Double {
+        t >= 0 && t < bounceS ? bounceHeight * (1 - t / bounceS) * abs(sin(2 * .pi * t / bounceS)) : 0
+    }
 }
 
 /// A small seedable generator: `Roamer(seed:)` replays the same path, like Python's `random.Random`.
@@ -66,21 +75,21 @@ public func fit(_ pos: Vec, _ size: Vec, _ screens: [Rect]) -> Vec {
     return screens.map { clamp(pos, size, $0) }.min { dist($0, pos) < dist($1, pos) } ?? pos
 }
 
-/// A random top-left in the margin band along the bottom, left or right edge of one screen.
+/// A random top-left ON the bottom, left or right wall of one screen: a drift ends against a wall and rebounds off it.
 public func pickTarget<G: RandomNumberGenerator>(_ rng: inout G, _ screen: Rect, _ size: Vec) -> Vec {
     let right = screen.x + screen.w - size.x
     let bottom = screen.y + screen.h - size.y
     var x = uniform(screen.x, right, &rng)
     var y = uniform(screen.y, bottom, &rng)
     switch Int.random(in: 0..<3, using: &rng) {
-    case 0: y = uniform(bottom - Roam.margin, bottom, &rng)
-    case 1: x = uniform(screen.x, screen.x + Roam.margin, &rng)
-    default: x = uniform(right - Roam.margin, right, &rng)
+    case 0: y = bottom
+    case 1: x = screen.x
+    default: x = right
     }
     return clamp(Vec(x, y), size, screen)
 }
 
-/// Moves the window like a pet: rest, drift (to any screen), sleep in a corner, stay when needed.
+/// Moves the window like a pet: rest, drift (to a wall of its screen, where it rebounds a little), sleep in a corner, stay when needed.
 public final class Roamer {
     public enum Mode: String { case none = "", rest, drift, present, held, sleep, come }
 
@@ -96,6 +105,11 @@ public final class Roamer {
     var origin = Vec.zero
     var trip = 0.0
     var elapsed = 0.0
+    var bounceT = Double.infinity  // s since it touched a wall; infinity = not rebounding
+    var wall = Vec.zero  // unit vector pointing in from the wall it touched
+
+    /// True while it rebounds off a wall: the window keeps the quick timer for it.
+    public var bouncing: Bool { mode == .rest && bounceT < Roam.bounceS }
 
     public init(screens: [Rect], size: Vec, seed: UInt64? = nil, start: Vec? = nil) {
         precondition(!screens.isEmpty, "a Roamer needs at least one screen")
@@ -168,18 +182,46 @@ public final class Roamer {
             go(pickTarget(&rng, screens.randomElement(using: &rng)!, size))
             mode = .drift
         }
-        if mode == .drift && travel(dt) { startRest(now) }
+        if mode == .drift && travel(dt) {
+            startRest(now)
+            touchWall()
+        } else if mode == .rest {
+            rebound(dt)
+        }
     }
 
     private func startRest(_ now: Double) {
         mode = .rest
         restUntil = now + uniform(Roam.rest.lowerBound, Roam.rest.upperBound, &rng)
+        bounceT = .infinity  // a rebound that something cut short does not resume
     }
+
+    /// It stopped against a wall of its screen: start a small rebound off it (a corner pushes both ways at once).
+    private func touchWall() {
+        let s = home()
+        let n = Vec(pos.x <= s.x + 0.5 ? 1 : pos.x >= s.x + s.w - size.x - 0.5 ? -1 : 0,
+                    pos.y <= s.y + 0.5 ? 1 : pos.y >= s.y + s.h - size.y - 0.5 ? -1 : 0)
+        guard n != .zero else { return }
+        wall = n / dist(n, .zero)
+        bounceT = 0
+    }
+
+    /// Move by the change of `Roam.bounce` over this frame, not to an absolute spot: a resize or a new screen during the
+    /// 0.6 s keeps its place, and the changes add up to nothing, so it ends exactly where it stopped.
+    private func rebound(_ dt: Double) {
+        guard bouncing else { return }
+        let before = Roam.bounce(bounceT)
+        bounceT += dt
+        pos += wall * (Roam.bounce(bounceT) - before)
+    }
+
+    /// The screen most of the window is on.
+    private func home() -> Rect { screens.max { overlap(pos, size, $0) < overlap(pos, size, $1) }! }
 
     /// The four corners (top-left, top-right, bottom-left, bottom-right) of the screen it is on, `edge`
     /// in from each, so a walk to one never crosses to another screen.
     private func corners() -> [Vec] {
-        let s = screens.max { overlap(pos, size, $0) < overlap(pos, size, $1) }!
+        let s = home()
         let left = s.x + Roam.edge, top = s.y + Roam.edge
         let right = s.x + s.w - size.x - Roam.edge, bottom = s.y + s.h - size.y - Roam.edge
         return [Vec(left, top), Vec(right, top), Vec(left, bottom), Vec(right, bottom)].map { clamp($0, size, s) }

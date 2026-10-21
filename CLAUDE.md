@@ -197,7 +197,7 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   the user's browser); dates must exist, `posted` not after today nor over 400 days old, `due` not before the posted day nor over 2
   years after; text is one clean line (control and bidi characters removed); a quote is required; same course + title = one item, the later
   post wins; caps 60 items / 40 courses; dropped objects are counted in the log. Items are `AgendaItem(source: .lms, id lms:<course>:<title>)`
-  merged with the earlier ones (a scan reports only new posts), then the ordinary reminders (T-1 d, T-3 h) and `NudgeBudget` apply; the
+  merged with the earlier ones (a scan reports only new posts), then the ordinary reminders (T-5 d, T-1 d, T-3 h) and `NudgeBudget` apply; the
   card says "from a post: check the date" with the quote. **Heads-up (2026-10-20)**: a find is announced once at the next slot as "new ·
   <when>" (or "moved · ..." when a later post changed its date): `Reminders` gives `.lms` items the `newEvent` rung within
   `newHorizonPosts` = 30 days (the calendar feed keeps 7), for the day after it is first seen; then the usual ladder. Not done: a consent
@@ -215,6 +215,10 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   cost per day, unattended 20-minute runs, `robo setup` installing the skill. The guarantees on the agent side are the skill's Pitfalls
   (never open quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the denied asks; each
   skill rule is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
+- **Reminder ladder (`Reminders`, 2026-10-21)**: deadline T-5 d (`days5`, added at the user's request), T-1 d, T-3 h; exam T-7 d, T-1 d, T-3 h; meeting T-30 min;
+  opportunity T-3 d, T-1 d. The tightest due rung stands for the looser ones, so a deadline first seen with 4 days left gets ONE `days5` card; the
+  card still says "new"/"moved" then, because `Nudges.candidate` asks whether the reminder `covered` the `newEvent` key (not whether its rung is
+  `newEvent`), except in the last hours (`urgent`).
 - **Nudges (Swift only, 2026-10-20; the Python tree has none)**: robo shows what is coming up on its card. Pure parts in RoboCore
   (`ICS`, `Agenda`, `Reminders`, `NudgeBudget`), `RoboSystem/CalendarLinks.swift` + `NudgeFiles.swift`, the window's side in
   `RoboUI/Nudges.swift`, `NudgeView` in `Card.swift`. Sources: calendar links (Outlook "publish", Moodle export) fetched off the main
@@ -343,7 +347,17 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   window's top-left, which is the face's up to a constant offset; with a tall card the face parks a
   card-height under a *top* corner (the card needs room above it). Swift's resting tick is 500 ms: a
   call can lag 0.5 s.
-- **Several monitors** (`roam.fit`): the window must lie inside the *union* of the screens and may
+- **Swift app: the main display only (2026-10-21, user request: "just work in the main screen and bounce (slightly) when it
+  hits the edge")**. `ScreenSpace.roamArea` hands the `Roamer` the usable area of `displays.first` (the one with the menu bar) and
+  no other, so a drift never leaves it and a drag onto a second monitor stops at the main display's edge (`roamer.hold` ->
+  `fit`; the pure `Roamer`/`fit` still take a list of screens, as in the Python spec, with one in it). A drift now ends ON a wall
+  (`pickTarget`: the bottom, left or right wall; `Roam.margin` is gone), and then `Roam.bounce` plays: two shrinking hops
+  (`bounceHeight` 16 px, 0.6 s, first hop ~12 px) inward from the wall, applied as the *change* of the curve each frame so a resize or a
+  move of the window during it is kept, and cut short by a press/drop/call (`startRest` resets it). It is quicker than the 40 px/s
+  drift on purpose (`neverFasterThanTheSpeedLimit` skips its steps; `aDriftEndsOnAWallAndReboundsOffItBeforeSettling` bounds it);
+  `Roamer.bouncing` keeps the window's 30 Hz timer for it. Calls and naps still stop `Roam.edge` = 24 px in from a corner (no hop).
+  Not seen on the live Mac yet. The Python build still roams every screen.
+- **Several monitors, Python tree** (`roam.fit`): the window must lie inside the *union* of the screens and may
   straddle two that touch; a spot half over a dead corner between unequal monitors goes to the nearest
   single-screen clamp. Both drag paths must call `roamer.hold` on every move, or the 33 ms roam tick
   pulls the window back (`tests/test_app.py` pins it). Screens are re-read after

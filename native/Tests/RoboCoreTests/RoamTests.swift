@@ -15,14 +15,15 @@ private let peak = 1.5 * Roam.speed  // smoothstep ease-in-out peaks at 1.5x the
 private let rounding = 1.5  // px: integer output can add up to ~sqrt(2) to a step
 private let top = Vec(900, 0)  // far from the margin band, so the first drift is long
 
-private struct Sample { let t: Double; let pos: IVec }
+private struct Sample { let t: Double; let pos: IVec; var hop = false }  // hop: it was rebounding off a wall after this step
 
 /// Step `r` at `fps` for `seconds` after t0.
 private func run(_ r: Roamer, _ t0: Double, _ seconds: Double, asleep: Bool = false,
                  engaged: Bool = false, called: Bool = false, fps: Double = fps) -> [Sample] {
     (0..<Int(seconds * fps)).map { i in
         let t = t0 + Double(i + 1) / fps
-        return Sample(t: t, pos: r.step(now: t, asleep: asleep, engaged: engaged, called: called))
+        let pos = r.step(now: t, asleep: asleep, engaged: engaged, called: called)
+        return Sample(t: t, pos: pos, hop: r.bouncing)
     }
 }
 
@@ -138,7 +139,7 @@ func sleepGlidesToTheNearestCornerAndStays(start: Vec, corner: Vec) {
     #expect(Roam.rest.lowerBound <= rested && rested <= Roam.rest.upperBound + 2 / fps)
 }
 
-@Test func targetsLieInTheMarginBand() {
+@Test func targetsLieOnAWall() {
     for s in [screen, Rect(-1280, 200, 1280, 1024)] {
         var rng = SplitMix64(seed: 0)
         let cx = s.x + s.w / 2, cy = s.y + s.h / 2
@@ -147,18 +148,87 @@ func sleepGlidesToTheNearestCornerAndStays(start: Vec, corner: Vec) {
             let p = pickTarget(&rng, s, face)
             #expect(inside(p, face, s))
             let gaps = [p.x - s.x, s.x + s.w - p.x - face.x, s.y + s.h - p.y - face.y]
-            #expect(gaps.min()! <= Roam.margin)
+            #expect(gaps.min()! < 1e-9)  // against the left, the right or the bottom wall
             #expect(!(p.x <= cx && cx <= p.x + face.x && p.y <= cy && cy <= p.y + face.y))
-            for (i, g) in gaps.enumerated() where g <= Roam.margin { sides.insert(i) }
+            for (i, g) in gaps.enumerated() where g < 1e-9 { sides.insert(i) }
         }
         #expect(sides == [0, 1, 2])
     }
 }
 
+// MARK: rebounding off a wall
+
+@Test func theBounceIsTwoShrinkingHopsFromAndBackToTheWall() {
+    #expect([-1, 0, Roam.bounceS / 2, Roam.bounceS, 5].allSatisfy { abs(Roam.bounce($0)) < 1e-9 })
+    let hops = stride(from: 0.0, to: Roam.bounceS, by: 0.001).map { Roam.bounce($0) }
+    #expect(hops.allSatisfy { $0 >= 0 && $0 <= Roam.bounceHeight })  // it never goes through the wall
+    let first = hops[..<(hops.count / 2)].max()!, second = hops[(hops.count / 2)...].max()!
+    #expect(first > 8 && first < Roam.bounceHeight)  // slight
+    #expect(second > 0 && first > 2 * second)  // and each hop lower than the last
+}
+
+/// Drift until the pet has just stopped against a wall.
+private func arrived(_ r: Roamer, _ t0: Double = 0) -> Double { until(r, until(r, t0, .drift), .rest) }
+
+private func dot(_ a: Vec, _ b: Vec) -> Double { (a * b).sum() }
+
+@Test(arguments: [UInt64](1...8))
+func aDriftEndsOnAWallAndReboundsOffItBeforeSettling(seed: UInt64) {
+    let r = Roamer(screens: screens, size: face, seed: seed)
+    let t = arrived(r)
+    let wall = r.pos, inward = r.wall
+    #expect(wall.x == 0 || wall.x == 1800 || wall.y == 960)
+    #expect(r.bouncing && abs(dist(inward, .zero) - 1) < 1e-9)
+    let hops = run(r, t, Roam.bounceS + 0.2)
+    let path = hops.map { v($0.pos) }
+    let away = path.map { dot(inward, $0 - wall) }  // how far from the wall, along the way in
+    #expect(away.allSatisfy { $0 >= -rounding })  // never through it
+    #expect(away.max()! > 5 && away.max()! <= Roam.bounceHeight + rounding)  // a hop, and a slight one
+    let rounded = IVec(Int(wall.x.rounded(.toNearestOrEven)), Int(wall.y.rounded(.toNearestOrEven)))
+    #expect(hops.last?.pos == rounded && !r.bouncing && r.mode == .rest)  // and back on the wall to rest
+    #expect(path.allSatisfy { inside($0, face, screen) })
+    let quick = Roam.bounceHeight * (2 * .pi + 1) / Roam.bounceS  // the steepest part of the curve
+    for (a, b) in zip(hops, hops.dropFirst()) { #expect(dist(v(a.pos), v(b.pos)) <= quick * (b.t - a.t) + rounding) }
+    #expect(run(r, t + Roam.bounceS + 0.2, 5).allSatisfy { !$0.hop && $0.pos == hops.last?.pos })  // and then it is still
+}
+
+@Test func aPressMidReboundFreezesItAndTheReboundDoesNotResume() {
+    let r = Roamer(screens: screens, size: face, seed: 1)
+    let t = arrived(r)
+    _ = run(r, t, 0.2)  // in the air
+    let frozen = r.step(now: t + 0.2 + 1 / fps, asleep: false, engaged: true)
+    #expect(!r.bouncing)  // the window's quick timer stops with it
+    #expect(Set(run(r, t + 0.2 + 1 / fps, 2, engaged: true).map(\.pos)) == [frozen])
+    #expect(Set(run(r, t + 2.3, 3).map(\.pos)) == [frozen])  // let go: it rests where it was left and does not hop on
+}
+
+/// The app moves the window while it rests (it keeps the face in place when the card opens or closes): a rebound that
+/// is mid-hop then ends on the wall spot of the NEW place, not back where it touched the wall.
+@Test func aMoveDuringTheReboundIsKept() {
+    let r = Roamer(screens: screens, size: face, seed: 1)
+    let t = arrived(r)
+    _ = run(r, t, 0.2)
+    let middle = Vec(screen.w - face.x, screen.h - face.y) / 2
+    r.pos += (middle - r.pos) / dist(middle, r.pos) * 20  // 20 px toward the middle of the screen
+    let expected = r.pos - r.wall * Roam.bounce(r.bounceT)  // where the hop would have put it down
+    let last = run(r, t + 0.2, 1).last!.pos
+    #expect(dist(v(last), expected) <= rounding && !r.bouncing)
+}
+
+@Test func aDropOrACallNextToAWallDoesNotRebound() {
+    let r = Roamer(screens: screens, size: face, seed: 1)
+    r.hold(now: 0, pos: Vec(0, 500))  // dropped against the left wall; the 10 minutes pass and it rests there, still
+    #expect(Set(run(r, 0, Roam.hold + 10, fps: 4).map(\.pos)) == [IVec(0, 500)])
+    let c = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))
+    let corner = ivec(Vec(leftEdge, topEdge))  // Roam.edge in from both walls: a call stops short of them
+    #expect(run(c, 0, 12, called: true).last?.pos == corner)
+    #expect(Set(run(c, 12, 3, called: true).map(\.pos)) == [corner] && !c.bouncing)  // and nothing hops on arrival
+}
+
 @Test func neverFasterThanTheSpeedLimit() {
     let r = Roamer(screens: screens, size: face, seed: 6)
     let path = [Sample(t: 0, pos: r.step(now: 0, asleep: false, engaged: false))] + run(r, 0, 600)
-    for (a, b) in zip(path, path.dropFirst()) {
+    for (a, b) in zip(path, path.dropFirst()) where !a.hop && !b.hop {  // a rebound off a wall is quicker, and checked on its own
         #expect(dist(v(a.pos), v(b.pos)) <= peak * (b.t - a.t) + rounding)
     }
     #expect(Set(path.map(\.pos)).count > 100)

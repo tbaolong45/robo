@@ -21,7 +21,9 @@ import RoboVoice
     /// y = primaryHeight - (origin.y + height); the screen to the left gets a negative x and the shorter
     /// one starts lower than the primary's menu bar.
     @Test func visibleFramesBecomeTopLeftRects() async {
-        #expect(space.rects(userLayout) == [Rect(0, 25, 2560, 1345), Rect(-1800, 308, 1800, 1132)])
+        #expect(space.rect(mainDisplay.visible) == Rect(0, 25, 2560, 1345) && space.rect(builtInDisplay.visible) == Rect(-1800, 308, 1800, 1132))
+        // but robo roams on the main display alone
+        #expect(space.roamArea(userLayout) == [Rect(0, 25, 2560, 1345)] && space.roamArea([]).isEmpty)
         // the full frames: the built-in's top is at 271, as Quartz says
         #expect(space.rect(builtInDisplay.frame) == Rect(-1800, 271, 1800, 1169))
         #expect(space.rect(mainDisplay.frame) == Rect(0, 0, 2560, 1440))
@@ -67,19 +69,6 @@ import RoboVoice
             #expect(usable.x >= mine.x && usable.y >= mine.y && usable.x + usable.w <= mine.x + mine.w + 0.001
                     && usable.y + usable.h <= mine.y + mine.h + 0.001, "display \(id) usable area")
         }
-    }
-
-    /// The roamer on those screens: a window may straddle the seam where they touch, and one in the dead
-    /// corner (above the shorter display) is moved onto a single screen.
-    @Test func aWindowMayStraddleTheSeamButNotTheDeadCorner() async {
-        let screens = space.rects(userLayout)
-        let r = Roamer(screens: screens, size: Vec(348, 300), seed: 1, start: Vec(500, 600))
-        r.hold(now: 0, pos: Vec(-100, 500))  // half on each, where both exist
-        #expect(r.pos == Vec(-100, 500))
-        r.hold(now: 0, pos: Vec(-100, 100))  // left of x = 0 there is only air above y = 308
-        #expect(r.pos != Vec(-100, 100))
-        let inside = screens.filter { $0.x <= r.pos.x && r.pos.x + 348 <= $0.x + $0.w && $0.y <= r.pos.y && r.pos.y + 300 <= $0.y + $0.h }
-        #expect(inside.count == 1)
     }
 }
 
@@ -296,9 +285,9 @@ import RoboVoice
         #expect(w.roamer.mode == .held && w.roamer.pos == here && w.windowTopLeft == here)
     }
 
-    /// Dragging from the main display across the seam onto the built-in one: no snap-back, straddling is
-    /// fine, and it stays on the far display after the drop.
-    @Test func dragAcrossDisplaysHasNoSnapBack() async {
+    /// Dragging from the main display toward the built-in one beside it: robo follows the pointer to the edge of the main
+    /// display and stops there. No snap-back, no step on to the other display, and it stays at the edge after the drop.
+    @Test func aDragOntoAnotherDisplayStopsAtTheEdgeOfTheMainOne() async {
         let r = Rig()
         defer { r.close() }
         r.displays = userLayout
@@ -318,39 +307,16 @@ import RoboVoice
             #expect(r.window.roamer.pos == r.window.windowTopLeft)
         }
         r.window.faceMouse(.release)
-        #expect(zip(xs, xs.dropFirst()).allSatisfy { $1 < $0 })  // it followed the pointer all the way left
-        #expect(r.window.windowTopLeft.x < -300)  // onto the built-in display
+        #expect(xs.prefix(3) == [200, 100, 0])  // it followed the pointer left ...
+        #expect(xs.allSatisfy { $0 >= 0 } && xs.last == 0)  // ... and stopped at the main display's edge
         let at = r.window.windowTopLeft
         for _ in 0..<30 { r.window.roam() }
         #expect(r.window.windowTopLeft == at)
-        // and it was never outside the union of the two screens
-        let screens = r.space.rects(userLayout)
-        let w = r.frame.width, h = r.frame.height
-        let area = screens.reduce(0.0) { acc, s in
-            acc + max(0, min(at.x + w, s.x + s.w) - max(at.x, s.x)) * max(0, min(at.y + h, s.y + s.h) - max(at.y, s.y))
-        }
-        #expect(area >= w * h - 0.001)
+        let main = r.space.roamArea(userLayout)[0]
+        #expect(main.x <= at.x && at.x + r.frame.width <= main.x + main.w && main.y <= at.y && at.y + r.frame.height <= main.y + main.h)
     }
 
-    @Test func aWindowDraggedAcrossTheSeamMayStraddleTwoDisplays() async {
-        let r = Rig()
-        defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(300, 700))
-        r.window.move(to: r.window.roamer.pos)
-        let start = r.overFace
-        at(r, start)
-        r.window.faceMouse(.press)
-        at(r, CGPoint(x: start.x - 350, y: start.y))  // the window's right half is still on the main display
-        r.window.faceMouse(.drag)
-        let tl = r.window.windowTopLeft
-        #expect(tl.x < 0 && tl.x + r.frame.width > 0)  // straddles x = 0
-        #expect(tl.x == 300 - 350)  // exactly where the pointer put it
-        r.window.faceMouse(.release)
-    }
-
-    @Test func aDropInTheDeadCornerSnapsToOneDisplay() async {
+    @Test func aDropFarOffTheMainDisplayIsPulledToItsNearestCorner() async {
         let r = Rig()
         defer { r.close() }
         r.displays = userLayout
@@ -359,13 +325,9 @@ import RoboVoice
         at(r, here)
         r.window.faceMouse(.press)
         // far up and left: above the shorter built-in display, where no screen exists
-        at(r, CGPoint(x: here.x - 2000, y: here.y + 1200))
+        at(r, CGPoint(x: here.x - 2000, y: here.y + 1600))
         r.window.faceMouse(.drag)
-        let tl = r.window.windowTopLeft
-        let inside = r.space.rects(userLayout).filter {
-            $0.x <= tl.x && tl.x + r.frame.width <= $0.x + $0.w && $0.y <= tl.y && tl.y + r.frame.height <= $0.y + $0.h
-        }
-        #expect(inside.count == 1)
+        #expect(r.window.windowTopLeft == Vec(0, 25))  // the top-left of the main display's usable area, below the menu bar
         r.window.faceMouse(.release)
     }
 
@@ -409,84 +371,56 @@ import RoboVoice
 
     // MARK: the screens come and go
 
-    @Test func roamingFollowsTheMonitorsThatArePluggedIn() async {
+    @Test func aMonitorPluggedInIsNotAPlaceToRoamAndTheMainOneGoingTakesRoboToTheNextMain() async {
         let r = Rig()
         defer { r.close() }
-        let two = [Display(frame: CGRect(x: 0, y: 300, width: 800, height: 600), visible: CGRect(x: 0, y: 300, width: 800, height: 600)),
-                   Display(frame: CGRect(x: 800, y: 0, width: 1920, height: 1080), visible: CGRect(x: 800, y: 0, width: 1920, height: 1080))]
-        r.displays = [Display(frame: CGRect(x: 0, y: 0, width: 800, height: 600), visible: CGRect(x: 0, y: 0, width: 800, height: 600))]
+        let main = Display(frame: CGRect(x: 0, y: 0, width: 800, height: 600), visible: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let external = Display(frame: CGRect(x: 800, y: 0, width: 1920, height: 1080), visible: CGRect(x: 800, y: 0, width: 1920, height: 1080))
+        r.displays = [main]
         r.window.refit()
-        r.displays = [r.displays[0], two[1]]
+        let alone = r.window.roamer.screens
+        r.displays = [main, external]
         r.window.screensChanged()  // an external monitor was plugged in
-        #expect(await pump(r.window.roamer.screens.count == 2))
-        let wide = r.window.roamer.screens
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(1500, 400))
-        #expect(r.window.roamer.pos == Vec(1500, 400))  // a drop on the second screen stays there
+        _ = await pump(timeout: 0.1)
+        #expect(r.window.roamer.screens == alone && alone.count == 1)  // robo does not float on to it
+        r.window.roamer.hold(now: r.clock.now(), pos: Vec(1500, 400))  // a drop on it comes back to the main display's edge
+        #expect(r.window.roamer.pos.x + r.frame.width <= 800)
         r.displays = []
         r.window.screensChanged()  // a display asleep for a moment lists no screens
         _ = await pump(timeout: 0.1)
-        #expect(r.window.roamer.screens == wide)
-        r.displays = [r.displays.isEmpty ? Display(frame: CGRect(x: 0, y: 0, width: 800, height: 600), visible: CGRect(x: 0, y: 0, width: 800, height: 600)) : r.displays[0]]
-        r.window.screensChanged()  // and it was unplugged: robo comes back to the one left
-        #expect(await pump(r.window.roamer.screens.count == 1))
+        #expect(r.window.roamer.screens == alone)
+        r.displays = [external]
+        r.window.screensChanged()  // the main display was unplugged: the monitor left is the main one now, and robo goes there
+        #expect(await pump(r.window.roamer.screens == [Rect(800, 0, 1920, 1080)]))
         let s = r.window.roamer.screens[0]
         let pos = r.window.roamer.pos
         #expect(pos.x >= s.x && pos.x + r.frame.width <= s.x + s.w && pos.y + r.frame.height <= s.y + s.h)
         #expect(r.window.windowTopLeft == pos)  // and the window went there
     }
 
-    /// With the real displays of this Mac the roamer gets all of them, each as its usable area.
-    @Test func theRoamerKnowsEveryRealDisplay() async {
+    /// With the real displays of this Mac the roamer gets the main one only, as its usable area.
+    @Test func theRoamerKnowsOnlyTheMainRealDisplay() async {
         let real = Display.current()
         guard !real.isEmpty else { return }
         let r = Rig()
         defer { r.close() }
         r.displays = real
         r.window.refit()
-        #expect(r.window.roamer.screens == r.space.rects(real) && r.window.roamer.screens.count == NSScreen.screens.count)
+        #expect(r.window.roamer.screens == r.space.roamArea(real) && r.window.roamer.screens.count == 1)
         let tl = r.window.windowTopLeft
-        #expect(r.window.roamer.screens.contains { $0.x <= tl.x && tl.x + r.frame.width <= $0.x + $0.w })  // and it is on one
+        #expect(r.window.roamer.screens.contains { $0.x <= tl.x && tl.x + r.frame.width <= $0.x + $0.w })  // and it is on it
     }
 
-    @Test func aMonitorLeftOfThePrimaryTakesTheWindowWithNegativeX() async {
+    @Test func aMonitorLeftOfThePrimaryDoesNotTakeTheWindow() async {
         let r = Rig()
         defer { r.close() }
         r.displays = userLayout
         r.window.screensChanged()
-        #expect(await pump(r.window.roamer.screens.count == 2))
-        #expect(r.window.roamer.screens == [Rect(0, 25, 2560, 1345), Rect(-1800, 308, 1800, 1132)])
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-1000, 600))  // on the built-in display
+        #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))  // the main display only, not the built-in at negative x
+        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-1000, 600))  // a drop on the built-in display
         r.window.move(to: r.window.roamer.pos)
-        #expect(r.frame.origin == CGPoint(x: -1000, y: 1440 - 600 - 104))
-        #expect(r.window.windowTopLeft == Vec(-1000, 600))
-        #expect(r.space.display(at: r.window.faceCentre, in: userLayout) == builtInDisplay)
-    }
-
-    @Test func theCardOpensOnADisplayToTheLeftAndTheFaceStaysThere() async {
-        let r = Rig()
-        defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-900, 700))
-        r.window.move(to: r.window.roamer.pos)
-        let before = r.faceMiddle
-        r.window.open()
-        #expect(abs(r.faceMiddle.x - before.x) < 1 && abs(r.faceMiddle.y - before.y) < 1)
-        #expect(r.frame.minX >= -1800 && r.frame.maxX <= 0)
-    }
-
-    @Test func anUnpluggedBuiltInBringsAWindowFromItBackToTheMainDisplay() async {
-        let r = Rig()
-        defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-900, 700))
-        r.window.move(to: r.window.roamer.pos)
-        r.displays = [mainDisplay]
-        r.window.refit()
-        let tl = r.window.windowTopLeft
-        #expect(tl.x >= 0 && tl.x + r.frame.width <= 2560)
-        #expect(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)])
+        #expect(r.window.windowTopLeft == Vec(0, 600) && r.frame.origin == CGPoint(x: 0, y: 1440 - 600 - 104))  // stops at the main display's left edge
+        #expect(r.space.display(at: r.window.faceCentre, in: userLayout) == mainDisplay)
     }
 
     @Test func aChangeOfThePrimaryHeightKeepsTheWindowWhereAppKitHasIt() async {
@@ -520,22 +454,16 @@ import RoboVoice
         defer { r.close() }
         r.displays = userLayout
         NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        #expect(await pump(r.window.roamer.screens.count == 2))
+        #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))
     }
 
     // MARK: the Type window
 
-    @Test func typeOpensItsOwnWindowOnTheFacesDisplayAndAsks() async {
+    @Test func typeOpensItsOwnWindowAndAsks() async {
         let r = Rig([.event(.runEnded(status: "completed", output: "ok"))])
         defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-900, 700))  // the face is on the built-in display
-        r.window.move(to: r.window.roamer.pos)
         r.window.typeText()
         let t = r.typers[0]
-        // beside robo, not on the primary: centred on the built-in display's usable area
-        #expect(abs(t.frame.midX - builtInDisplay.visible.midX) <= 1 && abs(t.frame.midY - builtInDisplay.visible.midY) <= 1)
         #expect(t.title == "Ask robo" && t.level == .floating && t.canBecomeKey)
         t.field.stringValue = "  what is 2+2  "
         t.ok()
@@ -543,6 +471,7 @@ import RoboVoice
         #expect(r.hermes.asked[0].text == "what is 2+2")
     }
 
+    /// Robo is on the main display, so the Type window is too, whatever else is plugged in.
     @Test func typeOnThePrimaryDisplayOpensThere() async {
         let r = Rig()
         defer { r.close() }
@@ -708,6 +637,39 @@ import RoboVoice
         w.roamer.hold(now: r.clock.now(), pos: w.roamer.pos)  // dropped by the user: nothing moves for 10 minutes
         w.roam()
         #expect(settled(RoboWindow.roamSlow))
+    }
+
+    /// A drift ends against a wall: the panel itself hops back from it and settles on it again, in smooth steps (the timer stays
+    /// quick for that), and only then does the timer rest.
+    @Test func aDriftEndsAgainstAWallWithASmallHopAndThenTheTimerRests() async {
+        let r = Rig()
+        defer { r.close() }
+        let w = r.win
+        w.roam()
+        r.clock.advance(Roam.rest.upperBound + 1)
+        w.roam()
+        #expect(w.roamer.mode == .drift)
+        var steps = 0
+        while w.roamer.mode == .drift && steps < 100_000 {
+            r.clock.advance(RoboWindow.roamFast)
+            w.roam()
+            steps += 1
+        }
+        #expect(w.roamer.mode == .rest && w.roamer.bouncing)
+        #expect(w.roamInterval == RoboWindow.roamFast)
+        let wall = w.windowTopLeft
+        var farthest = 0.0, moved = 0
+        while w.roamer.bouncing && moved < 100 {
+            r.clock.advance(RoboWindow.roamFast)
+            w.roam()
+            let d = w.windowTopLeft - wall
+            farthest = max(farthest, (d * d).sum().squareRoot())
+            moved += 1
+        }
+        #expect(farthest > 5 && farthest <= Roam.bounceHeight + 2)  // the window really moved, and only a little
+        r.clock.advance(RoboWindow.roamFast)
+        w.roam()
+        #expect(w.windowTopLeft == wall && w.roamInterval == RoboWindow.roamSlow)
     }
 
     @Test func aSleepingRoboWalksToItsBedAtFullSpeedThenTheTimerRests() async {

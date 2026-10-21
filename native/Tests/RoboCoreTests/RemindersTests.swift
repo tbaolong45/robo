@@ -54,10 +54,11 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
 
     /// (seconds before the due time, rungs already fired, the rung that is due).
     @Test(arguments: [
-        (90_000, [], nil), (86_401, [], nil), (86_400, [], .day), (50_000, [], .day), (50_000, [.day], nil), (10_801, [.day], nil),
-        (10_800, [.day], .hours3), (10_800, [], .hours3), (60, [], .hours3), (60, [.day, .hours3], nil), (1, [.hours3], nil), (0, [], nil), (-60, [], nil),
+        (6 * 86_400, [], nil), (5 * 86_400 + 1, [], nil), (5 * 86_400, [], .days5), (2 * 86_400, [], .days5), (2 * 86_400, [.days5], nil),
+        (86_401, [.days5], nil), (86_400, [.days5], .day), (86_400, [], .day), (50_000, [], .day), (50_000, [.day], nil), (10_801, [.days5, .day], nil),
+        (10_800, [.days5, .day], .hours3), (10_800, [], .hours3), (60, [], .hours3), (60, [.days5, .day, .hours3], nil), (1, [.hours3], nil), (0, [], nil), (-60, [], nil),
     ] as [(Int, [Reminder.Rung], Reminder.Rung?)])
-    func aDeadlineIsRemindedADayAndThreeHoursBefore(before: Int, fired: [Reminder.Rung], want: Reminder.Rung?) {
+    func aDeadlineIsRemindedFiveDaysADayAndThreeHoursBefore(before: Int, fired: [Reminder.Rung], want: Reminder.Rung?) {
         let i = item(.deadline)
         let r = due([i], fired: keys(i, fired), now: T.addingTimeInterval(-Double(before)))
         #expect(r.map(\.rung) == (want.map { [$0] } ?? []), "T-\(before)s fired \(fired)")
@@ -106,7 +107,7 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
 
     @Test func aReminderCarriesTheItemTheRungTheKeyAndWhatItCovers() throws {
         let i = item(.deadline)
-        let r = try #require(due([i], now: T.addingTimeInterval(-80_000)).first)  // 22 hours before
+        let r = try #require(due([i], fired: keys(i, [.days5]), now: T.addingTimeInterval(-80_000)).first)  // 22 hours before
         #expect(r.item == i && r.rung == .day && r.key == Reminders.key(i, .day) && r.covered == [r.key])
         #expect(!r.urgent)
     }
@@ -132,9 +133,9 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
 
     @Test func anItemFoundLateGetsOneReminderForTheTightestRungThatCoversTheLooserOnes() throws {
         let i = item(.deadline)
-        let r = try #require(due([i], now: T.addingTimeInterval(-2 * 3600)).first)  // 2 h left: T-1d and T-3h have both passed
+        let r = try #require(due([i], now: T.addingTimeInterval(-2 * 3600)).first)  // 2 h left: T-5d, T-1d and T-3h have all passed
         #expect(r.rung == .hours3 && r.urgent)
-        #expect(r.covered == [Reminders.key(i, .day), Reminders.key(i, .hours3)])
+        #expect(r.covered == [Reminders.key(i, .days5), Reminders.key(i, .day), Reminders.key(i, .hours3)])
         #expect(due([i], fired: Set(r.covered), now: T.addingTimeInterval(-3600)).isEmpty)
         #expect(due([i], fired: [r.key], now: T.addingTimeInterval(-3600)).isEmpty)  // the tight rung alone is enough: no looser one comes after it
     }
@@ -157,8 +158,9 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         let seen = replay([item(.exam)], from: T.addingTimeInterval(-9 * 86_400), to: T.addingTimeInterval(86_400))
         #expect(seen.map(\.rung) == [.week, .day, .hours3])
         #expect(seen.map(\.at) == [T.addingTimeInterval(-7 * 86_400), T.addingTimeInterval(-86_400), T.addingTimeInterval(-10_800)])
-        let deadline = replay([item(.deadline)], from: T.addingTimeInterval(-3 * 86_400), to: T.addingTimeInterval(86_400))
-        #expect(deadline.map(\.rung) == [.day, .hours3])
+        let deadline = replay([item(.deadline)], from: T.addingTimeInterval(-6 * 86_400), to: T.addingTimeInterval(86_400))
+        #expect(deadline.map(\.rung) == [.days5, .day, .hours3])
+        #expect(deadline.map(\.at) == [T.addingTimeInterval(-5 * 86_400), T.addingTimeInterval(-86_400), T.addingTimeInterval(-10_800)])
         let meeting = replay([item(.event)], from: T.addingTimeInterval(-86_400), to: T.addingTimeInterval(86_400))
         #expect(meeting.map(\.rung) == [.meeting30] && meeting.map(\.at) == [T.addingTimeInterval(-1800)])
         let opportunity = replay([item(.opportunity, source: .radar)], from: T.addingTimeInterval(-5 * 86_400), to: T.addingTimeInterval(86_400))
@@ -201,9 +203,11 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         let after = item(.deadline, T.addingTimeInterval(2 * 86_400), changed: true)
         #expect(due([before], fired: fired, now: T.addingTimeInterval(-60)).isEmpty)
         let seen = replay([after], from: T, to: T.addingTimeInterval(3 * 86_400), fired: fired)
-        // A moved item is announced at once ("changed"), then the ladder runs again for the new time.
-        #expect(seen.map(\.rung) == [.newEvent, .day, .hours3])
+        // A moved item is announced at once ("changed"), then the ladder runs again for the new time. Its 5-day rung is already
+        // due then (2 days left), so that one reminder stands for the announcement too.
+        #expect(seen.map(\.rung) == [.days5, .day, .hours3])
         #expect(seen.map(\.at) == [T, T.addingTimeInterval(86_400), T.addingTimeInterval(2 * 86_400 - 10_800)])
+        #expect(due([after], fired: fired, now: T).first?.covered.contains(Reminders.key(after, .newEvent)) == true)
     }
 
     // MARK: new or moved in the calendar
@@ -244,10 +248,13 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
 
     @Test func aNewDeadlineIsAnnouncedAndThenFollowsItsLadder() {
         let now = at(2026, 10, 20, 2)
-        let i = item(.deadline, now.addingTimeInterval(5 * 86_400), firstSeen: now)
-        let seen = replay([i], from: now, to: now.addingTimeInterval(6 * 86_400))
-        #expect(seen.map(\.rung) == [.newEvent, .day, .hours3])
-        #expect(seen[0].at == now)
+        let i = item(.deadline, now.addingTimeInterval(7 * 86_400), firstSeen: now)
+        let seen = replay([i], from: now, to: now.addingTimeInterval(8 * 86_400))
+        #expect(seen.map(\.rung) == [.newEvent, .days5, .day, .hours3])
+        #expect(seen[0].at == now && seen[1].at == now.addingTimeInterval(2 * 86_400))  // and the 5-day reminder comes 5 days before it is due
+        // found with 5 days or less left, the 5-day rung is due at once and stands for the announcement
+        let late = replay([item(.deadline, now.addingTimeInterval(4 * 86_400), id: "l", firstSeen: now)], from: now, to: now.addingTimeInterval(5 * 86_400))
+        #expect(late.map(\.rung) == [.days5, .day, .hours3] && late[0].at == now)
     }
 
     /// A deadline a teacher wrote in a post is news the moment the scan finds it, and posts give weeks of notice: a month, not a week.
@@ -255,13 +262,13 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         let now = at(2026, 10, 20, 2)
         let near = item(.deadline, now.addingTimeInterval(20 * 86_400), id: "near", source: .lms, firstSeen: now)
         let seen = replay([near], from: now, to: now.addingTimeInterval(21 * 86_400))
-        #expect(seen.map(\.rung) == [.newEvent, .day, .hours3] && seen[0].at == now)
+        #expect(seen.map(\.rung) == [.newEvent, .days5, .day, .hours3] && seen[0].at == now)
         let thirty = item(.deadline, now.addingTimeInterval(30 * 86_400), source: .lms, firstSeen: now)
         #expect(due([thirty], now: now).map(\.rung) == [.newEvent])
         #expect(due([item(.deadline, now.addingTimeInterval(30 * 86_400 + 1), source: .lms, firstSeen: now)], now: now).isEmpty)  // later
         // old news is not news, a moved date is (another post moved it)
-        #expect(due([item(.deadline, now.addingTimeInterval(5 * 86_400), source: .lms)], now: now).isEmpty)
-        #expect(due([item(.deadline, now.addingTimeInterval(5 * 86_400), source: .lms, changed: true)], now: now).map(\.rung) == [.newEvent])
+        #expect(due([item(.deadline, now.addingTimeInterval(6 * 86_400), source: .lms)], now: now).isEmpty)
+        #expect(due([item(.deadline, now.addingTimeInterval(6 * 86_400), source: .lms, changed: true)], now: now).map(\.rung) == [.newEvent])
     }
 
     @Test func aNewMeetingSoonerThanItsReminderIsOnlyTheReminder() throws {
@@ -273,11 +280,11 @@ private func replay(_ items: [AgendaItem], from: Date, to: Date, step: TimeInter
         #expect(due([i], fired: Set(r.covered), now: now.addingTimeInterval(60)).isEmpty)
     }
 
-    @Test func aNewDeadlineWithHoursLeftIsOneUrgentReminderCoveringTheAnnouncementAndTheDayRung() throws {
+    @Test func aNewDeadlineWithHoursLeftIsOneUrgentReminderCoveringTheAnnouncementAndTheLooserRungs() throws {
         let now = at(2026, 10, 20, 2)
         let i = item(.deadline, now.addingTimeInterval(2 * 3600), firstSeen: now)
         let r = try #require(due([i], now: now).first)
-        #expect(r.rung == .hours3 && r.covered.count == 3)
+        #expect(r.rung == .hours3 && r.covered.count == 4)
     }
 
     @Test func seedingTheFirstImportKeepsTheWeeksEventsQuietButNotTheirReminders() {
