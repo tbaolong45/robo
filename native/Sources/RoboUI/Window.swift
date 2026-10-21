@@ -123,7 +123,7 @@ final class RoboWindow {
             displays = [Display(frame: f, visible: f)]
         }
         space = ScreenSpace(displays)!
-        roamer = Roamer(screens: space.rects(displays), size: Vec(FaceView.size.width + 8, FaceView.size.height + 8))
+        roamer = Roamer(screens: space.roamArea(displays), size: Vec(FaceView.size.width + 8, FaceView.size.height + 8))
 
         bridge.window = self
         panel.title = "Robo"
@@ -243,12 +243,12 @@ final class RoboWindow {
         scheduleRoam()
     }
 
-    /// 30 steps a second only while something moves: walking, or a sleeper or a call on its way to a
-    /// corner. Resting, held (10 minutes after a drop) and asleep in its corner, nothing changes between
+    /// 30 steps a second only while something moves: walking, hopping off a wall, or a sleeper or a call on its
+    /// way to a corner. Resting, held (10 minutes after a drop) and asleep in its corner, nothing changes between
     /// two half seconds.
     func scheduleRoam() {
         let travelling = (roamer.mode == .sleep || roamer.mode == .come) && roamer.pos != roamer.goal
-        let moving = roamer.mode == .drift || travelling
+        let moving = roamer.mode == .drift || travelling || roamer.bouncing
         let wanted = moving ? RoboWindow.roamFast : RoboWindow.roamSlow
         guard wanted != roamInterval else { return }
         roamInterval = wanted
@@ -266,7 +266,7 @@ final class RoboWindow {
         // AppKit's origin is the primary display's: where the window is now, in the new arrangement
         roamer.pos = fresh.topLeft(of: panel.frame)
         space = fresh
-        roamer.setScreens(fresh.rects(displays))
+        roamer.setScreens(fresh.roamArea(displays))
         move(to: roamer.pos)
     }
 
@@ -286,8 +286,8 @@ final class RoboWindow {
             let d = here - start
             if dragged || abs(d.x) + abs(d.y) > RoboWindow.drag {
                 dragged = true
-                // hold on every move: else the roam tick pulls the window back to where it was, and a
-                // drop on another display would snap back to the old one
+                // hold on every move: else the roam tick pulls the window back to where it was; the hold also keeps it
+                // on the main display (a drag past its edge stops at the edge)
                 roamer.hold(now: now(), pos: here - grabAt)
                 move(to: roamer.pos)
             }

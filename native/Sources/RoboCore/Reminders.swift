@@ -1,8 +1,8 @@
 // Which reminder of an agenda item is due now. Pure: the clock and the set of keys already fired come in as arguments, and
 // the caller (the nudge tick) stores `fired`. The caller should use the wall clock, not a monotonic one that stops in sleep.
 //
-// The ladder, by kind: deadline T-1 day and T-3 h; exam T-7 days, T-1 day, T-3 h; event (a meeting that is not a class) T-30
-// min; opportunity T-3 days and T-1 day. "A day" is a calendar day in the user's zone (the same wall-clock time the day before,
+// The ladder, by kind: deadline T-5 days, T-1 day and T-3 h; exam T-7 days, T-1 day, T-3 h; event (a meeting that is not a class)
+// T-30 min; opportunity T-3 days and T-1 day. "A day" is a calendar day in the user's zone (the same wall-clock time the day before,
 // also across a DST change); the hours and minutes are absolute. Recurring items (classes) never remind, and nothing in the
 // past does. A new or moved item from the calendar feed gets one `newEvent` when it starts within a week, and so does a deadline
 // the LMS scan found in a post (within a month).
@@ -14,7 +14,7 @@
 import Foundation
 
 public struct Reminder: Equatable, Sendable {
-    public enum Rung: String, Sendable { case week, days3, day, hours3, meeting30, newEvent }
+    public enum Rung: String, Sendable { case week, days5, days3, day, hours3, meeting30, newEvent }
 
     public var item: AgendaItem
     public var rung: Rung
@@ -46,7 +46,7 @@ public enum Reminders {
     /// The rungs of a kind, the longest lead first.
     private static func ladder(_ kind: AgendaItem.Kind) -> [(rung: Reminder.Rung, lead: Lead)] {
         switch kind {
-        case .deadline: [(.day, .days(1)), (.hours3, .seconds(3 * 3600))]
+        case .deadline: [(.days5, .days(5)), (.day, .days(1)), (.hours3, .seconds(3 * 3600))]
         case .exam: [(.week, .days(7)), (.day, .days(1)), (.hours3, .seconds(3 * 3600))]
         case .event: [(.meeting30, .seconds(30 * 60))]
         case .opportunity: [(.days3, .days(3)), (.day, .days(1))]

@@ -204,18 +204,18 @@ import RoboSystem
         #expect((w.face.look?.x ?? 0) < 0)
     }
 
-    @Test func theLookUsesTheFaceWhereverItIsOnTheDisplays() async {
+    @Test func theLookUsesTheFaceWhereverItIsOnTheMainDisplay() async {
         let r = Rig()
         defer { r.close() }
         r.displays = userLayout
         r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(-900, 700))  // on the display to the left
+        r.window.roamer.hold(now: r.clock.now(), pos: Vec(900, 700))  // away from the corner, on the main display
         r.window.move(to: r.window.roamer.pos)
         let c = r.faceMiddle
         r.pointer = CGPoint(x: c.x - 400, y: c.y)  // left of the face
         r.window.tick()
         #expect((r.window.face.look?.x ?? 0) < -0.3)
-        r.pointer = CGPoint(x: c.x + 400, y: c.y)  // right of it: the other display, y-down maths agree
+        r.pointer = CGPoint(x: c.x + 400, y: c.y)  // right of it: the y-down maths agree
         r.window.tick()
         #expect((r.window.face.look?.x ?? 0) > 0.3)
         r.pointer = CGPoint(x: c.x, y: c.y + 400)  // above it on screen

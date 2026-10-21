@@ -94,10 +94,12 @@ enum Nudges {
         }
         var title = String(item.title.prefix(120))
         if let course = item.course, !title.localizedCaseInsensitiveContains(course) { title = "\(course) · \(title)" }
-        var detail = r.rung == .newEvent ? (item.changed ? "moved · " : "new in your calendar · ") + when : when
+        // A find or a move is still said to be one when a nearer rung (the 5 days, the day) is due with it; only the last hours just count the time.
+        let announces = !r.urgent && r.covered.contains(Reminders.key(item, .newEvent))
+        var detail = announces ? (item.changed ? "moved · " : "new in your calendar · ") + when : when
         // A date an AI read out of a post can be wrong: the card says so and shows the words it was read from.
         if item.source == .lms, let quote = item.quote {
-            let head = r.rung == .newEvent ? (item.changed ? "moved · " : "new · ") + when : when  // just found, or a later post moved it
+            let head = announces ? (item.changed ? "moved · " : "new · ") + when : when  // just found, or a later post moved it
             detail = "\(head)\n“\(quote)”\nfrom a post: check the date"
         }
         return NudgeCandidate(id: r.key, category: category, urgent: r.urgent, title: title, detail: detail, url: item.url, dueAt: item.when)

@@ -34,8 +34,10 @@ struct ScreenSpace: Equatable {
         Rect(r.origin.x, primaryHeight - (r.origin.y + r.height), r.width, r.height)
     }
 
-    /// The usable area of every display (below the menu bar, beside the Dock), for `Roamer.setScreens`.
-    func rects(_ displays: [Display]) -> [Rect] { displays.map { rect($0.visible) } }
+    /// Where robo may be, for `Roamer.setScreens`: the usable area (below the menu bar, beside the Dock) of the main display
+    /// and of no other. It does not float on to a second monitor, and a drag onto one is pulled back to the main display's edge
+    /// (the user's request, 2026-10-21). Empty only when there is no display at all.
+    func roamArea(_ displays: [Display]) -> [Rect] { displays.prefix(1).map { rect($0.visible) } }
 
     /// The top-left of a window frame, where the Roamer keeps the window.
     func topLeft(of frame: CGRect) -> Vec { Vec(frame.origin.x, primaryHeight - (frame.origin.y + frame.height)) }
