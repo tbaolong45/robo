@@ -45,11 +45,28 @@ public struct Profile: Equatable, Sendable {
     public var arxivCategories = ["cs.AI", "cs.LG"]
     public var companies: [Company] = []
     public var feeds: [String] = []
+    /// What to look up on GitHub (the `github` line); empty = your strongest interests. `none` on that line turns GitHub off.
+    public var github: [String] = []
+    public var githubOff = false
     public var exclude: [String] = []
     /// Words from items you marked "Not for me". Kept by the app in a local file, not in the note.
     public var dislikes: [String] = []
 
     public init() {}
+
+    /// GitHub allows 10 searches a minute without a key; a day's run asks for at most this many.
+    public static let githubSearches = 3
+
+    /// The words to search GitHub for: the `github` line, else the strongest interests (the order of the note breaks ties); none when
+    /// the line says `none`. These words are the one thing of the profile that leaves the Mac, in the URL of the search.
+    public var githubQueries: [String] {
+        if githubOff { return [] }
+        let order = interests.indices.sorted { interests[$0].weight != interests[$1].weight ? interests[$0].weight > interests[$1].weight : $0 < $1 }
+        let words = github.isEmpty ? order.prefix(Profile.githubSearches).map { interests[$0].text } : github
+        // Letters, digits, spaces and hyphens only: a word of the note cannot add a search qualifier (`user:`, `repo:`, `stars:`...).
+        let clean = words.map { String($0.filter { $0.isLetter || $0.isNumber || $0 == " " || $0 == "-" }).trimmingCharacters(in: .whitespaces) }
+        return Array(clean.filter { !$0.isEmpty }.prefix(Profile.githubSearches))
+    }
 
     // MARK: reading the note
 
@@ -77,6 +94,9 @@ public struct Profile: Equatable, Sendable {
             case "arxivcategories": p.arxivCategories = categories(value)
             case "companies": p.companies = companies(value)
             case "feeds": p.feeds = urls(value)
+            case "github":
+                p.githubOff = ["none", "off", "no"].contains(value.lowercased())
+                p.github = p.githubOff ? [] : Array(terms(value).map(\.text).prefix(Profile.githubSearches))
             case "exclude": p.exclude = words(value)
             default: break
             }
@@ -210,6 +230,10 @@ public struct Profile: Equatable, Sendable {
 
         > **feeds**: extra news feeds (RSS or Atom web addresses starting with https), separated by commas or spaces.
         - feeds:
+
+        > **github**: what to look up on GitHub for new popular repositories, separated by commas. Empty: your three strongest
+        > interests. Write none to turn GitHub off. GitHub sees these words and your internet address, nothing else.
+        - github:
 
         > **exclude**: words you never want to see, separated by commas. Items that contain one are left out.
         - exclude:

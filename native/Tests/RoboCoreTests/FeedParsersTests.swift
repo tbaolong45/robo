@@ -442,6 +442,80 @@ private let codeforcesJSON = #"""
 
 // MARK: internships
 
+// MARK: announcements of labs, and GitHub repositories
+
+/// A search answer as `api.github.com` gave it on 2026-10-23 (three of its ten repositories, cut to the fields robo reads).
+private let githubJSON = #"""
+{"total_count":26,"incomplete_results":false,"items":[
+ {"full_name":"RegeneratusLabs/physical-hermes","description":"Physical Hermes - Give your Hermes Agent a body.","stargazers_count":81,"created_at":"2026-10-18T09:21:40Z","topics":[],"language":null,"fork":false,"archived":false,"private":false},
+ {"full_name":"zigansh1n/imnotarobot","description":"I am not a robot - a captcha solver for macOS.","stargazers_count":50,"created_at":"2026-10-19T00:56:29Z","topics":["captcha","gemini","ocr"],"language":"Python","fork":false,"archived":false,"private":false},
+ {"full_name":"Shimingyi/awesome-animation-datasets","description":"Every motion dataset in one place.","stargazers_count":41,"created_at":"2026-10-19T10:00:52Z","topics":["robotics","threejs"],"language":"Python","fork":false,"archived":false,"private":false}]}
+"""#
+
+@Suite struct AnnouncementParserTests {
+    @Test func aLabsBlogIsReadAsAnnouncementsWithMoreTrustThanAFeedTheUserAdded() {
+        let items = Feeds.news(data(mitRSS), source: "OpenAI", kind: .announcement)
+        holds(items)
+        #expect(items.count == 2 && items.allSatisfy { $0.kind == .announcement && $0.source == "OpenAI" && $0.trust == 0.8 })
+        #expect(Feeds.news(data(mitRSS), source: "MIT News").allSatisfy { $0.kind == .news && $0.trust == 0.6 })  // the default is unchanged
+        #expect(!items[0].isOpportunity && items[0].deadlineNote == nil)  // something to read, not to apply for
+    }
+
+    @Test func aLabsBlogThatLinksWithHttpIsReadOverHttpsButAFeedTheUserAddedStaysStrict() {
+        // BAIR's feed (2026-10-23): every link is http://bair.berkeley.edu/..., and all ten items were dropped for it
+        let feed = """
+        <?xml version="1.0"?><rss version="2.0"><channel><title>BAIR</title>
+        <item><title>A post</title><link>http://blog.example.edu/post</link><guid>http://blog.example.edu/post</guid><description>x</description>
+        <pubDate>Tue, 20 Oct 2026 06:00:00 GMT</pubDate></item></channel></rss>
+        """
+        #expect(Feeds.news(data(feed), source: "BAIR", kind: .announcement).map(\.url) == ["https://blog.example.edu/post"])
+        #expect(Feeds.news(data(feed), source: "mine").isEmpty)  // the user's own feed: an http link is still dropped
+        #expect(Feeds.news(data(feed.replacingOccurrences(of: "http://", with: "ftp://")), source: "BAIR", kind: .announcement).isEmpty)  // only http is upgraded
+    }
+}
+
+@Suite struct GitHubParserTests {
+    @Test func aSearchAnswerIsRepositoriesWithStarsTopicsAndTheirOwnLink() {
+        let items = Feeds.githubRepos(data(githubJSON))
+        holds(items)
+        #expect(items.map(\.id) == ["github:regeneratuslabs/physical-hermes", "github:zigansh1n/imnotarobot", "github:shimingyi/awesome-animation-datasets"])
+        let second = items[1]
+        #expect(second.kind == .repo && second.title == "zigansh1n/imnotarobot" && second.url == "https://github.com/zigansh1n/imnotarobot")
+        #expect(second.source == "GitHub" && second.popularity == 50 && second.snippet == "I am not a robot - a captcha solver for macOS.")
+        #expect(second.tags == ["captcha", "gemini", "ocr", "Python"] && second.published == at("2026-10-19T00:56:29Z") && second.trust == 0.5)
+        #expect(items[0].tags.isEmpty)  // no topics and no language (null)
+        #expect(!second.isOpportunity && second.deadlineNote == nil)
+    }
+
+    @Test func theLinkIsBuiltFromTheNameNeverTakenFromTheAnswer() {
+        let hostile = #"{"items":[{"full_name":"a/b","html_url":"https://evil.example/phish","url":"https://evil.example/x","description":"d"}]}"#
+        #expect(Feeds.githubRepos(data(hostile)).map(\.url) == ["https://github.com/a/b"])
+    }
+
+    @Test(arguments: [
+        #"{"items":[{"full_name":"no-slash"}]}"#, #"{"items":[{"full_name":"a/b/c"}]}"#, #"{"items":[{"full_name":"a b/c"}]}"#,
+        #"{"items":[{"full_name":"a/b?x=1"}]}"#, #"{"items":[{"full_name":"../b"}]}"#, #"{"items":[{"full_name":"a/b#c"}]}"#,
+        #"{"items":[{"full_name":"a/b@evil.example"}]}"#, #"{"items":[{"full_name":"a\\b/c"}]}"#, #"{"items":[{"full_name":5}]}"#,
+        #"{"items":[{"full_name":"a/b","fork":true}]}"#, #"{"items":[{"full_name":"a/b","archived":true}]}"#, #"{"items":[{"full_name":"a/b","private":true}]}"#,
+        #"{"items":"x"}"#, #"{"items":[1,null,"s",[]]}"#, #"[]"#, #"{}"#, "not json", "",
+    ])
+    func anEntryThatIsNotAPublicRepositoryIsDropped(json: String) {
+        #expect(Feeds.githubRepos(data(json)).isEmpty, "\(json)")
+    }
+
+    @Test func hostileTextInADescriptionIsPlainAndShort() {
+        let json = #"{"items":[{"full_name":"a/b","description":"<script>alert(1)</script>[x](javascript:alert(2)) \#(String(repeating: "y", count: 900))","topics":["<b>t</b>","‮x"],"stargazers_count":-5}]}"#
+        let items = Feeds.githubRepos(data(json))
+        holds(items)
+        #expect(items.count == 1 && items[0].snippet.count <= 300 && items[0].popularity == 0)
+    }
+
+    @Test func atMostAHundredAreRead() {
+        let many = (0..<150).map { #"{"full_name":"o/r\#($0)"}"# }.joined(separator: ",")
+        #expect(Feeds.githubRepos(data("{\"items\":[\(many)]}")).count == 100)
+    }
+}
+
 @Suite struct InternshipParserTests {
     @Test func simplifyKeepsActiveVisibleListingsWithAHttpsLink() {
         let items = Feeds.simplify(data(simplifyJSON))
@@ -748,7 +822,8 @@ private let codeforcesJSON = #"""
         }
         #expect(make(kind: .internship, deadline: at("2026-12-01T00:00:00Z"))?.deadlineNote == nil)
         #expect(make(kind: .internship, deadlineNote: "rolling")?.deadlineNote == "rolling")
-        #expect(RadarItem.Kind.allCases.map(\.rawValue) == ["paper", "news", "internship", "program", "contest", "hackathon"])
+        #expect(RadarItem.Kind.allCases.map(\.rawValue) == ["paper", "news", "announcement", "repo", "internship", "program", "contest", "hackathon"])
+        #expect(RadarItem.Kind.allCases.filter { !make(kind: $0)!.isOpportunity } == [.paper, .news, .announcement, .repo])
     }
 
     @Test func trustPopularityAndDatesAreMadeSane() {

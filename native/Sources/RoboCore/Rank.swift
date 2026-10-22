@@ -18,7 +18,6 @@ public enum Rank {
     static let relevanceGain = 2.0
     static let popularityCap = 500.0  // upvotes or points that count as "very popular"
     static let dislikePenalty = 0.15, dislikeMax = 0.45
-    static let exploreMin = 0.3
     static let day = 86_400.0
 
     private static let stop: Set<String> = [
@@ -68,12 +67,8 @@ public enum Rank {
 
     private struct Batch {
         var items: [RadarItem] = []
-        var relevance: [Double] = []  // gained cosine, 0 = no word in common with any interest
         var matched: [[String]] = []
         var score: [Double] = []
-        var popularity: [Double] = []
-        var recency: [Double?] = []
-        var penalty: [Double] = []
         var vectors: [[String: Double]] = []
 
         init(_ input: [RadarItem], profile: Profile, now: Date, seen: Set<String>) {
@@ -103,12 +98,8 @@ public enum Rank {
                 let off = min(dislikeMax, dislikePenalty * Double(dislikes.filter { has($0, in: set) }.count))
                 var s = relevanceWeight * rel + popularityWeight * pop + trustWeight * item.trust
                 s = rec.map { (s + recencyWeight * $0) } ?? s / (1 - recencyWeight)  // no recency: the other weights share it
-                relevance.append(rel)
                 matched.append(hits.map { profile.interests[$0].text })
                 score.append(max(0, s - off))
-                popularity.append(pop)
-                recency.append(rec)
-                penalty.append(off)
             }
         }
 
@@ -164,8 +155,9 @@ public enum Rank {
         return small.reduce(0) { $0 + $1.value * (large[$1.key] ?? 0) }
     }
 
-    /// 0...1, or nil when time does not matter (a programme). A paper's tau is 7 days, news 1 day, an internship posting 21
-    /// days; a contest or hackathon counts higher the sooner it starts (14 days), and not at all once it has. No date: 0.3.
+    /// 0...1, or nil when time does not matter (a programme). A paper's or a new repository's tau is 7 days, an announcement's 3,
+    /// news 1 day, an internship posting 21 days; a contest or hackathon counts higher the sooner it starts (14 days), and not at all
+    /// once it has. No date: 0.3.
     private static func recency(_ item: RadarItem, now: Date) -> Double? {
         switch item.kind {
         case .program:
@@ -174,9 +166,15 @@ public enum Rank {
             guard let start = item.deadline else { return 0.3 }
             let until = start.timeIntervalSince(now)
             return until < 0 ? 0 : exp(-until / (14 * day))
-        case .paper, .news, .internship:
+        case .paper, .news, .announcement, .repo, .internship:
             guard let published = item.published else { return 0.3 }
-            let tau = item.kind == .paper ? 7 * day : item.kind == .news ? day : 21 * day
+            let tau: Double
+            switch item.kind {
+            case .paper, .repo: tau = 7 * day
+            case .announcement: tau = 3 * day
+            case .news: tau = day
+            default: tau = 21 * day
+            }
             return exp(-max(0, now.timeIntervalSince(published)) / tau)
         }
     }
@@ -223,21 +221,22 @@ public enum Rank {
         return batch.pick(Array(batch.items.indices), limit).map(batch.ranked)
     }
 
-    /// The learning digest: up to 3 papers and 1 news item that match the profile (varied by MMR), plus one explore item that
-    /// matches none of it but is popular or fresh. In that order: papers, explore, news. Fewer when there is not enough; an
-    /// item whose id is in `seen` (or one that duplicates it) never comes back. Without any interests in the profile nothing
-    /// can match, so the papers and the news are simply the best by recency, popularity and trust.
+    /// An announcement older than this is not news any more (a lab's feed holds months of posts).
+    static let announcementDays = 14.0
+
+    /// The learning digest: only what matches an interest of the profile, the same test as the "matches: ..." line (all the words of
+    /// an interest are in the item; an item that matches none is never in it), varied by MMR within each kind: up to 3 papers, 2
+    /// announcements of the labs and companies (from the last 14 days), 1 news item and 2 code repositories, in that order. Fewer
+    /// when there is not enough; an item whose id is in `seen` (or one that duplicates it) never comes back. Without any interests
+    /// in the profile nothing can match, so the best by recency, popularity and trust are chosen instead.
     public static func digest(items: [RadarItem], profile: Profile, now: Date, seen: Set<String> = []) -> [RadarItem] {
-        let b = Batch(items.filter { $0.kind == .paper || $0.kind == .news }, profile: profile, now: now, seen: seen)
+        let recent = { (item: RadarItem) in item.kind != .announcement || now.timeIntervalSince(item.published ?? .distantPast) <= announcementDays * day }
+        let b = Batch(items.filter { RadarItem.reading.contains($0.kind) && recent($0) }, profile: profile, now: now, seen: seen)
         let personal = !profile.interests.isEmpty
-        func pool(_ kind: RadarItem.Kind) -> [Int] { b.items.indices.filter { b.items[$0].kind == kind && (!personal || b.relevance[$0] > 0) } }
-        let papers = b.pick(pool(.paper), 3), news = b.pick(pool(.news), 1)
-        let taken = Set(papers + news)
-        func surprise(_ i: Int) -> Double { 0.5 * b.popularity[i] + 0.35 * (b.recency[i] ?? 0.5) + 0.15 * b.items[i].trust }
-        let explore = b.items.indices.filter { !taken.contains($0) && b.relevance[$0] == 0 && b.penalty[$0] == 0 }
-            .max { surprise($0) != surprise($1) ? surprise($0) < surprise($1) : b.items[$0].id > b.items[$1].id }
-            .flatMap { surprise($0) >= exploreMin ? $0 : nil }
-        return (papers + (explore.map { [$0] } ?? []) + news).map { b.items[$0] }
+        func best(_ kind: RadarItem.Kind, _ count: Int) -> [Int] {
+            b.pick(b.items.indices.filter { b.items[$0].kind == kind && (!personal || !b.matched[$0].isEmpty) }, count)
+        }
+        return (best(.paper, 3) + best(.announcement, 2) + best(.news, 1) + best(.repo, 2)).map { b.items[$0] }
     }
 
     /// One templated sentence over the profile's own words: "matches: vision, robotics" (the three heaviest interests that

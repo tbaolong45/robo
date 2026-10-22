@@ -135,8 +135,12 @@ enum Radar {
         let digest = Rank.digest(items: pool.filter { !doubtful.contains($0.id) }, profile: profile, now: now, seen: taken)
         var picks = RadarNote.Picks()
         picks.papers = digest.filter { $0.kind == .paper }
+        picks.announcements = digest.filter { $0.kind == .announcement }
         picks.news = digest.filter { $0.kind == .news }
-        picks.opportunities = opportunities.filter { !taken.contains($0.item.id) }.prefix(5).map(\.item)
+        picks.repos = digest.filter { $0.kind == .repo }
+        // Only what matches an interest is shown: an internship that matches none would only fill the list. A programme and a contest are
+        // picked by what the user asked for (programmes, hackathons and contests), not by the words of their titles.
+        picks.opportunities = opportunities.filter { !taken.contains($0.item.id) && ($0.item.kind != .internship || !$0.matched.isEmpty) }.prefix(5).map(\.item)
         func soonest(_ a: RadarItem, _ b: RadarItem) -> Bool { (a.deadline ?? .distantFuture) < (b.deadline ?? .distantFuture) }
         let three = contests.filter { !taken.contains($0.item.id) }.prefix(3).map(\.item)
         picks.contests = three.filter { !doubtful.contains($0.id) }.sorted(by: soonest) + three.filter { doubtful.contains($0.id) }.sorted(by: soonest)  // the next one first, doubtful ones last
@@ -198,6 +202,8 @@ enum Radar {
         }
         add("Hugging Face", "https://huggingface.co/api/daily_papers", { Feeds.huggingFacePapers($0) })
         out.append(Job(name: "Hacker News", run: { try await hackerNews(fetch) }))
+        for (name, link) in RadarHosts.announcements { add(name, link, { Feeds.news($0, source: name, kind: .announcement) }) }
+        for query in profile.githubQueries { add("GitHub " + query, githubSearch(query, now: now, zone: zone), { Feeds.githubRepos($0) }) }
         for feed in profile.feeds {
             guard let host = RadarHosts.userHost(feed) else { continue }
             let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -215,6 +221,17 @@ enum Radar {
         add("CTFtime", "https://ctftime.org/api/v1/events/?limit=30", { Feeds.ctftime($0) })
         add("Codeforces", "https://codeforces.com/api/contest.list?gym=false", { Feeds.codeforces($0) })
         return out
+    }
+
+    /// The search for repositories made in the last week that have `query` in their name, description or topics, most starred first
+    /// (ten of them). `query` is the one thing of the profile that is in a URL; it has been cleaned to words (`Profile.githubQueries`).
+    static func githubSearch(_ query: String, now: Date, zone: TimeZone) -> String {
+        var url = URLComponents(string: "https://api.github.com/search/repositories")
+        url?.queryItems = [
+            URLQueryItem(name: "q", value: "\(query) in:name,description,topics created:>" + dayKey(now.addingTimeInterval(-7 * 86_400), zone: zone) + " stars:>10"),
+            URLQueryItem(name: "sort", value: "stars"), URLQueryItem(name: "order", value: "desc"), URLQueryItem(name: "per_page", value: "10"),
+        ]
+        return url?.string ?? ""
     }
 
     /// Hacker News: the top stories' ids, then each story (the ids are all the list gives), at most 6 requests at a time and 15 seconds
@@ -293,8 +310,9 @@ enum RadarNote {
     static let standingLine = "> Apply only through the employer's own page. Never pay to apply, and never send ID or bank details. Robo never applies for you."
 
     struct Picks {
-        var papers: [RadarItem] = [], news: [RadarItem] = [], opportunities: [RadarItem] = [], contests: [RadarItem] = []
-        var all: [RadarItem] { papers + news + opportunities + contests }
+        var papers: [RadarItem] = [], announcements: [RadarItem] = [], news: [RadarItem] = [], repos: [RadarItem] = []
+        var opportunities: [RadarItem] = [], contests: [RadarItem] = []
+        var all: [RadarItem] { papers + announcements + news + repos + opportunities + contests }
     }
 
     static func markdown(day: String, picks: Picks, profile: Profile, zone: TimeZone) -> String {
@@ -306,9 +324,21 @@ enum RadarNote {
             for item in items { out += lines(item, profile: profile, zone: zone) }
         }
         section("Papers", picks.papers)
+        section("Announcements", picks.announcements)
         section("News", picks.news)
+        section("Code", picks.repos)
         section("Opportunities", picks.opportunities, intro: standingLine)
         section("Contests", picks.contests)
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    /// The vault note of a day's new course materials (the LMS scan). The words come from a page an AI read, so they are escaped like any
+    /// title, and the note says so: a name can be misread.
+    static func materials(day: String, _ items: [LMSPosts.Material]) -> String {
+        var out = ["# New course materials · \(day)", "", "> Robo read these from your LMS course pages. A name can be misread: check the course page."]
+        for m in items {
+            out += ["", "- [\(escape(m.title))](\(target(m.url))) · \(escape(m.course)) · added \(m.posted)", "  - “\(escape(m.quote))”"]
+        }
         return out.joined(separator: "\n") + "\n"
     }
 
@@ -374,7 +404,8 @@ enum RadarNote {
     /// The titles it names are those of items whose source is not in doubt (a popup does not advertise a page that needs checking); when
     /// every pick is in doubt it says so instead.
     static func digestOffer(_ picks: Picks, day: String, until: Date, flagged: Set<String> = []) -> RadarOffer {
-        let reads = picks.papers.count + picks.news.count, looks = picks.opportunities.count + picks.contests.count
+        let reads = picks.papers.count + picks.announcements.count + picks.news.count
+        let looks = picks.repos.count + picks.opportunities.count + picks.contests.count
         let title = [reads > 0 ? "\(reads) to read" : nil, looks > 0 ? "\(looks) to look into" : nil].compactMap { $0 }.joined(separator: ", ")
         let named = picks.all.filter { !flagged.contains($0.id) }.prefix(2).map { short($0.title, 70) }.joined(separator: " · ")
         return RadarOffer(id: "radar-digest-\(day)", category: .digest, title: title,

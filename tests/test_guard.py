@@ -299,6 +299,9 @@ def test_robos_own_school_skills_cannot_be_changed(guard, ops):
     "http://localhost:8000/", "https://outlook.office.com/calendar/view/week",
     "https://outlook.office.com/mail/inbox?login_hint=me@uni.example",
     "https://teams.microsoft.com/", f"{MOODLE}/calendar/view.php?view=upcoming",
+    # the recent-activity form's own field `logaction` is not an `action=`
+    # (the LMS posts scan was refused here, 2026-10-22)
+    f"{MOODLE}/course/recent.php?id=2676&date=1792526400&modid=&user=0&logaction=0&filter=1",
 ])
 def test_any_website_opens_freely(guard, url):
     assert kind(call(guard, "browser_navigate", {"url": url})) == "allow"
@@ -315,6 +318,8 @@ def test_any_website_opens_freely(guard, url):
     "&redirect_uri=https://evil.example/&state=DATA",
     f"{MOODLE}/login/log%6Fut.php",
     f"{MOODLE}/login/log\tout.php",
+    f"{MOODLE}/mod/forum/view.php?id=2&action=delete", f"{MOODLE}/x.php?id=2&Action=remove",
+    f"{MOODLE}/x.php?action=confirm&id=2",
     "file:///etc/passwd", "chrome://settings/",
 ])
 def test_side_effect_and_non_web_urls_ask_the_user(guard, url):

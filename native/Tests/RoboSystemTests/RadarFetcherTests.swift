@@ -99,7 +99,15 @@ private func failure(_ f: RadarFetcher, _ url: URL) async -> RadarFetchError? {
         await withTemp { dir in
             let f = fetcher(dir) { _ in .body(Data("x".utf8)) }
             for host in RadarHosts.builtin { #expect((try? await f.fetch(URL(string: "https://\(host)/x")!)) == Data("x".utf8), "\(host)") }
-            #expect(RadarHosts.builtin.count == 9 && Stub.requests.count == 9)
+            // a new host is a decision: the list is spelled out here, so that adding one fails this test until it is added on purpose
+            #expect(RadarHosts.builtin == ["rss.arxiv.org", "huggingface.co", "hacker-news.firebaseio.com", "ctftime.org", "codeforces.com",
+                                           "raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com", "api.github.com",
+                                           "openai.com", "deepmind.google", "research.google", "developer.nvidia.com", "bair.berkeley.edu", "www.microsoft.com"])
+            #expect(Stub.requests.count == 16)
+            // every announcement feed is https, on a host of the list, and has a name
+            for (name, link) in RadarHosts.announcements {
+                #expect(link.hasPrefix("https://") && !name.isEmpty && URL(string: link)?.host().map(RadarHosts.builtin.contains) == true, "\(name)")
+            }
             Stub.requests = []
             for bad in ["http://rss.arxiv.org/atom/cs.CV",  // plain http, even for a listed host
                         "https://evil.example.com/atom/cs.CV", "https://rss.arxiv.org.evil.example.com/x", "https://evil.example.com/rss.arxiv.org",

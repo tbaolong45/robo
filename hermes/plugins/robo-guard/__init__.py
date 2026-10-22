@@ -65,7 +65,7 @@ DANGER = re.compile(  # a command plus its irreversible flag or subcommand
 V4A = re.compile(r"\*\*\*\s*(Update|Add|Delete|Move)\s+File:\s*(.+)")  # patch(mode="patch")
 
 BAD_URL = re.compile(
-    r"log_?out|sign_?out|compose|deeplink|/l/(?:chat|call|meetup|meeting)|sesskey=|action="
+    r"log_?out|sign_?out|compose|deeplink|/l/(?:chat|call|meetup|meeting)|sesskey=|[?&;#]action="
     r"|unenrol|subscribe|completion|/oauth2/|redirect_uri=|[?&](?:body|message|subject)=",
     re.IGNORECASE,
 )

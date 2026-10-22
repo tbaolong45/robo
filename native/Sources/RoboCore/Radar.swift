@@ -1,11 +1,15 @@
-// One thing the radar found: a paper, a headline, an internship, a programme, a contest or a hackathon. Pure data. The feed
+// One thing the radar found: a paper, a headline, an announcement of a lab or company, a code repository, an internship, a programme, a
+// contest or a hackathon. Pure data. The feed
 // parsers (FeedParsers.swift) are the trust boundary: an item only exists if it has a title and an https URL, and every
 // text field arrives as plain text (no tags, no control or bidi characters), capped in length. The text is meant to be
 // shown as plain text, never as HTML or Markdown. No network and no clock in this file.
 import Foundation
 
 public struct RadarItem: Codable, Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable, CaseIterable { case paper, news, internship, program, contest, hackathon }
+    public enum Kind: String, Codable, Sendable, CaseIterable { case paper, news, announcement, repo, internship, program, contest, hackathon }
+
+    /// Things to read or look at, which have no deadline to apply by (everything else is an opportunity).
+    static let reading: Set<Kind> = [.paper, .news, .announcement, .repo]
 
     /// Dedupe key: "arxiv:<id>", "doi:<doi>", a source's own stable id ("ctftime:3451"), else the normalised URL.
     public var id: String
@@ -40,7 +44,7 @@ public struct RadarItem: Codable, Equatable, Sendable {
         return h.hasPrefix("www.") ? String(h.dropFirst(4)) : h
     }
 
-    public var isOpportunity: Bool { kind != .paper && kind != .news }
+    public var isOpportunity: Bool { !Self.reading.contains(kind) }
 
     /// nil when there is no title or no https URL. Decoding (`Codable`) does not re-check: the cache is robo's own file.
     public init?(id: String? = nil, kind: Kind, title: String, url: String, source: String, snippet: String = "",
@@ -61,7 +65,7 @@ public struct RadarItem: Codable, Equatable, Sendable {
         self.published = Plain.sane(published)
         self.deadline = deadline
         let note = deadlineNote.map { Plain.text($0, max: 80) }.flatMap { $0.isEmpty ? nil : $0 }
-        self.deadlineNote = note ?? (deadline == nil && kind != .paper && kind != .news ? "none stated" : nil)
+        self.deadlineNote = note ?? (deadline == nil && !Self.reading.contains(kind) ? "none stated" : nil)
         self.popularity = popularity.flatMap { $0.isFinite ? max(0, $0) : nil }
         self.tags = Self.clean(tags, count: 8, max: 40)
         self.location = Self.clean(location, count: 6, max: 80)

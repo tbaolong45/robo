@@ -258,7 +258,7 @@ public enum SourceCheck {
 
     /// A radar item: its address, the employer (for the apply link), and for opportunities the words of the offer.
     public static func assess(_ item: RadarItem) -> Verdict {
-        let context: Context = item.kind == .internship ? .job : (item.kind == .paper || item.kind == .news ? .article : .event)
+        let context: Context = item.kind == .internship ? .job : (RadarItem.reading.contains(item.kind) ? .article : .event)
         var fields = [item.title, item.snippet, item.eligibility ?? "", item.company ?? "", item.sponsorship ?? ""]  // not deadlineNote: robo writes "none stated" there
         fields += item.tags + item.location
         let text = fields.filter { !$0.isEmpty }.joined(separator: " ")

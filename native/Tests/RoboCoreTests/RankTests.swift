@@ -1,5 +1,5 @@
 // The radar's ranking (pure): the tokenizer, golden orderings on a small hand-made corpus, the digest's shape, seen ids,
-// dedupe, MMR, the explore slot, exclusions and dislikes, and the templated "why". Time is passed in.
+// dedupe, MMR, nothing that matches no interest in the digest, exclusions and dislikes, and the templated "why". Time is passed in.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -278,21 +278,57 @@ private func ids(_ items: [RadarItem]) -> [String] { items.map(\.id) }
         news("n2", "Football results this weekend", "Scores from the league.", age: hour, pop: 300),
     ]
 
-    @Test func threePapersOneExploreOneNewsInThatOrder() {
+    @Test func threePapersThenOneNewsItemAndNothingThatMatchesNoInterest() {
         let digest = Rank.digest(items: corpus, profile: p, now: now)
-        #expect(digest.map(\.kind) == [.paper, .paper, .paper, .paper, .news])
-        #expect(Set(ids(digest).prefix(3)).isSubset(of: ["p1", "p2", "p3", "p4", "p5"]) && Set(ids(digest)).count == 5)
-        #expect(digest[3].id == "q" && digest[4].id == "n1")
-        // the first three match the profile, the explore item does not
-        for d in digest.prefix(3) { #expect(Rank.why(item: d, profile: p) == "matches: vision") }
-        #expect(Rank.why(item: digest[3], profile: p) == "outside your interests")
+        #expect(digest.map(\.kind) == [.paper, .paper, .paper, .news])
+        #expect(Set(ids(digest).prefix(3)).isSubset(of: ["p1", "p2", "p3", "p4", "p5"]) && ids(digest)[3] == "n1")
+        for d in digest { #expect(Rank.why(item: d, profile: p) == "matches: vision") }
+        // quantum (popular), football (popular) and the pottery paper match nothing: they used to fill an "explore" slot, and never do now
+        #expect(Set(ids(digest)).isDisjoint(with: ["q", "old", "n2"]))
+    }
+
+    @Test func announcementsAndRepositoriesHaveTheirOwnPlacesAfterThePapers() {
+        let extra = [
+            item("a1", "Vision model for robots", "A new computer vision model", kind: .announcement, trust: 0.8),
+            item("a2", "Vision benchmark released", "A benchmark for vision", kind: .announcement, age: 5 * hour, trust: 0.8),
+            item("a3", "Another vision update", "More vision work", kind: .announcement, age: 9 * hour, trust: 0.8),
+            item("a4", "A new office opens", "We are opening an office.", kind: .announcement, trust: 0.8),
+            item("r1", "acme/vision-toolkit", "A vision toolkit", kind: .repo, pop: 300, trust: 0.5),
+            item("r2", "acme/vision-bench", "A benchmark of vision models", kind: .repo, pop: 100, trust: 0.5),
+            item("r3", "acme/vision-demo", "A demo for vision", kind: .repo, pop: 50, trust: 0.5),
+            item("r4", "someone/todo-app", "A to-do list", kind: .repo, pop: 9_000, trust: 0.5),
+        ]
+        let digest = Rank.digest(items: corpus + extra, profile: p, now: now)
+        #expect(digest.map(\.kind) == [.paper, .paper, .paper, .announcement, .announcement, .news, .repo, .repo])  // 3, 2, 1, 2
+        #expect(Set(ids(digest)).isDisjoint(with: ["a4", "r4"]))  // an office and the most starred to-do list: nothing you asked for
+        #expect(Set(ids(digest).filter { $0.hasPrefix("a") }).isSubset(of: ["a1", "a2", "a3"]) && Set(ids(digest).filter { $0.hasPrefix("r") }).isSubset(of: ["r1", "r2", "r3"]))
+    }
+
+    @Test func anItemMustMatchAWholeInterestNotJustShareAWord() {
+        // the first real-data run (2026-10-23) picked a repository whose own line said "outside your interests": it shared one word
+        let q = profile(("computer vision", 1))
+        let shares = item("s", "The vision of a better kitchen", "A cooking blog about the vision of its founder.")
+        let matches = item("m", "Computer vision for kitchens", "Cameras in the kitchen.")
+        let repo = item("r", "someone/vision-quest", "A game about a quest", kind: .repo, pop: 500, trust: 0.5)
+        let digest = Rank.digest(items: [shares, matches, repo], profile: q, now: now)
+        #expect(ids(digest) == ["m"])
+        for d in digest { #expect(Rank.why(item: d, profile: q) != "outside your interests") }  // what is shown is what the line says it is
+    }
+
+    @Test func anAnnouncementIsNewsForTwoWeeksAndAnUndatedOneNever() {
+        let fresh = item("a-new", "Vision model for robots", "vision", kind: .announcement, age: 13 * day, trust: 0.8)
+        let stale = item("a-old", "Vision model for robots, the first one", "vision", kind: .announcement, age: 15 * day, trust: 0.8)
+        let undated = RadarItem(id: "a-nodate", kind: .announcement, title: "Vision tools", url: "https://example.org/n", source: "t", trust: 0.8)!
+        #expect(ids(Rank.digest(items: [fresh, stale, undated], profile: p, now: now)) == ["a-new"])
+        // a lab's feed holds months of posts; a paper, news and a repository have their own freshness and are not cut by this
+        #expect(ids(Rank.digest(items: [item("op", "Vision paper", "vision", age: 40 * day)], profile: p, now: now)) == ["op"])
     }
 
     @Test func fewerWhenThereIsNotEnough() {
         #expect(Rank.digest(items: [], profile: p, now: now).isEmpty)
-        #expect(ids(Rank.digest(items: [corpus[0], corpus[5]], profile: p, now: now)) == ["p1", "q"])
-        #expect(ids(Rank.digest(items: [corpus[0], corpus[1]], profile: p, now: now)).count == 2)  // two papers, nothing to explore
-        #expect(ids(Rank.digest(items: [corpus[5], corpus[6]], profile: p, now: now)) == ["q"])  // an old unpopular paper is no discovery
+        #expect(ids(Rank.digest(items: [corpus[0], corpus[5]], profile: p, now: now)) == ["p1"])  // the quantum paper matches nothing
+        #expect(ids(Rank.digest(items: [corpus[0], corpus[1]], profile: p, now: now)).count == 2)
+        #expect(Rank.digest(items: [corpus[5], corpus[6]], profile: p, now: now).isEmpty)  // nothing matches: no digest at all
         #expect(ids(Rank.digest(items: [corpus[7]], profile: p, now: now)) == ["n1"])
     }
 
@@ -320,13 +356,12 @@ private func ids(_ items: [RadarItem]) -> [String] { items.map(\.id) }
         #expect(!ids(digest).contains("p1") && !ids(digest).contains("p1-copy"))
     }
 
-    @Test func theExploreItemSkipsAnythingYouDislikeOrExclude() {
+    @Test func anExcludedWordKeepsAnItemOutOfTheDigest() {
         var q = p
-        q.dislikes = ["quantum"]
-        let digest = Rank.digest(items: corpus, profile: q, now: now)
-        #expect(!ids(digest).contains("q") && digest[3].id == "n2")  // the popular football story is next
-        q.exclude = ["football"]
-        #expect(!ids(Rank.digest(items: corpus, profile: q, now: now)).contains("n2"))
+        q.exclude = ["transformers"]
+        #expect(!ids(Rank.digest(items: corpus, profile: q, now: now)).contains("p1"))
+        q.exclude = ["vision"]  // every item that matches has it: what is left matches nothing
+        #expect(Rank.digest(items: corpus, profile: q, now: now).isEmpty)
     }
 
     @Test func withoutInterestsTheBestByFreshnessPopularityAndTrustAreChosen() {
@@ -335,9 +370,9 @@ private func ids(_ items: [RadarItem]) -> [String] { items.map(\.id) }
         #expect(Set(ids(digest)).count == digest.count)
     }
 
-    @Test func onlyPapersAndNewsGoIntoTheLearningDigest() {
+    @Test func onlyThingsToReadGoIntoTheLearningDigest() {
         let digest = Rank.digest(items: Programmes.all + corpus, profile: p, now: now)
-        #expect(digest.allSatisfy { $0.kind == .paper || $0.kind == .news } && digest.count == 5)
+        #expect(digest.allSatisfy { RadarItem.reading.contains($0.kind) } && digest.count == 4)
     }
 
     @Test func theDigestIsTheSameWhateverTheInputOrder() {

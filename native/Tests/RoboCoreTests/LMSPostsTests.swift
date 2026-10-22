@@ -253,3 +253,105 @@ private extension Result {
         #expect(LMSPosts.Step.list.key == "list" && LMSPosts.Step.scan(a, since: "x").key == a.url)
     }
 }
+
+private let PAGE = "https://\(HOST)/course/view.php?id=1234"
+
+/// The skill's own example of a material, then whatever `change` sets (a nil value is JSON null).
+private func material(_ change: [String: String?] = [:]) -> [String: Any] {
+    var o: [String: Any] = ["course": "MATH201", "post_url": PAGE, "posted": "2026-10-20", "title": "Lecture 5 slides", "due": NSNull(),
+                            "kind": "material", "quote": "Updated File: Lecture 5 slides"]
+    for (key, value) in change { o[key] = value ?? NSNull() }
+    return o
+}
+
+private func materials(_ list: [[String: Any]]) -> Result<LMSPosts.Parsed<LMSPosts.Material>, LMSPosts.Failure> {
+    LMSPosts.materials(in: reply(list), host: HOST, page: PAGE, today: NOW, zone: VN, now: NOW)
+}
+
+@Suite struct LMSMaterialsTests {
+    @Test func theSkillsOwnExampleIsAMaterialAndNeverAnAgendaItem() throws {
+        let list = [post(), material()]
+        let got = try materials(list).get()
+        #expect(got.dropped == 0)
+        #expect(got.values == [.init(id: "lms-material:math201:lecture-5-slides", course: "MATH201", title: "Lecture 5 slides", url: PAGE,
+                                     posted: "2026-10-20", quote: "Updated File: Lecture 5 slides", firstSeen: NOW)])
+        let items = try scan(list).get()  // the deadline stays an item, and the material is not counted as a dropped one
+        #expect(items.values.map(\.title) == ["Problem set 4 moved"] && items.dropped == 0)
+        let none = try materials([post()]).get()  // a reply of dated items only has no materials
+        #expect(none.values.isEmpty && none.dropped == 0)
+    }
+
+    @Test func theAddressIsThePostsWhenItPassesElseTheCoursePage() throws {
+        let forum = "https://\(HOST)/mod/forum/discuss.php?d=5521"
+        #expect(try materials([material(["post_url": forum])]).get().values.first?.url == forum)
+        for bad in [nil, "https://other.example.edu/course/view.php?id=1", "https://\(HOST)/mod/quiz/attempt.php?attempt=1",
+                    "https://\(HOST)/mod/resource/view.php?id=9", "http://\(HOST)/course/view.php?id=1", "not a link"] as [String?] {
+            #expect(try materials([material(["post_url": bad])]).get().values.first?.url == PAGE, "\(bad ?? "nil")")  // never the file's own page
+        }
+    }
+
+    @Test(arguments: [
+        ("due", "2026-10-23"),  // a material has no due date: a dated thing is a deadline
+        ("due", "2026-10-23T10:00"),
+        ("posted", "2026-10-21"),  // tomorrow
+        ("posted", "2026-10-20T10:00"),  // a day, not a moment
+        ("posted", "yesterday"),
+        ("posted", nil as String?),
+        ("quote", ""), ("title", " \n "), ("course", ""),
+    ])
+    func aMaterialThatBreaksARuleIsDropped(field: String, value: String?) throws {
+        let got = try materials([material([field: value])]).get()
+        #expect(got.values.isEmpty && got.dropped == 1, "\(field)=\(value ?? "nil")")
+    }
+
+    @Test func aMissingDueIsFineAndTheSameMaterialTwiceIsOneWithTheLaterDay() throws {
+        var bare = material()
+        bare.removeValue(forKey: "due")
+        #expect(try materials([bare]).get().values.count == 1)
+        let got = try materials([material(["posted": "2026-10-18", "quote": "Added File: Lecture 5 slides"]), material(["posted": "2026-10-20"])]).get()
+        #expect(got.values.count == 1 && got.values[0].posted == "2026-10-20" && got.dropped == 1)
+        let other = try materials([material(["posted": "2026-10-20", "title": "A"]), material(["posted": "2026-10-19", "title": "B"])]).get()
+        #expect(other.values.map(\.title) == ["A", "B"])  // newest first
+    }
+
+    @Test func textIsCleanedLikeEverywhereElse() throws {
+        let got = try materials([material(["title": "Lecture\u{202E} 5\n slides", "quote": String(repeating: "x", count: 300)])]).get()
+        #expect(got.values.first?.title == "Lecture 5 slides" && got.values.first?.quote.count == 120)
+    }
+}
+
+@Suite struct LMSIncompleteTests {
+    private func said(_ before: String, _ list: [[String: Any]] = []) -> String { reply(list, before: before) }
+
+    @Test(arguments: [
+        // the three real replies that were taken for "nothing new" or a whole list (2026-10-20 to 22)
+        "Announcements has no post since 28 Sept, and the recent-activity page showed no new forum posts. I couldn't load the recent-activity view back to 21 Oct because that request was blocked, so I didn't retry it. I read 0 posts.",
+        "I couldn't finish this scan. My click to open the Announcements forum was denied, so I stopped without trying another route.",
+        "Only one course URL was confirmed, because my click to open the next course was denied and I stopped there.",
+        "INCOMPLETE: the recent-activity page was refused, so I did not read it.",
+        "I couldn\u{2019}t open the course.",  // a typographic apostrophe
+        "I am unable to open the Announcements forum.", "The page would not load; I cannot tell if there is anything new.",
+    ])
+    func anAgentThatSaysItCouldNotReadEverythingHasNotScanned(sentence: String) {
+        #expect(LMSPosts.incomplete(said(sentence)), "\(sentence)")
+        #expect(LMSPosts.incomplete(sentence), "\(sentence)")  // and without any block
+        #expect(LMSPosts.incomplete("```json\n[]\n```\n" + sentence))  // the words after the block count too
+    }
+
+    @Test(arguments: [
+        "Read 31 posts.",
+        "Read 2 announcement posts (Sep 28 and Aug 21), both before 2026-10-19, so nothing qualifies.",
+        "Read the Announcements forum (2 discussions, newest 28 Sep) and the recent-activity page: no posts on or after 2026-10-19.",
+        "Announcements has no post since 28 Sept, and the recent-activity page showed no new forum posts. I read 0 posts.",
+        "Found 8 courses.", "Stopped at the 12 tool-call limit after 40 posts.", "",
+    ])
+    func aPlainAnswerIsNotIncomplete(sentence: String) {
+        #expect(!LMSPosts.incomplete(said(sentence)), "\(sentence)")
+    }
+
+    @Test func wordsInsideTheBlockAreThePostsAndNeverCount() {
+        let quoted = post(["quote": "Access denied is not an excuse; the form was blocked; I cannot extend it"])
+        #expect(!LMSPosts.incomplete(said("Read 3 posts.", [quoted])))
+        #expect(LMSPosts.incomplete(said("Read 3 posts, one page was blocked.", [quoted])))
+    }
+}

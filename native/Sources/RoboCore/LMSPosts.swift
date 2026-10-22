@@ -15,6 +15,23 @@ public enum LMSPosts {
         public init(name: String, url: String) { (self.name, self.url) = (name, url) }
     }
 
+    /// A thing teachers added to a course (slides, a reading, a notebook). It has no date, so it is not for the agenda: it is told once, in a
+    /// note of the vault, and the address is a page of the course (the material's own link is never opened by the agent).
+    public struct Material: Codable, Equatable, Sendable {
+        public var id: String
+        public var course: String
+        public var title: String
+        public var url: String
+        /// The day it was added or changed, `YYYY-MM-DD`.
+        public var posted: String
+        public var quote: String
+        public var firstSeen: Date
+
+        public init(id: String, course: String, title: String, url: String, posted: String, quote: String, firstSeen: Date) {
+            (self.id, self.course, self.title, self.url, self.posted, self.quote, self.firstSeen) = (id, course, title, url, posted, quote, firstSeen)
+        }
+    }
+
     /// What survived the checks, and how many objects (or list entries over the cap) did not.
     public struct Parsed<T: Sendable>: Sendable {
         public var values: [T]
@@ -104,6 +121,7 @@ public enum LMSPosts {
         return list(in: reply).map { entries in
             var best: [String: (posted: Date, item: AgendaItem)] = [:], dropped = max(0, entries.count - maxItems)
             for entry in entries.prefix(maxItems) {
+                if (entry as? [String: Any])?["kind"] as? String == "material" { continue }  // `materials(in:)` reads those
                 guard let o = entry as? [String: Any], let course = line(o["course"], max: 80), let title = line(o["title"], max: 120),
                       let quote = line(o["quote"], max: 120), let url = postLink(o["post_url"], host: host), let kind = kind(o["kind"]),
                       let posted = (o["posted"] as? String).flatMap({ stamp($0, cal) }), !posted.hasTime,
@@ -123,6 +141,47 @@ public enum LMSPosts {
             }
             return Parsed(values: best.values.map(\.item).sorted { ($0.when, $0.id) < ($1.when, $1.id) }, dropped: dropped)
         }
+    }
+
+    /// The learning materials of a `scan` reply: the objects whose `kind` is `material` (the others are `items`'). A material has no due
+    /// date (`due` must be null or absent) and a day it was added; its address is the post's when that passes `postLink`, else `page`, the
+    /// course page the run was sent to. Same course and title: one, the later day.
+    public static func materials(in reply: String, host: String, page: String, today: Date, zone: TimeZone, now: Date) -> Result<Parsed<Material>, Failure> {
+        let cal = calendar(zone), start = cal.startOfDay(for: today)
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: start) ?? start
+        let oldest = cal.date(byAdding: .day, value: -400, to: start) ?? start
+        let stampNow = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.down))
+        return list(in: reply).map { entries in
+            var best: [String: Material] = [:], dropped = 0
+            for entry in entries.prefix(maxItems) {
+                guard let o = entry as? [String: Any], o["kind"] as? String == "material" else { continue }
+                guard let course = line(o["course"], max: 80), let title = line(o["title"], max: 120), let quote = line(o["quote"], max: 120),
+                      o["due"] == nil || o["due"] is NSNull,
+                      let posted = o["posted"] as? String, let when = stamp(posted, cal), !when.hasTime,
+                      when.date < tomorrow, when.date >= oldest else {
+                    dropped += 1
+                    continue
+                }
+                let id = "lms-material:" + slug(course) + ":" + slug(title)
+                if let kept = best[id] {
+                    dropped += 1
+                    if kept.posted >= posted { continue }
+                }
+                best[id] = Material(id: id, course: course, title: title, url: postLink(o["post_url"], host: host) ?? page, posted: posted,
+                                    quote: quote, firstSeen: stampNow)
+            }
+            return Parsed(values: best.values.sorted { $0.posted != $1.posted ? $0.posted > $1.posted : $0.id < $1.id }, dropped: dropped)  // newest first
+        }
+    }
+
+    /// Does the agent say, outside the block, that it could not read everything? The skill says to answer without a block then; this is the
+    /// net for a reply that still has one (the run of 2026-10-22 said "that request was blocked" and answered `[]`, and `[]` counted as
+    /// "nothing new"). Only the words around the block count: a post can quote anything.
+    public static func incomplete(_ reply: String) -> Bool {
+        let parts = reply.components(separatedBy: "```")
+        let prose = (parts.count == 3 ? [parts[0], parts[2]] : parts).joined(separator: " ").lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        return ["incomplete", "blocked", "denied", "refused", "couldn't", "could not", "can't", "cannot", "unable to", "not able to",
+                "didn't finish", "did not finish"].contains { prose.contains($0) }
     }
 
     // MARK: the pieces
