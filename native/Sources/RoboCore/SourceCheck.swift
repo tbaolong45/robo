@@ -215,6 +215,19 @@ public enum SourceCheck {
         "paypal", "binance", "coinbase", "metamask", "docusign", "hsbc", "jpmorgan", "apple", "icloud", "revolut", "stripe",
         "uniswap", "opensea", "trustwallet", "ledger", "pancakeswap", "kucoin", "bybit", "wellsfargo", "bankofamerica", "citibank", "emiratesnbd", "adcb", "mashreq", "etisalat",
     ]
+    /// How a brand is written in a reason: the name people know it by (arXiv, PayPal, OpenAI), not the lower-case key of the table.
+    static func shown(_ brand: String) -> String {
+        let written = ["arxiv": "arXiv", "biorxiv": "bioRxiv", "medrxiv": "medRxiv", "openreview": "OpenReview", "ctftime": "CTFtime", "ieee": "IEEE",
+                       "neurips": "NeurIPS", "mbzuai": "MBZUAI", "paypal": "PayPal", "openai": "OpenAI", "chatgpt": "ChatGPT", "github": "GitHub",
+                       "linkedin": "LinkedIn", "whatsapp": "WhatsApp", "tiktok": "TikTok", "docusign": "DocuSign", "metamask": "MetaMask",
+                       "icloud": "iCloud", "onedrive": "OneDrive", "microsoftonline": "Microsoft", "office365": "Office 365", "microsoft365": "Microsoft 365",
+                       "huggingface": "Hugging Face", "hsbc": "HSBC", "jpmorgan": "JPMorgan", "kpmg": "KPMG", "pwc": "PwC", "adcb": "ADCB",
+                       "wellsfargo": "Wells Fargo", "bankofamerica": "Bank of America", "emiratesnbd": "Emirates NBD", "semanticscholar": "Semantic Scholar",
+                       "aclanthology": "ACL Anthology", "sciencedirect": "ScienceDirect", "bytedance": "ByteDance", "deepmind": "DeepMind",
+                       "opensea": "OpenSea", "trustwallet": "Trust Wallet", "pancakeswap": "PancakeSwap", "kucoin": "KuCoin",
+                       "nvidia": "NVIDIA"]
+        return written[brand] ?? brand.capitalized
+    }
     /// The sources this module vouches for: a hyphenated look-alike of one (arxiv-submit.org) is a warning by itself.
     static let sourceBrands: Set<String> = ["arxiv", "openreview", "biorxiv", "medrxiv", "ctftime", "codeforces", "neurips", "ieee", "springer", "sciencedirect", "semanticscholar", "aclanthology", "mbzuai"]
     /// The reader's own school: a look-alike of it is aimed at them, so no country ending and no benefit of the doubt for a hyphenated name.
@@ -386,7 +399,7 @@ public enum SourceCheck {
                     let tokens = folded.split(separator: "-").map(String.init)
                     foldedTokens += tokens
                     if let hit = tokens.first(where: { brands[$0] != nil }) {
-                        flag(5, "The address spells \(hit.capitalized)'s name with accented letters to imitate it.", hard: true)
+                        flag(5, "The address spells \(shown(hit))'s name with accented letters to imitate it.", hard: true)
                     }
                 }
             } else if !scripts.isEmpty {
@@ -396,12 +409,14 @@ public enum SourceCheck {
         }
 
         // a known name before another domain (login.microsoftonline.com.evil.xyz, arxiv.org.evil.net, mit.edu.evil.com)
+        var chainFlagged = false  // (the brand rule below would say the same thing again)
         if sub.count >= 2 {
             for start in 0..<(sub.count - 1) {
                 let chain = Array(sub[start...])
                 let chainReg = registrable(chain)
                 if allOwned.contains(chainReg) || primary.contains(chainReg) || boards.contains(chainReg) || tenants.contains(chainReg) || hosting.contains(chainReg) || institutional(chain) {
                     flag(5, "The address puts \(plain(chainReg, max: 40)) in front of another domain (\(plain(reg, max: 40))): a common trick.", hard: true)
+                    chainFlagged = true
                     break
                 }
             }
@@ -417,7 +432,7 @@ public enum SourceCheck {
         if !institution {
             for brand in brands.keys.sorted() {
                 guard let owned = brands[brand], !owns(brand: brand, owned: owned, host: host, reg: reg, ending: ending) else { continue }
-                let name = brand.capitalized
+                let name = shown(brand)
                 // paypal.com.tk: the brand and its usual ending as two labels, then a cheap country ending
                 let parts = reg.split(separator: ".").map(String.init)
                 if parts.count == 3, parts[0] == brand, ["com", "org", "net", "edu", "gov"].contains(parts[1]), openEndings.contains(ending) {
@@ -451,7 +466,7 @@ public enum SourceCheck {
                     else if ["github.io", "gitlab.io"].contains(reg) { continue }  // google.github.io: GitHub gives a name to its one owner
                     else { flag(2, "A page on a hosting service (\(plain(reg, max: 40))) using \(name)'s name: anyone could have made it.") }
                 } else if inSub {
-                    flag(5, "The address puts \(name)'s name in front of another domain (\(plain(reg, max: 40))): a common trick.", hard: true)
+                    if !chainFlagged { flag(5, "The address puts \(name)'s name in front of another domain (\(plain(reg, max: 40))): a common trick.", hard: true) }
                 } else if inName || glued || inside {
                     if credential || credentialWords.contains(rest) || credentialWords.contains(head) { flag(5, "The address uses \(name)'s name with a login-style word, but \(plain(reg, max: 40)) is not \(name)'s.", hard: true) }
                     else if job || jobWords.contains(rest) || jobWords.contains(head) { flag(2, "The address uses \(name)'s name with a jobs word, but \(plain(reg, max: 40)) is not \(name)'s.") }
@@ -523,7 +538,7 @@ public enum SourceCheck {
                 flag(known && !targetKnown ? 5 : 3, "The link says \u{201C}\(plain(shown, max: 40))\u{201D} but goes to \(shownHost).", hard: known && !targetKnown)
             }
         } else if let brand = mentionedBrand(words), !owns(brand: brand, owned: brands[brand] ?? [], host: host, reg: reg, ending: ending), !institution {
-            flag(3, "The link text mentions \(brand.capitalized) and a sign-in, but the address is not \(brand.capitalized)'s.")
+            flag(3, "The link text mentions \(shown(brand)) and a sign-in, but the address is not \(shown(brand))'s.")
         }
 
         // the wording of an offer
@@ -817,11 +832,11 @@ public enum SourceCheck {
             let swaps = skeletons(token)
             for brand in brands.keys.sorted() where brand.count >= 4 && token != brand {
                 if swaps.contains(brand) && (token.contains(where: \.isNumber) || token.contains("rn") || token.contains("vv")) {
-                    return Flag(weight: 5, hard: true, reason: "The address imitates \(brand.capitalized)'s name (\u{201C}\(plain(token, max: 30))\u{201D}).")
+                    return Flag(weight: 5, hard: true, reason: "The address imitates \(shown(brand))'s name (\u{201C}\(plain(token, max: 30))\u{201D}).")
                 }
                 // one letter off a name of six or more (paypall, gooogle): not iCloud's, whose neighbours (pcloud, qcloud) are real services
                 if brand.count >= 6, !wordBrands.contains(brand), brand != "icloud", token.count >= 6, oneEdit(token, brand) {
-                    return Flag(weight: 2, reason: "The address is one letter away from \(brand.capitalized)'s name (\u{201C}\(plain(token, max: 30))\u{201D}).")
+                    return Flag(weight: 2, reason: "The address is one letter away from \(shown(brand))'s name (\u{201C}\(plain(token, max: 30))\u{201D}).")
                 }
             }
         }

@@ -215,6 +215,18 @@ private func offer(_ kind: RadarItem.Kind = .internship, title: String = "Softwa
     }
 
     /// An OAuth hop between one company's own domains, and a link to a page of the same site, are not "passing through another address".
+    /// What the alert prints: a brand as people write it (arXiv, PayPal), and one reason once even when two rules found the same trick.
+    @Test func reasonsNameTheBrandAsPeopleWriteItAndDoNotRepeatThemselves() {
+        let look = SourceCheck.assess(url: "https://arxiv-submit.org/", words: "arXiv").reasons
+        #expect(look.contains { $0.contains("not arXiv's") } && !look.contains { $0.contains("Arxiv") }, "\(look)")
+        let pay = SourceCheck.assess(url: "https://paypal.com.evil-site.xyz/login", words: "").reasons
+        #expect(pay.contains { $0.contains("PayPal") } || pay.contains { $0.contains("paypal.com") }, "\(pay)")
+        #expect(!SourceCheck.assess(url: "https://paypal-login.evil-site.xyz/", words: "").reasons.contains { $0.contains("Paypal") })
+        let spoof = SourceCheck.assess(url: "https://login.microsoftonline.com.evil-site.xyz/common/oauth2", words: "Sign in to Microsoft").reasons
+        #expect(spoof.filter { $0.contains("in front of another domain") }.count == 1, "\(spoof)")
+        #expect(SourceCheck.assess(url: "https://login.microsoftonline.com.evil-site.xyz/common/oauth2", words: "").level == .scam)
+    }
+
     @Test func aRedirectBetweenTheSameOwnersDomainsIsNotAHop() {
         #expect(level("https://login.microsoftonline.com/common/oauth2/authorize?client_id=abc&redirect_uri=https%3A%2F%2Fteams.microsoft.com") == .ordinary)
         #expect(level("https://accounts.google.com/ServiceLogin?continue=https://mail.google.com/mail") == .ordinary)
