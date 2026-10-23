@@ -266,6 +266,15 @@ def test_soul_sends_drafts_plans_and_text_to_robo_notes():
     assert "robo-notes" in section(soul, "Drafts, plans and text")
 
 
+def test_the_persona_writes_maths_in_latex_for_the_chat():
+    soul = " ".join((HERMES / "SOUL.md").read_text(encoding="utf-8").split())
+    for phrase in ("write formulas in LaTeX",
+                   "`$x^2$` inline and `$$ ... $$` on a line of their own",
+                   "the chat typesets them",
+                   "Use `$` only for formulas, never for money or in code"):
+        assert phrase in soul, phrase
+
+
 def test_answers_stay_in_the_chat_and_a_file_is_written_only_on_request():
     """The chat window holds long answers, so no note is written on the agent's own initiative."""
     soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")

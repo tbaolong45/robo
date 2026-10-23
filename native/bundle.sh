@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build Robo.app: no Dock icon, a microphone usage text, onnxruntime embedded, code signed.
+# Build Robo.app: no Dock icon, a microphone usage text, onnxruntime and the resource bundles (math fonts) embedded, code signed.
 # Usage: ./bundle.sh [path/to/Robo.app]   (default build/Robo.app)
 # Signed ad hoc unless ROBO_SIGN_IDENTITY names a valid code-signing certificate in the keychain
 # search list. macOS ties the microphone and Screen Recording permissions to the signature, so an
@@ -14,6 +14,9 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
 cp "$bin/robo" "$app/Contents/MacOS/robo"
 cp -R "$bin/onnxruntime.framework" "$app/Contents/Frameworks/"
+# SwiftPM resource bundles (SwiftMath's math fonts, for the LaTeX in the chat) belong in Contents/Resources: that is where their accessor looks
+mkdir -p "$app/Contents/Resources"
+for resources in "$bin"/*.bundle; do [ -d "$resources" ] && cp -R "$resources" "$app/Contents/Resources/"; done
 install_name_tool -add_rpath @executable_path/../Frameworks "$app/Contents/MacOS/robo"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

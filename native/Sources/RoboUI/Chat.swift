@@ -148,8 +148,11 @@ extension RoboWindow {
         transcript.append(.you, "Explain gradient descent in a few lines, and show a tiny example.")
         transcript.append(.robo, "")
         transcript.seal("""
-            Gradient descent walks downhill on a loss: at each step it moves the parameters a little against the gradient, so the loss \
-            shrinks until the slope is flat. The **learning rate** is the step size: too big and it overshoots, too small and it crawls.
+            Gradient descent minimises a loss $L(w)$ by repeating one step:
+
+            $$w_{t+1} = w_t - \\eta \\, \\nabla L(w_t)$$
+
+            where $\\eta$ is the **learning rate**. For $L(w) = w^2$ the step is $w_{t+1} = (1 - 2\\eta)\\, w_t$, so it shrinks to zero when $0 < \\eta < 1$ and diverges when $\\eta > 1$.
 
             ```python
             w, lr = 5.0, 0.1
@@ -157,9 +160,8 @@ extension RoboWindow {
                 w -= lr * 2 * w   # d/dw of w**2
             ```
 
-            - Start anywhere, here `w = 5`.
-            - Each step multiplies `w` by `0.8`.
-            - After 50 steps `w` is about `7e-5`.
+            - Start anywhere, here $w_0 = 5$.
+            - Each step multiplies $w$ by $0.8$.
             """)
         transcript.append(.you, "thanks")
         transcript.note("Sorry, I didn't catch that.")

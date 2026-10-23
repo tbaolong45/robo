@@ -227,21 +227,21 @@ final class ChatView: NSView {
         bubble.set(look: BubbleView.look(of: turn))
         bubble.setFooter(turn.footer)
         if turn.open {
-            if force, let live { bubble.text.setContent(Markdown.attributed(live.markdown, theme: theme, ink: nil, hidden: live.hidden)) }
+            if force, let live { bubble.text.setContent(Markdown.attributed(live.markdown, theme: theme, ink: nil, hidden: live.hidden, mathWidth: textWidth)) }
             return
         }
         guard force || shown[turn.id] != turn.text else { return }
         shown[turn.id] = turn.text
         bubble.text.setContent(turn.role == .you
             ? Markdown.plain(turn.text, font: .systemFont(ofSize: CGFloat(theme.textPx)), colour: .labelColor)
-            : Markdown.attributed(turn.text, theme: theme, ink: nil))
+            : Markdown.attributed(turn.text, theme: theme, ink: nil, mathWidth: textWidth))
     }
 
     /// The text of the turn being written, as far as the typewriter has revealed it (its last word laid out but not yet painted).
     func setLive(markdown: String, hidden: Int) {
         live = (markdown, hidden)
         guard let turn = turns.last, turn.open, let bubble = bubbles[turn.id] else { return }
-        bubble.text.setContent(Markdown.attributed(markdown, theme: theme, ink: nil, hidden: hidden))
+        bubble.text.setContent(Markdown.attributed(markdown, theme: theme, ink: nil, hidden: hidden, mathWidth: textWidth))
         applyWorking()
         layoutRows()
     }

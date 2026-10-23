@@ -289,6 +289,14 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         #expect(try section(soulText(), "Drafts, plans and text").contains("robo-notes"))
     }
 
+    @Test func thePersonaWritesMathsInLatexForTheChat() throws {
+        let soul = try soulText().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        for phrase in ["write formulas in LaTeX", "`$x^2$` inline and `$$ ... $$` on a line of their own", "the chat typesets them",
+                       "Use `$` only for formulas, never for money or in code"] {
+            #expect(soul.contains(phrase), "\(phrase)")
+        }
+    }
+
     /// The chat window holds long answers, so no note is written on the agent's own initiative.
     @Test func answersStayInTheChatAndAFileIsWrittenOnlyOnRequest() throws {
         let soul = try soulText()

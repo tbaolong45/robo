@@ -187,6 +187,23 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   1 Hz-ish capture cost over time, the agent side live (the persona/skill edits need `robo setup`; until then it still writes notes for long answers).
   Agent side: SOUL.md "Drafts, plans and text" and the skills (robo-notes, robo-make, study-plan, school-digest, school-mail, robo-brain, study-quiz) now say
   answer in the chat, write a file only on request; pinned in both template suites (`answersStayInTheChatAndAFileIsWrittenOnlyOnRequest`).
+- **Chat polish, called-to-side, blur, LaTeX (Swift app, 2026-10-23, same user request)**. **Look**: glossy bubbles (`BubbleView`: gradient, sheen, rim, a soft shadow
+  under each bubble and a light one under the window), capsule input, header `OrbView`, spring pop-in (none under Reduce Motion). **Called = middle of the nearest side**:
+  `Roamer.callToSide` (vertically centred; `nearestSide()` measures from the window's top-left like `Roamer.step`), `RoboWindow.roam()` counts `chatOpen` as called, so the
+  pet parks at the left or right edge while the chat is up. **Blur**: `BlurVeil` (panel at `.floating - 1`, ignores the mouse) shows a blurred half-size capture of the screen
+  WITHOUT Robo's windows (`Backdrop.blurredPicture`, `blurSigma` = 1.3, dim 0.10, refreshed every 1 s); none under Reduce Transparency or without Screen Recording. The system
+  `NSVisualEffectView` blur was rejected: at partial alpha it only ghosts the sharp screen over itself; sigma 2.5 was too strong ("a little"). **LaTeX** (SwiftMath 1.7.3, exact pin in
+  `native/Package.swift`): `Latex.extract` (RoboCore, pure) takes `$..$`, `$$..$$`, `\(..\)`, `\[..\]` out BEFORE the Markdown parse (Apple's parser eats the backslashes of `\frac`,
+  `\_`, `\{`) and leaves a private-use placeholder; `Math.restore` (`Math.swift`, called inside `Markdown.attributed` before the typewriter's hidden tail) swaps each for a
+  `MathCell` (an `NSTextAttachmentCell`, baseline = the typeset list's descent). Rules: code (fenced, inline) is never read, `\$` is a dollar, an inline `$` opens only with no space
+  after it and closes only with no space before it and no digit after it ("costs $5 and $10" is text), no formula crosses a blank line, 600 characters and 60 per reply, invalid
+  LaTeX goes back as the author's source with its dollars, a formula wider than the column is set smaller (down to 60 %). **Each formula is typeset twice** (dark and light ink) and the
+  cell picks at DRAW time by the view's `effectiveAppearance` (the chat) or the card's ink level, so the glass flipping needs no rebuild. **SwiftMath's fonts live in a resource bundle
+  that SwiftPM's accessor looks for in `Contents/Resources`: `bundle.sh` copies every `*.bundle` of the build there; without it the first formula is a `fatalError`.** SOUL.md tells
+  the agent to write `$..$`/`$$..$$` (pinned in both template suites). Looked at on the installed build over half, black and white backdrops (formulas stay legible in both inks).
+  **Test trap**: the pointer. A card stays open while the pointer is over it, and my synthetic clicks leave it over the chat's place, so `theCardKeepsAnUnansweredNudgeForAMinuteThenClosesIt` and
+  `everyOtherWayTheCardEndsIsDismissedNeverMuted(.timeout)` failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Not verified**: a real agent
+  answer with LaTeX, a formula inside a table cell or a list item on screen (they go through the same path), typing in the real text box, dragging, Spaces/full-screen.
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
   answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
   ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks
