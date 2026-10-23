@@ -18,6 +18,7 @@ final class ChatPanel: NSPanel {
 
     let chat: ChatView
     var onBecomeKey: (() -> Void)?
+    var onEscape: (() -> Void)?
     var onResignKey: (() -> Void)?
 
     init(theme: Theme, reduceMotion: @escaping () -> Bool) {
@@ -44,8 +45,8 @@ final class ChatPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     /// Where it opens is decided by `place`, not by AppKit.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-    /// Esc does nothing here: the chat goes away when you tell Robo to close it.
-    override func cancelOperation(_ sender: Any?) {}
+    /// Esc, while the chat has the keyboard (its text box was clicked), closes it, like "close the chat".
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
     override func becomeKey() {
         super.becomeKey()
         onBecomeKey?()

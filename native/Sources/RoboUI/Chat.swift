@@ -1,7 +1,7 @@
 // The chat window's side of the pet's window: when it opens, what goes into it, how it closes, and what its glass does about the
 // backdrop. The conversation is `transcript` (in memory, one per Hermes session); the window shows it (ChatPanel.swift, Bubbles.swift).
 //   - It opens when you ask for something (typed, spoken, the digest) and stays until you tell Robo to close it ("close the chat",
-//     spoken or typed; `Intent.closesChat`): no timer, no Esc, no click on the pet closes it.
+//     spoken or typed; `Intent.closesChat`): no timer, no click on the pet closes it; Esc closes it only while its text box has the keyboard.
 //   - Your turn and Robo's answer go into it; the answer is typed letter by letter into its bubble by the same typewriter as the pet's
 //     card. A local notice ("Sorry, I didn't catch that.") is a line of it. The pet's card keeps what is quick and about the pet: the
 //     menu, "listening", Allow/Deny and the nudges.
@@ -25,6 +25,7 @@ extension RoboWindow {
         p.chat.onSubmit = { [unowned self] text in ask(text) }
         p.onBecomeKey = { [weak self] in if let app = self?.machine.focus.other() { self?.chatPreviousApp = app } }
         p.onResignKey = { [weak self] in self?.chatReleased() }
+        p.onEscape = { [weak self] in self?.closeChat() }
         chat = p
         return p
     }

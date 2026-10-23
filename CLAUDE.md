@@ -168,8 +168,8 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `ChatPanel`/`ChatView` (`ChatPanel.swift`), `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore
   `Transcript` (memory only, one per Hermes session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a window of its own, **fixed
   about 520x640, centred on the main display** each time it opens (not attached to the pet, never pinned by it), opens on `ask()` (typed, spoken, digest, the
-  automatic digest too), **closes only by `Intent.closesChat`** ("close the chat", whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent;
-  no timer, no Esc, no close button, a face click does not close it), English only. The pet's card keeps what is quick (menu, "listening", Allow/Deny, nudges);
+  automatic digest too), **closes only by `Intent.closesChat`** ("close the chat", whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent) **or Esc
+  while its text box has the keyboard** (added 2026-10-23 at the user's request, `ChatPanel.onEscape`; the panel is non-activating, so Esc in another app never reaches it); no timer, no close button, a face click does not close it, English only. The pet's card keeps what is quick (menu, "listening", Allow/Deny, nudges);
   `say()` notices become robo bubbles while the chat is open (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` ->
   `chatBegin` (your turn + an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to `ChatView.setLive`,
   `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask -> `chatInterrupted` (partial kept, footer "stopped", an

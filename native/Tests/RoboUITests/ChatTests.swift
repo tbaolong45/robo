@@ -60,7 +60,7 @@ private func receipt(_ at: Double) -> String {
         #expect(bubbleCount(r) == 4 && r.chats.count == 1)  // one window, not one per request
     }
 
-    @Test func nothingClosesTheChatButTheCommand() async {
+    @Test func onlyTheCommandOrEscInTheChatItselfClosesIt() async {
         let r = Rig([completed(HELLO)], chat: true)
         defer { r.close() }
         r.window.ask("hi")
@@ -74,6 +74,10 @@ private func receipt(_ at: Double) -> String {
         #expect(!r.window.chatOpen && !r.window.chat!.isVisible)
         #expect(r.hermes.asked.map(\.text) == ["hi"])  // the command was not a request for the agent
         #expect(turns(r) == ["hi", HELLO])  // and the conversation is kept
+        r.window.openChat()
+        #expect(r.window.chatOpen)
+        r.window.chat!.cancelOperation(nil)  // Esc with the keyboard in the chat's own window
+        #expect(!r.window.chatOpen && !r.window.chat!.isVisible && turns(r) == ["hi", HELLO])
     }
 
     @Test(arguments: ["close the chat", "Please close the chat.", "hide this chat window", "Robo, dismiss the chat"])
