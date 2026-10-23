@@ -100,6 +100,10 @@ struct Machine {
     /// its text box takes the keyboard. The rig records both and shows nothing.
     var chatOn = true
     var showChat: (ChatPanel, CGRect) -> Void = { $0.present(on: $1) }
+    /// The light blur over the main display while Robo is called (BlurVeil.swift): on or off, and the display's frame (AppKit coordinates).
+    var blurBackground: (Bool, CGRect) -> Void = { on, frame in
+        BlurVeil.shared.set(on, over: frame, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
     var focusChat: (ChatPanel) -> Void = {
         $0.makeKey()
         $0.chat.focusInput()

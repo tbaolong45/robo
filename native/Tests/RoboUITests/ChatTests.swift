@@ -338,6 +338,69 @@ private func receipt(_ at: Double) -> String {
         #expect(r.window.chatOpen && !r.window.nudgeHeld)
     }
 
+    // MARK: called: the pet goes to a side, the background is blurred a little
+
+    @Test func theBackgroundIsBlurredWhileRoboIsCalledAndWhileTheChatIsUp() async {
+        let r = Rig([completed(HELLO)], chat: true)
+        defer { r.close() }
+        #expect(r.blurs.isEmpty)
+        r.window.onEvent(.listening(true))  // Ctrl+Q held
+        #expect(r.blurs.last?.on == true && r.blurs.last?.frame == Rig.single[0].frame)  // the main display, all of it
+        r.window.onHeard("")  // nothing was said: not called any more
+        #expect(r.blurs.last?.on == false)
+        r.window.ask("hi")
+        #expect(await pump(!r.window.busy))
+        #expect(r.blurs.last?.on == true && r.blurs.count == 3)  // the chat is up
+        for _ in 0..<600 { r.step() }
+        #expect(r.blurs.count == 3)  // switched on once, not on every tick
+        r.window.ask("close the chat")
+        #expect(r.blurs.last?.on == false)
+    }
+
+    @Test func noBlurWithoutTheChat() {
+        let r = Rig()
+        defer { r.close() }
+        r.window.onEvent(.listening(true))
+        r.window.say("x")
+        #expect(r.blurs.isEmpty)
+    }
+
+    @Test func thePetGoesToTheMiddleOfTheNearestSideAndStaysWhileTheChatIsUpThenIsFreeAgain() async {
+        let r = Rig([completed(HELLO)], chat: true)
+        defer { r.close() }
+        let screen = r.window.roamer.screens[0]
+        r.window.ask("hi")
+        #expect(await pump(!r.window.busy))
+        for _ in 0..<600 {  // 20 s
+            r.clock.advance(1.0 / 30)
+            r.window.roam()
+        }
+        let roamer = r.window.roamer
+        #expect(roamer.mode == .come)  // called, and staying
+        let middle = screen.y + (screen.h - roamer.size.y) / 2
+        #expect(abs(roamer.pos.y - middle) <= 1)  // the middle of the side
+        let atLeft = abs(roamer.pos.x - (screen.x + Roam.edge)) <= 1, atRight = abs(roamer.pos.x - (screen.x + screen.w - roamer.size.x - Roam.edge)) <= 1
+        #expect(atLeft || atRight)  // a side, not a corner and not the middle of the screen
+        let before = roamer.pos
+        for _ in 0..<300 {
+            r.clock.advance(1.0 / 30)
+            r.window.roam()
+        }
+        #expect(roamer.pos == before)  // it stays put while the chat is up
+        r.window.ask("close the chat")
+        for _ in 0..<300 {
+            r.clock.advance(1.0 / 30)
+            r.window.roam()
+        }
+        #expect(roamer.mode != .come)  // free again: it rests and drifts
+    }
+
+    @Test func withoutTheChatACallStillGoesToACorner() async {
+        let r = Rig([completed(HELLO)])
+        defer { r.close() }
+        #expect(!r.window.roamer.callToSide)
+    }
+
     @Test func theChatIsClosedWhenTheAppQuits() async {
         let r = Rig(chat: true)
         defer { r.close() }
@@ -535,5 +598,45 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "fresh start")
         v.set(turns: t.turns)
         #expect(v.bubbles.count == 1 && v.scroll.documentView?.subviews.count == 1)
+    }
+}
+
+// MARK: - the blur of the background
+
+@MainActor @Suite struct BlurPictureTests {
+    private func stripes(_ w: Int, _ h: Int) -> CGImage {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        for y in 0..<h {
+            (y / 5 % 2 == 0 ? CGColor(gray: 0, alpha: 1) : CGColor(gray: 1, alpha: 1)).setFill_(ctx, CGRect(x: 0, y: y, width: w, height: 1))
+        }
+        return ctx.makeImage()!
+    }
+
+    private func gray(_ image: CGImage, x: Int, y: Int) -> Int {
+        let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        let p = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        return Int(p[(y * image.width + x) * 4])
+    }
+
+    @Test func aBlurKeepsTheSizeSoftensTheEdgesAndLeavesTheMiddleOfAStripe() throws {
+        let image = stripes(60, 60)
+        let blurred = try #require(Backdrop.blurred(image, sigma: Backdrop.blurSigma))
+        #expect(blurred.width == 60 && blurred.height == 60)
+        // rows 0-4 are one colour and 5-9 the other: at the boundary (row 4/5, from the top of the bitmap) the blur is a grey, not black or white
+        let edge = gray(blurred, x: 30, y: 4)
+        #expect(edge > 20 && edge < 235)
+        let before = gray(image, x: 30, y: 4)
+        #expect(before == 0 || before == 255)
+        #expect(Backdrop.blurSigma > 0 && Backdrop.blurSigma <= 2)  // "a little": a sigma of a pixel or two at half size
+    }
+}
+
+private extension CGColor {
+    func setFill_(_ ctx: CGContext, _ rect: CGRect) {
+        ctx.setFillColor(self)
+        ctx.fill(rect)
     }
 }

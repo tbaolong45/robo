@@ -99,6 +99,8 @@ public final class Roamer {
     public var mode = Mode.none
     public var goal = Vec.zero
     public var heldUntil = -Double.infinity
+    /// Swift app with the chat window: a call walks to the middle of the nearest SIDE of its screen (left or right), not to a corner.
+    public var callToSide = false
     var rng: SplitMix64
     var last: Double?
     var restUntil = 0.0
@@ -161,7 +163,8 @@ public final class Roamer {
             mode = .held
         } else if called {
             heldUntil = -.infinity
-            if mode != .come || goal != nearestCorner() { go(nearestCorner(), Roam.callSpeed) }
+            let target = callToSide ? nearestSide() : nearestCorner()
+            if mode != .come || goal != target { go(target, Roam.callSpeed) }
             mode = .come
             _ = travel(dt)
         } else if asleep {
@@ -231,6 +234,15 @@ public final class Roamer {
     private func bed() -> Vec { corners()[3] }
 
     private func nearestCorner() -> Vec { corners().min { dist($0, pos) < dist($1, pos) }! }
+
+    /// The middle of the left side and of the right side of the screen it is on (`edge` in from the side): where it waits while the
+    /// chat is up, so the chat has the middle of the screen. The nearer of the two.
+    private func nearestSide() -> Vec {
+        let s = home()
+        let y = s.y + (s.h - size.y) / 2
+        let sides = [Vec(s.x + Roam.edge, y), Vec(s.x + s.w - size.x - Roam.edge, y)].map { clamp($0, size, s) }
+        return sides.min { dist($0, pos) < dist($1, pos) }!
+    }
 
     private func go(_ target: Vec, _ speed: Double = Roam.speed) {
         origin = pos

@@ -238,6 +238,7 @@ extension CardView {
     var typers: [TypePanel] = [], ears: [FakeEar] = [], pollers: [FakePoller] = []
     var chats: [ChatPanel] = []  // each time the chat was put on screen, and how often its text box was asked to take the keyboard
     var chatFocuses = 0
+    var blurs: [(on: Bool, frame: CGRect)] = []  // every time the blur of the background was switched
     var terminated = false
     /// The backdrop: what the fake sampler reads (nil = no Screen Recording), the rectangles it was asked about, the answers held back
     /// by `holdLooks` until `answerLooks`, how often the permission was asked for, and Reduce Motion. Nothing here captures the
@@ -328,6 +329,7 @@ extension CardView {
             panel.setFrame(ChatPanel.frame(centredOn: visible), display: false)  // placed, never ordered front
         }
         m.focusChat = { [weak self] _ in self?.chatFocuses += 1 }
+        m.blurBackground = { [weak self] on, frame in self?.blurs.append((on, frame)) }  // never a real panel
         m.terminate = { [weak self] in self?.terminated = true }
         m.backdropLuma = { [weak self] rect, done in
             guard let self else { return done(nil) }

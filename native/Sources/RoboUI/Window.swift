@@ -91,6 +91,7 @@ final class RoboWindow {
     var chatLevel: Double?  // where the glass is now (0 dark ... 1 light); nil until it was shown
     var chatFooter: [String] = [], chatFailed = false  // what the turn being typed is sealed with when its last letter is there
     var chatPreviousApp: NSRunningApplication?  // who had the keyboard before the text box took it
+    var blurShown = false  // the background is blurred (while called)
 
     var ear: Ear?
     var poller: Polling?
@@ -135,6 +136,7 @@ final class RoboWindow {
         }
         space = ScreenSpace(displays)!
         roamer = Roamer(screens: space.roamArea(displays), size: Vec(FaceView.size.width + 8, FaceView.size.height + 8))
+        roamer.callToSide = machine.chatOn  // with the chat, a call goes to the middle of the nearest side, which leaves the screen's middle to the chat
 
         bridge.window = self
         panel.title = "Robo"
@@ -247,7 +249,7 @@ final class RoboWindow {
         // it walks to a corner and stays; the right-click menu opens the card too, but it must not leave
         // before the user can press Stay. A nudge is not a call either, but it freezes the pet like a press: the card is attached
         // to it, and buttons that drift at 40 px/s are hard to hit (seen live: 1200 px in a minute)
-        let called = busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty)
+        let called = busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty) || chatOpen  // the chat keeps it at its side
         let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil || !nudge.shown.isEmpty, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
@@ -471,6 +473,7 @@ final class RoboWindow {
         scout.running?.cancel()  // best effort: the scan only reads, so a run that outlives the app is harmless
         panel.orderOut(nil)
         chat?.orderOut(nil)
+        if blurShown { machine.blurBackground(false, .zero) }
         typer?.close()
         for t in [ticker, roamTimer, revealer, shadeTimer, chatShadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }

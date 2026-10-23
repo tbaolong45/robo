@@ -342,6 +342,12 @@ extension RoboWindow {
         let label = listeningNow ? "listening" : thinking ? workingLabel(m, now) : ""  // e.g. "searching the web…" beside the dots
         card.setStatusRow(typing: thinking, label: label)
         refreshChat(listening: listeningNow, thinking: thinking, label: label)
+        // Called (listening, or the chat is up): the rest of the screen is blurred a little, the pet and the chat stay sharp.
+        let blur = machine.chatOn && (chatOpen || listeningNow) && !shutdownStarted
+        if blur != blurShown {
+            blurShown = blur
+            machine.blurBackground(blur, machine.displays().first?.frame ?? .zero)
+        }
     }
 
     /// The line beside the dots while Hermes works: what the last tool does (it stays while the model thinks between tools),

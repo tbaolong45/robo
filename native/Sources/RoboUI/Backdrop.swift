@@ -77,6 +77,50 @@ final class Backdrop: @unchecked Sendable {
         return filter
     }
 
+    // MARK: a blurred picture of the screen (BlurVeil)
+
+    private var pictureBusy = false
+
+    /// How blurred (the Gaussian's sigma, in px of the picture, which is half the display's size): "a little, not too much".
+    static let blurSigma = 1.3
+    private static let ci = CIContext()
+
+    /// The whole display (the one whose frame is `frame`) without Robo's windows, at half size and blurred. `done` runs on the main thread
+    /// with nil when there is no access, no such display, a picture is still being made or the capture failed: the caller keeps the
+    /// picture it has. Use a Backdrop of its own for this: the list of displays it keeps is not shared with `luma`.
+    func blurredPicture(of frame: CGRect, done: @escaping (CGImage?) -> Void) {
+        guard CGPreflightScreenCaptureAccess(), !pictureBusy,
+              let screen = NSScreen.screens.first(where: { $0.frame == frame }),
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return done(nil) }
+        pictureBusy = true
+        let size = screen.frame.size
+        Task { [self] in
+            var result: CGImage?
+            do {
+                let filter = try await filter(display: id, size: size)
+                let config = SCStreamConfiguration()
+                config.width = max(1, Int(size.width / 2))
+                config.height = max(1, Int(size.height / 2))
+                config.pixelFormat = kCVPixelFormatType_32BGRA
+                config.showsCursor = false
+                result = Self.blurred(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
+            } catch {
+                content = nil
+            }
+            DispatchQueue.main.async { [self] in
+                pictureBusy = false
+                done(result)
+            }
+        }
+    }
+
+    /// `image` blurred (its edges extended first, so they do not fade to black).
+    static func blurred(_ image: CGImage, sigma: Double = blurSigma) -> CGImage? {
+        let input = CIImage(cgImage: image)
+        let out = input.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: input.extent)
+        return ci.createCGImage(out, from: input.extent)
+    }
+
     /// The mean luma of a picture, through the BGRA bytes `Shade.meanLuma` reads.
     static func luma(of image: CGImage) -> Double? {
         let w = image.width, h = image.height
