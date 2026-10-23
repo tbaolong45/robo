@@ -276,6 +276,14 @@ def test_the_persona_writes_maths_in_latex_for_the_chat():
         assert phrase in soul, phrase
 
 
+def test_the_persona_downloads_files_with_the_signed_in_browser_into_robo_downloads():
+    soul = " ".join((HERMES / "SOUL.md").read_text(encoding="utf-8").split())
+    for phrase in ("use the browser, not the terminal", "`curl` is not and gets the sign-in page",
+                   "lands in `~/Robo/Downloads`", "move it to the folder the user named",
+                   "only when you saw the file"):
+        assert phrase in soul, phrase
+
+
 def test_answers_stay_in_the_chat_and_a_file_is_written_only_on_request():
     """The chat window holds long answers, so no note is written on the agent's own initiative."""
     soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
@@ -314,7 +322,8 @@ def test_templates_do_not_keep_the_old_behaviour():
     assert ".md" not in make and "styled `.html`" not in make
     soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
     for para in re.split(r"\n(?=- |#|\n)", soul):  # a bullet is one paragraph
-        if "~/Robo" in para:  # the robo-make bullet: only what needs a browser lives there now
+        # the robo-make bullet: only what needs a browser lives there (not the download one)
+        if "~/Robo" in para and "~/Robo/Downloads" not in para:
             assert "robo-make" in para and "notes" not in para.lower(), para
     for name in ("study-plan", "school-digest"):
         assert not re.search(r"^- \d\d:\d\d-", skill_text(name), re.M), f"{name} lists blocks"

@@ -8,6 +8,7 @@ Robo's Brave has its own data dir, listens on 127.0.0.1 only, runs headless, and
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ def find_brave(platform: str = sys.platform, which: Callable[[str], str | None] 
 
 
 BINARY = find_brave()
+DOWNLOADS = Path.home() / "Robo" / "Downloads"  # outside ~/.hermes: the agent may move files out
 SIGNIN_URLS = ("https://outlook.office.com/mail/", "https://teams.microsoft.com/")
 
 
@@ -50,7 +52,35 @@ def _spawn(argv: list[str]) -> None:
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+def allow_downloads(data_dir: Path, folder: Path) -> None:
+    """Make robo's Brave save downloads into `folder`, and download a PDF instead of showing it.
+
+    A headless Brave has no download folder, so nothing it fetched reached the disk; CDP's
+    `setDownloadBehavior` does not outlive one connection and Hermes opens a new one per call.
+    Brave rewrites its Preferences when it exits, so this works only before a start. A file that
+    does not parse is left alone.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    file = data_dir / "Default" / "Preferences"
+    file.parent.mkdir(parents=True, exist_ok=True)
+    prefs: dict = {}
+    if file.exists():
+        try:
+            prefs = json.loads(file.read_text())
+        except ValueError:
+            return
+        if not isinstance(prefs, dict):
+            return
+    prefs["download"] = {**prefs.get("download", {}), "default_directory": str(folder),
+                         "prompt_for_download": False}
+    prefs["plugins"] = {**prefs.get("plugins", {}), "always_open_pdf_externally": True}
+    tmp = file.with_name("Preferences.robo")
+    tmp.write_text(json.dumps(prefs))
+    tmp.replace(file)
+
+
 def ensure(data_dir: Path, *, headless: bool = True, url: str | None = None,
+           downloads: Path | None = None,
            up: Callable[[], bool] = up, spawn: Callable[[list[str]], None] = _spawn,
            sleep: Callable[[float], None] = time.sleep, wait: float = 20) -> bool:
     """Start robo's Brave unless it already answers on PORT; True if this call started it."""
@@ -58,6 +88,8 @@ def ensure(data_dir: Path, *, headless: bool = True, url: str | None = None,
         return False
     data_dir.mkdir(parents=True, exist_ok=True)
     data_dir.chmod(0o700)  # cookies of the user's school accounts
+    if downloads:
+        allow_downloads(data_dir, downloads)
     argv = [BINARY, f"--user-data-dir={data_dir}", f"--remote-debugging-port={PORT}",
             "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check"]
     if headless:
@@ -120,6 +152,6 @@ def stop(data_dir: Path) -> None:
 def signin(data_dir: Path, extra: tuple[str, ...] = ()) -> None:
     """Show robo's Brave so the user can sign in; robo goes back to headless afterwards."""
     stop(data_dir)
-    ensure(data_dir, headless=False, url=SIGNIN_URLS[0])
+    ensure(data_dir, headless=False, url=SIGNIN_URLS[0], downloads=DOWNLOADS)
     for url in (*SIGNIN_URLS[1:], *extra):
         _spawn([BINARY, f"--user-data-dir={data_dir}", url])  # opens a tab in that instance

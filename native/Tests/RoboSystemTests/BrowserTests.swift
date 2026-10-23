@@ -120,6 +120,50 @@ private let app = "/Applications/Brave Browser.app/Contents"
         }
     }
 
+    // A headless Brave saved nothing; the folder and "download a PDF, don't view it" are in its profile before it starts.
+    private func prefs(_ dir: URL) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("Default/Preferences"))) as! [String: Any]
+    }
+
+    @Test func downloadsGoToTheFolderAndPdfsAreDownloadedNotViewed() throws {
+        try scratch { tmp throws in
+            let (profile, folder) = (tmp.appendingPathComponent("b"), tmp.appendingPathComponent("dl"))
+            var seen: [String: Any] = [:]
+            var answers = [false, true]
+            _ = try Browser.ensure(profile, downloads: folder, up: { answers.removeFirst() },
+                                   spawn: { _ in seen = (try? self.prefs(profile)) ?? [:] }, sleep: { _ in })
+            #expect((seen["download"] as? [String: Any])?["default_directory"] as? String == folder.path)  // written BEFORE the start
+            #expect((seen["download"] as? [String: Any])?["prompt_for_download"] as? Bool == false)
+            #expect((seen["plugins"] as? [String: Any])?["always_open_pdf_externally"] as? Bool == true)
+            #expect(fm.fileExists(atPath: folder.path))
+        }
+    }
+
+    @Test func theOtherPreferencesOfTheProfileAreKeptAndAnUnreadableFileIsLeftAlone() throws {
+        try scratch { tmp throws in
+            let profile = tmp.appendingPathComponent("b"), file = profile.appendingPathComponent("Default/Preferences")
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(#"{"profile":{"name":"Robo"},"download":{"extensions_to_open":"pdf"}}"#.utf8).write(to: file)
+            try Browser.allowDownloads(profile, into: tmp.appendingPathComponent("dl"))
+            let p = try prefs(profile)
+            #expect((p["profile"] as? [String: Any])?["name"] as? String == "Robo")
+            #expect((p["download"] as? [String: Any])?["extensions_to_open"] as? String == "pdf")
+            #expect((p["download"] as? [String: Any])?["default_directory"] != nil)
+            try Data("not json".utf8).write(to: file)
+            try Browser.allowDownloads(profile, into: tmp.appendingPathComponent("dl"))
+            #expect(try String(contentsOf: file, encoding: .utf8) == "not json")
+        }
+    }
+
+    @Test func withoutAFolderTheProfileIsNotTouched() throws {
+        try scratch { tmp throws in
+            let profile = tmp.appendingPathComponent("b")
+            var answers = [false, true]
+            _ = try Browser.ensure(profile, up: { answers.removeFirst() }, spawn: { _ in }, sleep: { _ in })
+            #expect(!fm.fileExists(atPath: profile.appendingPathComponent("Default/Preferences").path))
+        }
+    }
+
     @Test func findBraveOnPathElseWhereTheInstallerPutsIt() {
         #expect(Browser.findBrave(which: { ["brave-browser": "/usr/bin/brave-browser"][$0] }) == "/usr/bin/brave-browser")
         #expect(Browser.findBrave(which: { ["brave": "/opt/brave"][$0] }) == "/opt/brave")

@@ -63,7 +63,7 @@ public struct HermesProfile {
 
     /// What `cli._client()` does before it builds the HermesClient: the connection, after making sure
     /// robo's Brave is up for school browsing (chat still works without it; school questions will say so).
-    public func clientConnection(ensureBrowser: (URL) throws -> Bool = { try Browser.ensure($0) },
+    public func clientConnection(ensureBrowser: (URL) throws -> Bool = { try Browser.ensure($0, downloads: Browser.downloadsDir) },
                                  warn: (String) -> Void = Host.warn) throws -> (url: String, key: String) {
         let connection = try connection()
         do { _ = try ensureBrowser(braveDir) } catch let e as BrowserError { warn("robo: \(e)") }
@@ -417,7 +417,7 @@ public func runSignin() -> Int32 {
         fflush(stdout)
         _ = readLine()
         Browser.stop(profile.braveDir)  // robo works in the background from now on
-        _ = try Browser.ensure(profile.braveDir)
+        _ = try Browser.ensure(profile.braveDir, downloads: Browser.downloadsDir)
         print("Done: robo's browser runs in the background with those logins.")
         return 0
     } catch {

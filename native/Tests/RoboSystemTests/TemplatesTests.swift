@@ -297,6 +297,14 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         }
     }
 
+    @Test func thePersonaDownloadsFilesWithTheSignedInBrowserIntoRoboDownloads() throws {
+        let soul = try soulText().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        for phrase in ["use the browser, not the terminal", "`curl` is not and gets the sign-in page", "lands in `~/Robo/Downloads`",
+                       "move it to the folder the user named", "only when you saw the file"] {
+            #expect(soul.contains(phrase), "\(phrase)")
+        }
+    }
+
     /// The chat window holds long answers, so no note is written on the agent's own initiative.
     @Test func answersStayInTheChatAndAFileIsWrittenOnlyOnRequest() throws {
         let soul = try soulText()
@@ -343,7 +351,7 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
             start = r.upperBound
         }
         paragraphs.append(String(soul[start...]))
-        for para in paragraphs where para.contains("~/Robo") {  // the robo-make bullet: only what needs a browser lives there now
+        for para in paragraphs where para.contains("~/Robo") && !para.contains("~/Robo/Downloads") {  // the robo-make bullet: only what needs a browser lives there now
             #expect(para.contains("robo-make") && !para.lowercased().contains("notes"), "\(para)")
         }
         for name in ["study-plan", "school-digest"] {

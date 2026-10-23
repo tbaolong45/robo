@@ -120,3 +120,37 @@ def test_a_missing_brave_is_a_browser_error_not_a_crash(tmp_path):
 
     with pytest.raises(browser.BrowserError, match="Brave"):
         browser.ensure(tmp_path / "b", up=lambda: False, spawn=spawn)
+
+
+def test_downloads_go_to_the_folder_and_pdfs_are_downloaded_not_viewed(tmp_path):
+    import json
+    seen = {}
+    answers = iter([False, True])
+    browser.ensure(tmp_path / "b", downloads=tmp_path / "dl", up=lambda: next(answers),
+                   spawn=lambda argv: seen.update(json.loads(
+                       (tmp_path / "b/Default/Preferences").read_text())),
+                   sleep=lambda s: None)
+    assert seen["download"] == {"default_directory": str(tmp_path / "dl"),
+                                "prompt_for_download": False}  # written BEFORE the start
+    assert seen["plugins"]["always_open_pdf_externally"] is True and (tmp_path / "dl").is_dir()
+
+
+def test_the_other_preferences_are_kept_and_an_unreadable_file_is_left_alone(tmp_path):
+    import json
+    file = tmp_path / "b/Default/Preferences"
+    file.parent.mkdir(parents=True)
+    file.write_text('{"profile": {"name": "Robo"}, "download": {"extensions_to_open": "pdf"}}')
+    browser.allow_downloads(tmp_path / "b", tmp_path / "dl")
+    prefs = json.loads(file.read_text())
+    assert prefs["profile"] == {"name": "Robo"} and prefs["download"]["extensions_to_open"] == "pdf"
+    assert prefs["download"]["default_directory"] == str(tmp_path / "dl")
+    file.write_text("not json")
+    browser.allow_downloads(tmp_path / "b", tmp_path / "dl")
+    assert file.read_text() == "not json"
+
+
+def test_without_a_folder_the_profile_is_not_touched(tmp_path):
+    answers = iter([False, True])
+    browser.ensure(tmp_path / "b", up=lambda: next(answers), spawn=lambda a: None,
+                   sleep=lambda s: None)
+    assert not (tmp_path / "b/Default/Preferences").exists()

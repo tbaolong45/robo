@@ -55,7 +55,7 @@ public enum RoboApp {
         let dev = DevSwitches(environment: environment)
         let connection: (url: String, key: String)
         do {
-            connection = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir) })
+            connection = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir, downloads: Browser.downloadsDir) })
         } catch {
             Host.warn("robo: \(error)")
             return 1

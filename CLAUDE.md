@@ -206,6 +206,15 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   math answer typeset in the chat (fraction, root, subscripts, in a numbered list; zero new files in the vault), a typed follow-up through the real text box (answered with context), and the typed
   "close the chat" closed the window. The agent's Python example came back WITHOUT a code fence (plain lines, `*` read as emphasis): a probe through `Markdown.attributed` shows every fenced
   shape renders as code and `$` inside code stays text, so SOUL.md now says to fence code (needs `robo setup` to reach the live profile). **Not verified**: a formula in a table cell, dragging, Spaces/full-screen.
+- **Downloads through robo's Brave (2026-10-24, user: "I will tell it which folder")**. The headless Brave had no download folder, so nothing it fetched ever reached the
+  disk (Robo said so itself; a `curl` gets Moodle's Microsoft sign-in page, the terminal is not signed in). **`Browser.setDownloadBehavior` over CDP does not work for
+  Hermes: it ends with the connection and `browser_cdp` opens a new one per call** (tested). So `Browser.allowDownloads` (`Browser.swift`; `browser.allow_downloads` in Python)
+  writes `download.default_directory` = `~/Robo/Downloads`, `prompt_for_download` false and `plugins.always_open_pdf_externally` into the profile's `Default/Preferences`
+  before every start robo makes (Brave rewrites that file on exit, so editing a running Brave does nothing: it was restarted once on 2026-10-24; the Microsoft login
+  cookie is persistent, Moodle signed in again by itself). SOUL.md tells the agent to download with the browser and `mv` the file to the folder the user names; it lives
+  outside `~/.hermes` because `approvals.deny '*hermes*'` would refuse the move. Hermes' browser refuses `127.0.0.1` addresses ("private or internal address"), so test with a public file.
+  **Verified live**: a public PDF downloaded by the browser into `~/Robo/Downloads` and moved by the agent to a named folder. **Not verified**: the course PDFs themselves
+  (Moodle's viewer links), a download that needs a click on a Download button.
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
   answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
   ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks

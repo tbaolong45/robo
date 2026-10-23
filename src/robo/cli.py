@@ -22,7 +22,7 @@ def _client() -> HermesClient:
     """Hermes client, after making sure robo's Brave is up for school browsing."""
     url, key = setup.connection()
     try:
-        browser.ensure(setup.brave_dir())
+        browser.ensure(setup.brave_dir(), downloads=browser.DOWNLOADS)
     except browser.BrowserError as e:  # chat still works; school questions will say so
         print(f"robo: {e}", file=sys.stderr)
     return HermesClient(url, key)
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                   "the sign-in is lost when robo's browser restarts.")
             input("Press Enter here when you are signed in everywhere... ")
             browser.stop(setup.brave_dir())  # robo works in the background from now on
-            browser.ensure(setup.brave_dir())
+            browser.ensure(setup.brave_dir(), downloads=browser.DOWNLOADS)
             print("Done: robo's browser runs in the background with those logins.")
             return 0
         return chat() if args.command == "chat" else window()
