@@ -292,7 +292,7 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
     @Test func thePersonaWritesMathsInLatexForTheChat() throws {
         let soul = try soulText().split(whereSeparator: \.isWhitespace).joined(separator: " ")
         for phrase in ["write formulas in LaTeX", "`$x^2$` inline and `$$ ... $$` on a line of their own", "the chat typesets them",
-                       "Use `$` only for formulas, never for money or in code"] {
+                       "Use `$` only for formulas, never for money or in code", "Put code in a fenced block with its language"] {
             #expect(soul.contains(phrase), "\(phrase)")
         }
     }

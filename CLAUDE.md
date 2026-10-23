@@ -202,8 +202,10 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   that SwiftPM's accessor looks for in `Contents/Resources`: `bundle.sh` copies every `*.bundle` of the build there; without it the first formula is a `fatalError`.** SOUL.md tells
   the agent to write `$..$`/`$$..$$` (pinned in both template suites). Looked at on the installed build over half, black and white backdrops (formulas stay legible in both inks).
   **Test trap**: the pointer. A card stays open while the pointer is over it, and my synthetic clicks leave it over the chat's place, so `theCardKeepsAnUnansweredNudgeForAMinuteThenClosesIt` and
-  `everyOtherWayTheCardEndsIsDismissedNeverMuted(.timeout)` failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Not verified**: a real agent
-  answer with LaTeX, a formula inside a table cell or a list item on screen (they go through the same path), typing in the real text box, dragging, Spaces/full-screen.
+  `everyOtherWayTheCardEndsIsDismissedNeverMuted(.timeout)` failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Verified live (installed app, real gateway, 2026-10-23, own white backdrop)**: a long
+  math answer typeset in the chat (fraction, root, subscripts, in a numbered list; zero new files in the vault), a typed follow-up through the real text box (answered with context), and the typed
+  "close the chat" closed the window. The agent's Python example came back WITHOUT a code fence (plain lines, `*` read as emphasis): a probe through `Markdown.attributed` shows every fenced
+  shape renders as code and `$` inside code stays text, so SOUL.md now says to fence code (needs `robo setup` to reach the live profile). **Not verified**: a formula in a table cell, dragging, Spaces/full-screen.
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
   answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
   ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks

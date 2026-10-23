@@ -271,7 +271,8 @@ def test_the_persona_writes_maths_in_latex_for_the_chat():
     for phrase in ("write formulas in LaTeX",
                    "`$x^2$` inline and `$$ ... $$` on a line of their own",
                    "the chat typesets them",
-                   "Use `$` only for formulas, never for money or in code"):
+                   "Use `$` only for formulas, never for money or in code",
+                   "Put code in a fenced block with its language"):
         assert phrase in soul, phrase
 
 
