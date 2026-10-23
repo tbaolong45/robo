@@ -170,8 +170,8 @@ Things worth knowing about this flow:
   and turns it into the face's emotion before the first word is shown.
 - A new question while a run is going stops that run and asks the new one after it. Speaking over
   Robo interrupts its answer.
-- If Hermes asks to approve a step (`approvals.mode` is `manual` in robo's config, after
-  `robo setup`; with `off` nothing asks), the card shows Allow/Deny and the face goes to
+- If Hermes asks to approve a step (only with `approvals.mode` `manual`; robo's config says `off` since
+  2026-10-23, after `robo setup`, so nothing asks), the card shows Allow/Deny and the face goes to
   `waiting`. An ask nobody answers is denied after `approvals.timeout` (120 s). Desktop steps (`computer_use`) are approved
   automatically for the rest of that request, with no buttons, and the face shows `waiting` until
   the next event arrives.
@@ -297,13 +297,12 @@ features without the window.
 ## 8. What can and cannot happen
 
 - Robo has **all permissions** by your choice: the terminal, files, the desktop, its own browser.
-  Reads, notes and reversible actions run without asking; irreversible steps (send, reply, forward,
-  delete, move, invites, Moodle submit) ask for one click in the card (`approvals.mode: manual`,
-  120 s to answer, no answer is a Deny). Its persona tells it to do exactly what you asked, and to
+  Everything runs without asking, irreversible steps (send, reply, forward, delete, move, invites,
+  Moodle submit) included (`approvals.mode: off` since 2026-10-23). Its persona tells it to do exactly what you asked, and to
   send, post, submit, delete or pay only when your request says so. Graded work is refused: it
   never writes, submits or takes it. The setting reaches the live profile only when you run
-  `robo setup`; set `approvals.mode` to `off` in both setup files and run it again to get no
-  questions at all.
+  `robo setup`; set `approvals.mode` to `manual` in both setup files and run it again to get the
+  one-click Allow/Deny back.
 - The `robo-guard` Hermes plugin still blocks two things however you ask: changing Robo's own
   Hermes setup (`~/.hermes`, the `hermes` CLI) and editing its installed school skills.
 - Text Robo reads from mail, chats or web pages is data, not instructions; that is a rule in the

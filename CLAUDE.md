@@ -27,10 +27,10 @@ in text in the bubble. It never speaks, so don't add speech output.
   delete the `.playwright-mcp/` folder they leave in the repo.
 
 ## The machine is a live deployment
-The live profile runs `approvals.mode: manual` (timeout 120 s) since 2026-10-19, when the user approved
-`robo setup` (it was `off` before): robo-guard's asks (rm and other irreversible commands, Send/Delete/Move
+The live profile ran `approvals.mode: manual` (timeout 120 s) from 2026-10-19; on 2026-10-23 the user asked for "all permission", both setups say `off` and `robo setup` was run
+(live config `off`, checked with a nonexistent-file `rm`: it ran, no card). Under `manual`, robo-guard's asks (rm and other irreversible commands, Send/Delete/Move
 clicks, Outlook/Teams computer_use) reach the card as Allow/Deny, checked live with a nonexistent file (Deny made
-Hermes answer "BLOCKED... do NOT retry"). Switch back with `approvals.mode` `"off"` in both setups + `robo setup`. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
+Hermes answer "BLOCKED... do NOT retry"). Switch back with `approvals.mode` `"manual"` in both setups + `robo setup`; the blocks (graded work, own setup, remote content in notes) hold in every mode. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
 skills' command) to point at the build it is run from: the Python checkout, or the Swift app
 (`~/Applications/Robo.app` is the one that runs at login since 2026-10-13). Don't run `setup` or
 `signin` while testing, and send Hermes nothing but a harmless prompt if a live check is needed.

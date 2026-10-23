@@ -86,8 +86,8 @@ def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
 
     assert json.loads(CONFIG["platform_toolsets.api_server"]) == TOOLSETS
     assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
-    # robo-guard's "ask"s (send, delete, ...) reach the card; an unanswered one is denied.
-    assert CONFIG["approvals.mode"] == "manual" and CONFIG["approvals.timeout"] == "120"
+    # nothing asks (the user's choice); robo-guard's blocks and approvals.deny hold in every mode.
+    assert CONFIG["approvals.mode"] == "off" and CONFIG["approvals.timeout"] == "120"
     assert json.loads(CONFIG["approvals.deny"]) == ["*hermes*"]
 
 

@@ -277,11 +277,11 @@ CONFIG: dict[str, str] = {
     # Runs arriving at /p/robo/v1/runs resolve their tools as platform "api_server". The user gave
     # robo the whole laptop: apps (computer_use), terminal, files, browser, web.
     "platform_toolsets.api_server": json.dumps(TOOLSETS),
-    # Reads, notes and undoable steps run unasked; robo-guard's "ask"s (send, reply, forward,
-    # delete, move, invites, Moodle submit) show Allow/Deny in the card, and one nobody answers is
-    # denied after 120 s. "off" approves every ask (the setting until 2026-10-19). A change here
-    # reaches the live profile only when the user runs `robo setup`.
-    "approvals.mode": "manual",
+    # Nothing asks (the user's choice, 2026-10-23: "grant the robo all permission"): Hermes approves
+    # every robo-guard "ask" itself. The blocks below and in robo-guard still hold in every mode.
+    # "manual" shows Allow/Deny in the card (the setting 2026-10-19 to 2026-10-23, 120 s, no answer
+    # = deny). A change here reaches the live profile only when the user runs `robo setup`.
+    "approvals.mode": "off",
     # These hold in every mode: no request may touch robo's own Hermes setup
     # (persona, plugins, config). robo-guard blocks file writes and skill edits there too.
     "approvals.deny": '["*hermes*"]',

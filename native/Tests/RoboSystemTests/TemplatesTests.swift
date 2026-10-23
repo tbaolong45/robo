@@ -140,8 +140,8 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         let toolsets = try JSONSerialization.jsonObject(with: Data(config("platform_toolsets.api_server").utf8)) as! [String]
         #expect(toolsets == Setup.toolsets)
         #expect(Set(["terminal", "file", "computer_use", "browser"]).isSubset(of: Set(toolsets)))
-        // robo-guard's "ask"s (send, delete, ...) reach the card; an unanswered one is denied.
-        #expect(config("approvals.mode") == "manual" && config("approvals.timeout") == "120")
+        // nothing asks (the user's choice); robo-guard's blocks and approvals.deny hold in every mode.
+        #expect(config("approvals.mode") == "off" && config("approvals.timeout") == "120")
         #expect(try JSONSerialization.jsonObject(with: Data(config("approvals.deny").utf8)) as! [String] == ["*hermes*"])
     }
 

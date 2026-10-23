@@ -462,7 +462,7 @@ private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/de
             ["model.provider", "anthropic"],
             ["model.default", "claude-sonnet-5.5"],
             ["platform_toolsets.api_server", "[\"browser\", \"web\", \"vision\", \"skills\", \"memory\", \"session_search\", \"todo\", \"terminal\", \"file\", \"computer_use\", \"code_execution\"]"],
-            ["approvals.mode", "manual"],
+            ["approvals.mode", "off"],
             ["approvals.deny", "[\"*hermes*\"]"],
             ["approvals.timeout", "120"],
             ["computer_use.native_wayland", "false"],
