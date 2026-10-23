@@ -72,6 +72,7 @@ final class BubbleView: NSView {
     static let pad = NSEdgeInsets(top: 9, left: 13, bottom: 9, right: 13)
     static let tailSize: CGFloat = 7
     static let footerGap: CGFloat = 3
+    static let shadowTop: CGFloat = 2, shadowBottom: CGFloat = 7  // room above and below the body for its soft shadow
 
     let turnID: Int
     private(set) var look: Look
@@ -146,24 +147,24 @@ final class BubbleView: NSView {
         let size = CGSize(width: (inner.width + pad.left + pad.right).rounded(.up), height: (inner.height + pad.top + pad.bottom).rounded(.up))
         bubbleSize = size
         let inset = Self.tailSize  // room at both sides for the tail: the body is drawn this far in
-        text.setFrameOrigin(NSPoint(x: inset + pad.left, y: pad.top))
+        text.setFrameOrigin(NSPoint(x: inset + pad.left, y: Self.shadowTop + pad.top))
         text.isHidden = working
         if let dots {
-            dots.frame = CGRect(x: inset + pad.left - 5, y: pad.top - 1, width: 32, height: 16)
-            captionLabel.frame = CGRect(x: inset + pad.left, y: pad.top + 18, width: max(0, inner.width), height: 14)
+            dots.frame = CGRect(x: inset + pad.left - 5, y: Self.shadowTop + pad.top - 1, width: 32, height: 16)
+            captionLabel.frame = CGRect(x: inset + pad.left, y: Self.shadowTop + pad.top + 18, width: max(0, inner.width), height: 14)
         }
-        var total = size
+        var total = CGSize(width: size.width, height: size.height + Self.shadowTop + Self.shadowBottom)
         if !footerLabel.isHidden {
             footerLabel.preferredMaxLayoutWidth = maxWidth
             let h = footerLabel.sizeThatFits(NSSize(width: maxWidth, height: .greatestFiniteMagnitude)).height.rounded(.up)
-            footerLabel.frame = CGRect(x: inset + 4, y: size.height + Self.footerGap, width: maxWidth - 4, height: h)
+            footerLabel.frame = CGRect(x: inset + 4, y: Self.shadowTop + size.height + Self.footerGap, width: maxWidth - 4, height: h)
             total.height += Self.footerGap + h
         }
         return total
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let body = CGRect(origin: CGPoint(x: Self.tailSize, y: 0), size: bubbleSize)
+        let body = CGRect(origin: CGPoint(x: Self.tailSize, y: Self.shadowTop), size: bubbleSize)
         guard body.width > 0 else { return }
         let shape = NSBezierPath(roundedRect: body, xRadius: Self.radius, yRadius: Self.radius)
         if tail {
@@ -196,6 +197,20 @@ final class BubbleView: NSView {
             bottom = NSColor.systemRed.withAlphaComponent(dark ? 0.24 : 0.20)
             rim = NSColor.white.withAlphaComponent(dark ? 0.2 : 0.5)
         }
+        // a soft shadow, drawn only outside the bubble (under a translucent body it would show through and dirty the glass)
+        NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: bounds.insetBy(dx: -30, dy: -30))
+        outside.append(shape)
+        outside.windingRule = .evenOdd
+        outside.addClip()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.34 : 0.15)
+        shadow.shadowBlurRadius = 7
+        shadow.shadowOffset = NSSize(width: 0, height: -2)  // down, whichever way the view runs
+        shadow.set()
+        NSColor.black.setFill()
+        shape.fill()
+        NSGraphicsContext.restoreGraphicsState()
         let wide = body.insetBy(dx: -Self.tailSize, dy: 0)
         NSGraphicsContext.saveGraphicsState()
         shape.addClip()

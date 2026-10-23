@@ -30,7 +30,7 @@ final class ChatPanel: NSPanel {
         level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true  // a light shadow under the whole window: it lifts off the screen a little
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         becomesKeyOnlyIfNeeded = true  // a click on the text box takes the keyboard; scrolling and selecting text do not
