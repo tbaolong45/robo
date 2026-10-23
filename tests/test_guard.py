@@ -161,6 +161,24 @@ def test_refs_are_forgotten_after_a_click_or_annotated_vision(guard):
     assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
 
 
+@pytest.mark.parametrize(("result", "status"), [
+    (json.dumps({"success": False, "error": "CDP error: Could not compute box model."}), "ok"),
+    (json.dumps({"error": "BLOCKED: Action denied by user."}), "ok"),
+    ("{}", "error"), ("{}", "blocked"),
+])
+def test_a_click_that_failed_changed_nothing_so_the_refs_hold(guard, result, status):
+    # LMS scan 2026-10-23: a click failed with "Could not compute box model", the agent retried
+    # the same ref and the retry was refused as an unknown element (the scan denies every ask)
+    see(guard)
+    guard.post_tool_call(tool_name="browser_click", args={"ref": "@e6"}, result=result,
+                         task_id="t1", status=status)
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "allow"
+    # a click that worked still makes them unknown
+    guard.post_tool_call(tool_name="browser_click", args={"ref": "@e6"},
+                         result=json.dumps({"success": True, "clicked": "@e6"}), task_id="t1")
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
+
+
 def test_refs_and_hosts_are_per_task(guard):
     visit(guard, task="t1")
     assert kind(call(guard, "browser_click", {"ref": "@e6"}, task="t2")) == "approve"

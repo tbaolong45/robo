@@ -30,7 +30,7 @@ and never invent a fact.
 ## Procedure
 1. Topic: the student's words. None given: the nearest exam's topics from the ledger
    (`study-ledger`), else ask one short question.
-2. Ask at most 5 questions, ONE per turn, in the bubble: short answers, a mix of recall and
+2. Ask at most 5 questions, ONE per turn, in the chat: short answers, a mix of recall and
    "why". Skip a question the material does not cover; fewer than 5 is fine.
 3. Each question ends with "Answer, then how sure are you, 1-5?". Take the confidence 1-5 before
    you show the answer: if the reply has none, ask "How sure, 1-5?" and wait.

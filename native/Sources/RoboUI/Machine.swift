@@ -95,6 +95,15 @@ struct Machine {
     var studyFile: URL  // the study ledger: exams and "snooze nudges until"
     var dailyTokens = 0  // ROBO_DAILY_TOKENS, else the number in `daily_tokens` of robo's data folder (set in `init`); 0 = no cap
     var showTyper: (TypePanel) -> Void = { $0.present() }
+    /// The chat window (Chat.swift): on or off (the rig turns it off, so every test of the pet's card stays as it is; the chat's tests
+    /// turn it on), how it is put on screen (the panel and the usable area of the main display: it opens in the middle of it) and how
+    /// its text box takes the keyboard. The rig records both and shows nothing.
+    var chatOn = true
+    var showChat: (ChatPanel, CGRect) -> Void = { $0.present(on: $1) }
+    var focusChat: (ChatPanel) -> Void = {
+        $0.makeKey()
+        $0.chat.focusInput()
+    }
     var terminate: () -> Void = { NSApp.terminate(nil) }
     var focus = Focus()
     /// The mean luma (0...1) of the screen behind a rectangle (AppKit coordinates), nil when it cannot be read; `done` runs on the

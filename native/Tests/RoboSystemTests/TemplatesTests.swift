@@ -289,6 +289,26 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         #expect(try section(soulText(), "Drafts, plans and text").contains("robo-notes"))
     }
 
+    /// The chat window holds long answers, so no note is written on the agent's own initiative.
+    @Test func answersStayInTheChatAndAFileIsWrittenOnlyOnRequest() throws {
+        let soul = try soulText()
+        let text = try section(soul, "Drafts, plans and text").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        for phrase in ["Answer in the chat, whatever the length", "Write a file only when the user asks", "Never write a note on your own"] {
+            #expect(text.contains(phrase), "\(phrase)")
+        }
+        #expect(soul.contains("chat window") && !soul.contains("small speech bubble"))
+        for (name, heading, phrase) in [
+            ("robo-notes", "When to Use", "Without that request, answer in the chat"),
+            ("study-plan", "Output", "only if the user asks for a note"),
+            ("school-digest", "Procedure", "no plan note is written unless the user asks"),
+            ("school-mail", "Drafting", "only if the user asks for a note"),
+            ("robo-make", "When to Use", "answer them in the chat"),
+        ] {
+            let body = try section(try skillText(name), heading).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            #expect(body.contains(phrase), "\(name): \(phrase)")
+        }
+    }
+
     @Test(arguments: [
         ("robo-make", "When to Use"),  // hands notes and plans over
         ("study-plan", "Output"),

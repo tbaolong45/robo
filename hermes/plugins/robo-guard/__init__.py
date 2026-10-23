@@ -356,13 +356,18 @@ def post_tool_call(tool_name: str = "", args: dict | None = None, result: object
                    task_id: str = "", status: str = "", **_):
     task, args = task_id or "", args if isinstance(args, dict) else {}
     line = _labels.get(task, {}).get(_ref(args), "")  # read before a click forgets the refs
-    if tool_name in FORGET_AFTER:
-        _labels.pop(task, None)
     try:
         data = json.loads(result)
     except (TypeError, ValueError):
         data = None
     info = data if isinstance(data, dict) else {}
+    # A click that failed or was refused changed nothing: the page is as the last snapshot showed
+    # it, so its refs still hold (the LMS scan of 2026-10-23: "Could not compute box model", then
+    # the retry of the same ref was refused as an unknown element).
+    unchanged = (status in ("error", "blocked") or info.get("success") is False
+                 or bool(info.get("error")))
+    if tool_name in FORGET_AFTER and not unchanged:
+        _labels.pop(task, None)
     host = _host(task)  # of the page the call ran on, before a navigation moves it
     if tool_name == "browser_type" and info.get("success") is True:
         if SEARCH.search(line) and not (MESSAGE.search(line) or IRREVERSIBLE.search(line)):

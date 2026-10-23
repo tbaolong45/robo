@@ -81,6 +81,17 @@ final class RoboWindow {
     var scout = ScoutModel()  // the LMS posts scan: its courses, the run in flight, its failures today (Scout.swift)
     var typerOpen = false  // the Type window is up (a nudge does not break in on it)
 
+    // The chat window (Chat.swift): the conversation, its panel, and what its glass does about the backdrop.
+    var transcript = Transcript()
+    var chat: ChatPanel?
+    var chatOpen = false  // the chat window is up: replies and your turns go there, not to the pet's card
+    var chatShade = Shade()
+    var chatShadeTimer: Timer?
+    var chatLastShade = 0.0, chatSampleAt = 0.0
+    var chatLevel: Double?  // where the glass is now (0 dark ... 1 light); nil until it was shown
+    var chatFooter: [String] = [], chatFailed = false  // what the turn being typed is sealed with when its last letter is there
+    var chatPreviousApp: NSRunningApplication?  // who had the keyboard before the text box took it
+
     var ear: Ear?
     var poller: Polling?
     var wakeWatcher: WakeWatcher?
@@ -176,7 +187,7 @@ final class RoboWindow {
     }
 
     deinit {
-        for t in [ticker, roamTimer, revealer, shadeTimer] { t?.invalidate() }
+        for t in [ticker, roamTimer, revealer, shadeTimer, chatShadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
 
@@ -268,6 +279,7 @@ final class RoboWindow {
         space = fresh
         roamer.setScreens(fresh.roamArea(displays))
         move(to: roamer.pos)
+        if chatOpen { placeChat() }  // the middle of the main screen, wherever that is now
     }
 
     // MARK: - the face: click = listen, drag = move robo and leave it there
@@ -381,6 +393,7 @@ final class RoboWindow {
         theme = t
         face.setTheme(hue: hueFunction(t), bg: screenColours(t))
         card.setTheme(t)  // restyles the header, quote, dots and caret too
+        chat?.chat.setTheme(t)
         card.setHue(Themes.liveHue(t, faceNow: face.params.hue, activity: mind.activity.rawValue))
         var pace = tw.pace
         pace.cps = t.cps
@@ -394,6 +407,10 @@ final class RoboWindow {
 
     /// A small window of its own, on the face's display.
     func typeText() {
+        if machine.chatOn {  // the chat has a text box of its own: it opens and takes the keyboard
+            openChat(focusInput: true)
+            return
+        }
         typer?.close()
         let t = TypePanel { [weak self] in self?.ask($0) }
         t.onClose = { [weak self, weak t] in if self?.typer === t { self?.typerOpen = false } }
@@ -453,8 +470,9 @@ final class RoboWindow {
         shutdownStarted = true
         scout.running?.cancel()  // best effort: the scan only reads, so a run that outlives the app is harmless
         panel.orderOut(nil)
+        chat?.orderOut(nil)
         typer?.close()
-        for t in [ticker, roamTimer, revealer, shadeTimer] { t?.invalidate() }
+        for t in [ticker, roamTimer, revealer, shadeTimer, chatShadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         let wasBusy = lock.withLock { () -> Bool in
             cancel = busy

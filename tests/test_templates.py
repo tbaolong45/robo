@@ -266,6 +266,25 @@ def test_soul_sends_drafts_plans_and_text_to_robo_notes():
     assert "robo-notes" in section(soul, "Drafts, plans and text")
 
 
+def test_answers_stay_in_the_chat_and_a_file_is_written_only_on_request():
+    """The chat window holds long answers, so no note is written on the agent's own initiative."""
+    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    text = " ".join(section(soul, "Drafts, plans and text").split())
+    for phrase in ("Answer in the chat, whatever the length",
+                   "Write a file only when the user asks", "Never write a note on your own"):
+        assert phrase in text, phrase
+    assert "chat window" in soul and "small speech bubble" not in soul
+    for name, heading, phrase in [
+        ("robo-notes", "When to Use", "Without that request, answer in the chat"),
+        ("study-plan", "Output", "only if the user asks for a note"),
+        ("school-digest", "Procedure", "no plan note is written unless the user asks"),
+        ("school-mail", "Drafting", "only if the user asks for a note"),
+        ("robo-make", "When to Use", "answer them in the chat"),
+    ]:
+        skill = (HERMES / "skills" / "school" / name / "SKILL.md").read_text(encoding="utf-8")
+        assert phrase in " ".join(section(skill, heading).split()), (name, phrase)
+
+
 @pytest.mark.parametrize(("name", "heading"), [
     ("robo-make", "When to Use"),  # hands notes and plans over
     ("study-plan", "Output"),

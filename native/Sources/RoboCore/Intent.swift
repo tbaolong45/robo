@@ -21,6 +21,19 @@ public enum Intent {
                                                    "do", "có", "ừ", "đồng", "vâng", "dạ"].map { $0.precomposedStringWithCanonicalMapping })
     private static let fillers: Set<String> = Set(["go", "it", "please", "ý"].map { $0.precomposedStringWithCanonicalMapping })
 
+    // "close the chat": the only way the chat window goes away. The WHOLE sentence must be the request (a few polite words before or after
+    // are fine), so "close the Moodle tab" or "close the chat tab in Teams" are for the agent and never match. English only.
+    private static let closeChat = try! NSRegularExpression(
+        pattern: #"^(?:(?:hey|ok|okay|robo|please|could you|can you|would you|will you) )*"#
+            + #"(?:close|hide|dismiss) (?:the |this |that |my )?(?:chat|conversation)(?: window| panel| box)?"#
+            + #"(?: (?:please|now|thanks|thank you|for me))*$"#)
+
+    /// True when the whole sentence asks to close the chat window: "close the chat", "please hide this chat window", "Robo, dismiss the chat."
+    public static func closesChat(_ text: String) -> Bool {
+        let words = text.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        return closeChat.firstMatch(in: words, range: NSRange(location: 0, length: (words as NSString).length)) != nil
+    }
+
     /// True when `text` talks of sending, replying, deleting, paying, booking, posting, moving and the like,
     /// or is only a "yes" (a confirmation of something robo proposed).
     public static func changesThings(_ text: String) -> Bool {

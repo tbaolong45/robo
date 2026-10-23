@@ -164,6 +164,29 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   change on the INSTALLED app, not only on a fresh copy, and look at the picture, not only at the numbers.
   To test: launch a copy with `open -n` (so the permission is Robo's, not your shell's), put an opaque window of your own at
   level `.floating - 1` under it, pin the pet with Stay (it roams otherwise), capture only that region.
+- **Chat window (Swift app, 2026-10-23, user request: a bigger, detached, bubble-style, adaptive Liquid Glass chat so the agent need not write a note for long answers)**.
+  `ChatPanel`/`ChatView` (`ChatPanel.swift`), `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore
+  `Transcript` (memory only, one per Hermes session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a window of its own, **fixed
+  about 520x640, centred on the main display** each time it opens (not attached to the pet, never pinned by it), opens on `ask()` (typed, spoken, digest, the
+  automatic digest too), **closes only by `Intent.closesChat`** ("close the chat", whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent;
+  no timer, no Esc, no close button, a face click does not close it), English only. The pet's card keeps what is quick (menu, "listening", Allow/Deny, nudges);
+  `say()` notices become robo bubbles while the chat is open (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` ->
+  `chatBegin` (your turn + an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to `ChatView.setLive`,
+  `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask -> `chatInterrupted` (partial kept, footer "stopped", an
+  empty turn is dropped). **Close mid-run falls back to the pet's card** (`render()` routes by `chatOpen`), so nothing is lost. `Machine.chatOn` is true in
+  the app and **false in the `Rig` by default** (`Rig(chat: true)` in `ChatTests.swift`), so every card test is unchanged; `showChat`/`focusChat` are the seams
+  (the rig records, never orders front). **Adaptive glass**: its own `Shade` (`chatShade`), looks every 0.5 s while open, `GlassSurface(radius:)` crossfades and the
+  PANEL's `appearance` flips at level 0.5, so text (system dynamic colours: `Markdown.attributed(..., ink: nil)`, `Chrome.text(_ ink:)`) follows with no rebuild and
+  `Chrome.ink` stays the card's. The card's look and the chat's share the one `sampling` flag: `Backdrop` is single-flight and silently drops a second caller (its
+  `done` never runs), so two flags would stick forever. The panel is non-activating, `becomesKeyOnlyIfNeeded`; a click on its text box takes the keyboard
+  (`EditKeys`, handback through `Focus`), `nudgeHeld` waits while that is so. **Looked at, not only tested** (installed build, own backdrop windows at `.floating - 1`,
+  `ROBO_CHAT_DEMO=1` on a throwaway HOME, 2026-10-23): light glass over black, dark over white, real transparency over half-and-half, bubbles with sheen and rim,
+  capsule input, header orb, fades under the header and over the input. A test copy launched from a scratch path made macOS ask "bypass the system private window
+  picker" for Screen Recording: do not click it for the user; test through the INSTALLED app (`open -n ~/Applications/Robo.app --env HOME=<throwaway> ...`),
+  which has the grant. **Not verified**: typing in the text box on a real keyboard (spike pending: non-activating key panel), Spaces/full-screen, dragging, the
+  1 Hz-ish capture cost over time, the agent side live (the persona/skill edits need `robo setup`; until then it still writes notes for long answers).
+  Agent side: SOUL.md "Drafts, plans and text" and the skills (robo-notes, robo-make, study-plan, school-digest, school-mail, robo-brain, study-quiz) now say
+  answer in the chat, write a file only on request; pinned in both template suites (`answersStayInTheChatAndAFileIsWrittenOnlyOnRequest`).
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
   answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
   ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks

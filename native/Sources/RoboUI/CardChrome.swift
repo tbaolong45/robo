@@ -33,19 +33,25 @@ enum Chrome {
     static var ink: Double?
 
     /// The ink at `alpha`: near-white to near-black along `ink`, or the system's colour when nothing is known.
-    private static func inked(_ alpha: CGFloat, system: NSColor) -> NSColor {
+    private static func inked(_ alpha: CGFloat, system: NSColor, _ ink: Double?) -> NSColor {
         guard let ink else { return system }
         return NSColor(white: 0.96 + (0.07 - 0.96) * ink, alpha: alpha)
     }
 
     /// The system's own colours (they resolve at draw time, so light, dark and the glass behind decide) until the card knows its
-    /// backdrop, then the ink above with the alphas the system's have.
-    static var text: NSColor { inked(1, system: .labelColor) }
-    static var textDim: NSColor { inked(0.6, system: .secondaryLabelColor) }
-    static var faint: NSColor { inked(0.3, system: .tertiaryLabelColor) }
-    static var hairline: NSColor { inked(0.18, system: .separatorColor) }
+    /// backdrop, then the ink above with the alphas the system's have. The versions with an `ink:` take it from the caller: the chat
+    /// window passes nil (its panel has the light or dark appearance itself, so the system's colours are right and never need a rebuild).
+    static var text: NSColor { text(ink) }
+    static var textDim: NSColor { textDim(ink) }
+    static var faint: NSColor { faint(ink) }
+    static var hairline: NSColor { hairline(ink) }
+    static func text(_ ink: Double?) -> NSColor { inked(1, system: .labelColor, ink) }
+    static func textDim(_ ink: Double?) -> NSColor { inked(0.6, system: .secondaryLabelColor, ink) }
+    static func faint(_ ink: Double?) -> NSColor { inked(0.3, system: .tertiaryLabelColor, ink) }
+    static func hairline(_ ink: Double?) -> NSColor { inked(0.18, system: .separatorColor, ink) }
     /// A quiet wash over glass: chips, code boxes.
-    static func wash(_ alpha: CGFloat) -> NSColor { inked(alpha, system: NSColor.labelColor.withAlphaComponent(alpha)) }
+    static func wash(_ alpha: CGFloat) -> NSColor { wash(alpha, ink) }
+    static func wash(_ alpha: CGFloat, _ ink: Double?) -> NSColor { inked(alpha, system: NSColor.labelColor.withAlphaComponent(alpha), ink) }
 
     /// The hue in the 2 degree steps the card follows the face in (Python `round` is half to even).
     static func quantised(_ hue: Double) -> Double {
@@ -113,16 +119,20 @@ final class GlassSurface: NSView {
 
     private let light: NSView  // the light glass (`.aqua`, below); before macOS 26 the one blur, which flips appearance
     private let dark: NSView?  // macOS 26 only
-    private let veil = Veil()
+    private let veil: Veil
     /// What `setShade` was given: nil = the system's look.
     private(set) var level: Double?
 
-    override init(frame: NSRect) {
+    override convenience init(frame: NSRect) { self.init(frame: frame, radius: Chrome.radius) }
+
+    /// `radius`: the corner of the pane (the card's is `Chrome.radius`; the chat window's is larger).
+    init(frame: NSRect, radius: CGFloat) {
+        veil = Veil(radius: radius)
         if #available(macOS 26, *) {
             let below = NSGlassEffectView(), above = NSGlassEffectView()
             for glass in [below, above] {
                 glass.style = .regular
-                glass.cornerRadius = Chrome.radius
+                glass.cornerRadius = radius
             }
             // Each glass keeps its appearance for life: changing it after the glass had rendered left it showing the old one
             // (seen live 2026-10-19: a dark card over black although the shade said light). Only which one shows changes.
@@ -135,7 +145,7 @@ final class GlassSurface: NSView {
             blur.state = .active  // the panel is never the key window: follow-the-window would leave it grey
             blur.blendingMode = .behindWindow
             blur.wantsLayer = true
-            blur.layer?.cornerRadius = Chrome.radius
+            blur.layer?.cornerRadius = radius
             blur.layer?.masksToBounds = true
             (light, dark) = (blur, nil)
         }
@@ -193,8 +203,10 @@ final class GlassSurface: NSView {
     /// Hidden (and never drawn) while `veilStrength` is 0.
     private final class Veil: NSView {
         private var level = 0.0
+        private let radius: CGFloat
 
-        init() {
+        init(radius: CGFloat) {
+            self.radius = radius
             super.init(frame: .zero)
             isHidden = true
         }
@@ -210,7 +222,7 @@ final class GlassSurface: NSView {
         }
 
         override func draw(_ dirtyRect: NSRect) {
-            let shape = NSBezierPath(roundedRect: bounds, xRadius: Chrome.radius, yRadius: Chrome.radius)
+            let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
             NSColor.white.withAlphaComponent(level * GlassSurface.veilStrength).setFill(); shape.fill()
             NSColor.black.withAlphaComponent((1 - level) * GlassSurface.veilStrength).setFill(); shape.fill()
         }

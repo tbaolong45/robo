@@ -236,6 +236,8 @@ extension CardView {
     var pointer = CGPoint(x: 100, y: 100)  // AppKit coordinates
     var files: [URL] = [], notes: [(url: URL, front: Bool)] = []
     var typers: [TypePanel] = [], ears: [FakeEar] = [], pollers: [FakePoller] = []
+    var chats: [ChatPanel] = []  // each time the chat was put on screen, and how often its text box was asked to take the keyboard
+    var chatFocuses = 0
     var terminated = false
     /// The backdrop: what the fake sampler reads (nil = no Screen Recording), the rectangles it was asked about, the answers held back
     /// by `holdLooks` until `answerLooks`, how often the permission was asked for, and Reduce Motion. Nothing here captures the
@@ -281,7 +283,7 @@ extension CardView {
     init(_ script: [FakeHermes.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
          listener: Bool = true, micOK: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
          today: @escaping () -> CalendarDay = { Rig.day }, network: @escaping () -> Bool = { true },
-         watchPaused: Bool = false, hotkey: Hotkey? = nil, radar: Bool = false) {
+         watchPaused: Bool = false, hotkey: Hotkey? = nil, radar: Bool = false, chat: Bool = false) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         hermes = FakeHermes(script, fail: fail)
         digest = DigestClock(path: dir.appendingPathComponent("state.json"))
@@ -320,6 +322,12 @@ extension CardView {
         m.openFile = { [weak self] in self?.files.append($0) }
         m.openNote = { [weak self] url, front in self?.notes.append((url, front)) }
         m.showTyper = { [weak self] in self?.typers.append($0) }
+        m.chatOn = chat  // off unless a test asks for it: the pet's card tests stay as they are
+        m.showChat = { [weak self] panel, visible in
+            self?.chats.append(panel)
+            panel.setFrame(ChatPanel.frame(centredOn: visible), display: false)  // placed, never ordered front
+        }
+        m.focusChat = { [weak self] _ in self?.chatFocuses += 1 }
         m.terminate = { [weak self] in self?.terminated = true }
         m.backdropLuma = { [weak self] rect, done in
             guard let self else { return done(nil) }

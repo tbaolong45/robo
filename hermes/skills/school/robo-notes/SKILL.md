@@ -13,11 +13,11 @@ metadata:
 # Robo notes (drafts, plans and text in Obsidian)
 
 ## When to Use
-Your answer is a DRAFT (email, message, essay), a PLAN (study plan, schedule) or TEXT (notes, a
-summary, an explanation longer than a few lines). Write it as a note in the user's Obsidian
-vault instead of the bubble. A quick answer or one tutoring step stays in the bubble. Things
-that need a browser (diagram, chart, web page, slides, flashcards) are `robo-make`; a quiz is
-`study-quiz`.
+The user ASKS for a note: a DRAFT (email, message, essay), a PLAN (study plan, schedule) or TEXT
+(notes, a summary, an explanation) written into their Obsidian vault ("write this as a note",
+"save it in Obsidian"). Without that request, answer in the chat whatever the length and write no
+file. Things that need a browser (diagram, chart, web page, slides, flashcards) are `robo-make`;
+a quiz is `study-quiz`.
 
 ## Where
 One note per request, written with `write_file` into the vault `{{VAULT}}`:

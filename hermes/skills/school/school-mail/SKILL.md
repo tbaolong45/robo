@@ -37,8 +37,9 @@ write or send an email.
 For "draft/write an email to X about Y":
 1. You need X's address. If you only have a name, find it in a mail from them (or ask); never
    guess. Write a short subject and body in the user's voice.
-2. Write the draft as a Drafts note with `robo-notes` (To, Subject, body), so the user can read
-   it formatted. Do this first; it sends nothing and saves nothing in Outlook.
+2. Show the draft in your reply (To, Subject, body), formatted so it reads well. Write it as a
+   Drafts note with `robo-notes` only if the user asks for a note. This sends nothing and saves
+   nothing in Outlook.
 3. `browser_navigate(url="https://outlook.office.com/mail/deeplink/compose?to=<addr>&subject=<subject>&body=<body>")`,
    every value URL-encoded (spaces `%20`, new lines `%0A`). Sign-in pages: Procedure steps
    2-3 above, then open the compose link again.
@@ -49,10 +50,10 @@ For "draft/write an email to X about Y":
    close the compose with `browser_press(key="Escape")`. Never click "Discard".
 6. Verify before you claim it: `browser_navigate(url="https://outlook.office.com/mail/drafts")`
    and find a row "[Draft] <recipient> <subject>". If it is not there, say so and try once
-   more. Then tell the user the draft is shown in Obsidian and saved in their university
-   Outlook Drafts (not Gmail), with the subject, and offer to send it. `patch` the note's line
-   `status: unsent` to `status: saved in Outlook Drafts` only after the draft row is found (the
-   "Not sent" callout stays); if the row never shows up, leave the status and say so.
+   more. Then tell the user the draft is saved in their university Outlook Drafts
+   (not Gmail), with the subject, and offer to send it. If you wrote a draft note, `patch` its
+   line `status: unsent` to `status: saved in Outlook Drafts` only after the draft row is found
+   (the "Not sent" callout stays); if the row never shows up, leave the status and say so.
 
 NEVER click Send unless the user's request explicitly says "send" (then check the fields once
 more first). For a reply, open the message and use its Reply the same way: draft unless told

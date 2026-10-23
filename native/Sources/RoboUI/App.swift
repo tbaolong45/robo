@@ -11,6 +11,10 @@ extension RoboWindow {
 
     /// Start one run; while another is in flight, stop it and ask this one after it.
     func ask(_ text: String, waitNetwork: Bool = false) {
+        if chatOpen && Intent.closesChat(text) {  // "close the chat" closes the chat window; it is not a request for the agent
+            closeChat()
+            return
+        }
         dismissNudge()  // a request of any kind takes the card: the nudge is closed unanswered
         scout.running?.cancel()  // the user comes first: an LMS scan in the background gives way (Scout.swift)
         if busy {
@@ -38,10 +42,16 @@ extension RoboWindow {
         digestDay = text == RoboWindow.digestPrompt ? day : nil
         autoDigest = waitNetwork && digestDay != nil
         startedAt = machine.wall()  // files robo makes from now on are opened when it's done
-        let shown = !tw.text.isEmpty && !card.isHidden  // an answer is still up, or just
-        let follow = shown || now() - answeredAt < RoboWindow.followUpS  // was: this follows it up
-        setHeard(digestDay != nil ? "" : text, followUp: follow)
-        clearReply()
+        if machine.chatOn {
+            // Your turn and Robo's answer go to the chat window, which keeps the conversation; the pet's card only listened.
+            chatBegin(you: digestDay == nil ? text : (waitNetwork ? nil : "📚 School digest"))
+            clearReply()
+        } else {
+            let shown = !tw.text.isEmpty && !card.isHidden  // an answer is still up, or just
+            let follow = shown || now() - answeredAt < RoboWindow.followUpS  // was: this follows it up
+            setHeard(digestDay != nil ? "" : text, followUp: follow)
+            clearReply()
+        }
         onEvent(.userSent(text))
         let (session, since, output, vault) = (sessionID, startedAt, machine.outputDir, machine.vaultDir)
         let (receipts, usageFile, clock, wall, began) = (machine.receiptsFile, machine.usageFile, machine.clock, machine.wall, runStart)
@@ -170,6 +180,13 @@ extension RoboWindow {
     /// Show a short local message (no model involved), typed like an answer. During a run it is not the end
     /// of the reply: Hermes goes on and `runEnded` finishes it.
     func say(_ text: String) {
+        if chatOpen {  // a notice is a line of the conversation; the answer being typed (if any) is not touched
+            dismissNudge()
+            retireListeningCard()
+            transcript.note(text)
+            chat?.chat.set(turns: transcript.turns)
+            return
+        }
         dismissNudge()
         setHeard("")
         clearReply()
@@ -186,11 +203,12 @@ extension RoboWindow {
             stop()  // speaking over robo interrupts its answer
             dismissNudge()
             noted = false
+            chatInterrupted(stopped: busy, footer: busy ? [] : chatFooter)  // an answer being written in the chat is kept as far as it got
             setHeard("")
             clearReply()
-            open()
+            open()  // the pet's card listens; the chat opens when there is something to ask
         case .userSent:
-            open()
+            if !machine.chatOn { open() }
         case .delta(let t):
             reply += t
             feed(reply)
@@ -248,12 +266,21 @@ extension RoboWindow {
             if !files.isEmpty { lines.append("📂 Opened " + files.map(\.lastPathComponent).joined(separator: ", ")) }
         }
         if !listening { lines += made?.receipts ?? [] }  // what the guard recorded, also under a failed or stopped run: a send may have happened
+        let toChat = machine.chatOn && chatOpen  // the answer is written in the chat window (else on the pet's card, as before)
+        var stopped = false
+        if toChat && status != "completed" && !reply.isEmpty {  // cut short: what arrived stays, marked as stopped
+            (text, stopped) = (reply, true)
+            lines.insert("stopped", at: 0)
+        }
         if !listening && pending.isEmpty {
-            card.setFooter(lines.joined(separator: "\n"))  // shown when the typing is done
+            if machine.chatOn { (chatFooter, chatFailed) = (lines, status != "completed" && !stopped) }  // sealed when the typing is done
+            if !toChat { card.setFooter(lines.joined(separator: "\n")) }  // shown when the typing is done
             feed(text, end: true)
+        } else if toChat {
+            chatInterrupted(stopped: status != "completed", footer: lines)  // you spoke or asked again: nothing more is typed
         }
         digestDay = nil
-        open(closeAfter: listening ? 0 : RoboWindow.closeAfter)
+        if !toChat { open(closeAfter: listening ? 0 : RoboWindow.closeAfter) }
         if !pending.isEmpty {
             text = pending
             pending = ""
@@ -276,6 +303,7 @@ extension RoboWindow {
         alive(now)
         if machine.wall() >= nudge.checkAt { nudgeTick() }  // wall time: the Mac's sleep does not stop a deadline
         if !card.isHidden && now >= sampleAt { look() }  // nothing runs while the card is away
+        if chatOpen && now >= chatSampleAt { chatLook() }  // one look at a time (`sampling`): the other tries again at the next tick
         refresh()
     }
 
@@ -313,6 +341,7 @@ extension RoboWindow {
         let thinking = busy && reply.isEmpty && !listeningNow
         let label = listeningNow ? "listening" : thinking ? workingLabel(m, now) : ""  // e.g. "searching the web…" beside the dots
         card.setStatusRow(typing: thinking, label: label)
+        refreshChat(listening: listeningNow, thinking: thinking, label: label)
     }
 
     /// The line beside the dots while Hermes works: what the last tool does (it stays while the model thinks between tools),
@@ -410,7 +439,9 @@ extension RoboWindow {
         typed = true
         typedAt = now()
         card.showFooter()
-        if closeAfter != 0 && !busy { closeAt = typedAt + closeAfter }
+        let toChat = machine.chatOn && chatOpen
+        chatSealed()  // the answer in the conversation is final now, with its footer
+        if closeAfter != 0 && !busy && !toChat { closeAt = typedAt + closeAfter }  // the chat is not closed by a timer
         if followDue && !busy {  // counted from the last letter: typing and reading must not eat the window
             followDue = false
             if let ear {
@@ -425,7 +456,11 @@ extension RoboWindow {
     /// invisible (so a word that will not fit the line wraps before it appears).
     func render() {
         let (markdown, hidden) = tw.view()
-        card.setReply(markdown: markdown, hiddenTail: hidden)
+        if machine.chatOn && chatOpen {
+            chat?.chat.setLive(markdown: markdown, hidden: hidden)
+        } else {
+            card.setReply(markdown: markdown, hiddenTail: hidden)
+        }
     }
 
     /// Show the whole reply now, and whatever still arrives (click on the reply, Esc).
@@ -469,7 +504,7 @@ extension RoboWindow {
     func closeBubble() {
         closeAt = 0
         stopShading()
-        endFollowUp()
+        if !chatOpen { endFollowUp() }  // the chat's answer may still be waiting for your reply: a card closing does not end that
         fit {
             dismissNudge()  // a nudge that is still up when the card goes was not answered
             card.hideMenu()

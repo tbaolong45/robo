@@ -17,7 +17,7 @@ ONLY when the user asks you to keep something: "save this to my brain", "add thi
 "make a reading note for this paper", "put this in my inbox", "log this for my career". Never
 file anything on your own, and never as a side effect of another request: a digest, a plan, a
 quiz and an answer stay as they are. The brain holds what the user learned, in their words. A
-draft, a plan or a long text for them to use is `robo-notes`.
+draft, a plan or a long text is answered in the chat; a note for it is `robo-notes`, only on request.
 
 ## Where
 The brain is `{{VAULT}}/Brain/`, and its layout is the user's: `ls` it first.
