@@ -71,7 +71,7 @@ public func chatMain(environment: [String: String] = ProcessInfo.processInfo.env
     let profile = HermesProfile(env: environment)
     do {
         let dev = DevSwitches(environment: environment)
-        let c = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir) })
+        let c = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir, downloads: Browser.downloadsDir) })
         let session = "robo-chat-\(CalendarDay().iso)-\(profile.personaStamp())"
         return await runChat(HermesClient(baseURL: c.url, key: c.key), session: session)
     } catch {

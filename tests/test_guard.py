@@ -161,6 +161,24 @@ def test_refs_are_forgotten_after_a_click_or_annotated_vision(guard):
     assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
 
 
+@pytest.mark.parametrize(("result", "status"), [
+    (json.dumps({"success": False, "error": "CDP error: Could not compute box model."}), "ok"),
+    (json.dumps({"error": "BLOCKED: Action denied by user."}), "ok"),
+    ("{}", "error"), ("{}", "blocked"),
+])
+def test_a_click_that_failed_changed_nothing_so_the_refs_hold(guard, result, status):
+    # LMS scan 2026-10-23: a click failed with "Could not compute box model", the agent retried
+    # the same ref and the retry was refused as an unknown element (the scan denies every ask)
+    see(guard)
+    guard.post_tool_call(tool_name="browser_click", args={"ref": "@e6"}, result=result,
+                         task_id="t1", status=status)
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "allow"
+    # a click that worked still makes them unknown
+    guard.post_tool_call(tool_name="browser_click", args={"ref": "@e6"},
+                         result=json.dumps({"success": True, "clicked": "@e6"}), task_id="t1")
+    assert kind(call(guard, "browser_click", {"ref": "@e6"})) == "approve"
+
+
 def test_refs_and_hosts_are_per_task(guard):
     visit(guard, task="t1")
     assert kind(call(guard, "browser_click", {"ref": "@e6"}, task="t2")) == "approve"
@@ -299,6 +317,9 @@ def test_robos_own_school_skills_cannot_be_changed(guard, ops):
     "http://localhost:8000/", "https://outlook.office.com/calendar/view/week",
     "https://outlook.office.com/mail/inbox?login_hint=me@uni.example",
     "https://teams.microsoft.com/", f"{MOODLE}/calendar/view.php?view=upcoming",
+    # the recent-activity form's own field `logaction` is not an `action=`
+    # (the LMS posts scan was refused here, 2026-10-22)
+    f"{MOODLE}/course/recent.php?id=2676&date=1792526400&modid=&user=0&logaction=0&filter=1",
 ])
 def test_any_website_opens_freely(guard, url):
     assert kind(call(guard, "browser_navigate", {"url": url})) == "allow"
@@ -315,6 +336,8 @@ def test_any_website_opens_freely(guard, url):
     "&redirect_uri=https://evil.example/&state=DATA",
     f"{MOODLE}/login/log%6Fut.php",
     f"{MOODLE}/login/log\tout.php",
+    f"{MOODLE}/mod/forum/view.php?id=2&action=delete", f"{MOODLE}/x.php?id=2&Action=remove",
+    f"{MOODLE}/x.php?action=confirm&id=2",
     "file:///etc/passwd", "chrome://settings/",
 ])
 def test_side_effect_and_non_web_urls_ask_the_user(guard, url):

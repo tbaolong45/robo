@@ -51,21 +51,24 @@ digest has the classes and deadlines) instead of fetching again.
    re-pack by hand. If it errors, fix the JSON once and rerun.
 
 ## Output
-Write the blocks in time order as a Plans note with `robo-notes` (use its plan format; work that
-did not fit goes in its "Didn't fit" callout). Robo shows the note in Obsidian; do not paste the
-blocks into the reply. Reply with two sentences (the plan's size and the first block, and what
-did not fit), then the question. In the school digest, write the same note; the digest's one
-line about it replaces this reply.
+Show the plan in your reply, in time order: one line per block with the time in bold, then what
+did not fit, then the question. Write a Plans note with `robo-notes` (its plan format, its
+"Didn't fit" callout) only if the user asks for a note. In the school digest, the same lines
+are the digest's **Plan** section.
 
 ```
 [[feel:calm]]
-Your plan for today is in Obsidian: 2 blocks, MATH201 problem set 4 first. The CS lab write-up
-didn't fit, so try it tomorrow morning.
+Your plan for today (2 blocks):
+
+**10:45-12:15** MATH201 problem set 4
+**14:00-15:00** CS lab write-up, part 1
+
+Didn't fit: the rest of the CS lab write-up, so try it tomorrow morning.
 Put these in your Robo Plan calendar?
 ```
 
-If today already has `[Robo]` events, put those in the note instead (`status: in calendar`) and
-offer to re-plan.
+If today already has `[Robo]` events, list those as already in the calendar and offer to
+re-plan.
 
 ## Adding to the calendar
 Only after the user says yes (their next message), or asked for a block directly. For each

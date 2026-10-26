@@ -44,6 +44,12 @@ private let acmeURL = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
 private let ctfURL = "https://ctftime.org/api/v1/events/?limit=30"
 private let codeforcesURL = "https://codeforces.com/api/contest.list?gym=false"
 private func hnItem(_ id: Int) -> String { "https://hacker-news.firebaseio.com/v0/item/\(id).json" }
+/// The seven blogs of labs and companies, and the three searches of the profile's strongest interests (robotics*2, vision, medical imaging).
+private let announcementURLs = RadarHosts.announcements.map(\.link)
+private let githubQueries = ["robotics", "vision", "medical imaging"]
+private func githubURLs(_ when: Date = date(8)) -> [String] { githubQueries.map { Radar.githubSearch($0, now: when, zone: utc) } }
+/// Every source of a full run of `profileText`: 11 as before, 7 announcement feeds and 3 GitHub searches.
+private let sourcesOfAFullRun = 11 + 7 + 3
 
 private func atom(_ entries: [(id: String, title: String, summary: String)]) -> String {
     "<?xml version='1.0' encoding='UTF-8'?><feed xmlns:arxiv=\"http://arxiv.org/schemas/atom\" xmlns=\"http://www.w3.org/2005/Atom\">"
@@ -96,6 +102,22 @@ private func serveEverything(_ f: RadarFakes) {
         + #"{"id":3452,"title":"Cooking Quiz Night","ctftime_url":"https://ctftime.org/event/3452","start":"2026-10-25T10:00:00+00:00","weight":0,"onsite":false,"format":"Jeopardy","restrictions":"Open","description":"x"}]"#)
     f.serve(codeforcesURL, #"{"status":"OK","result":[{"id":2100,"name":"Codeforces Round 1000 (Div. 2)","type":"CF","phase":"BEFORE","durationSeconds":7200,"startTimeSeconds":\#(Int(at(8)) + 3 * 86_400)},"#
         + #"{"id":2099,"name":"Old round","type":"CF","phase":"FINISHED","durationSeconds":7200,"startTimeSeconds":\#(Int(at(8)) - 86_400)}]}"#)
+    // the labs' blogs: the first has one post that matches the profile and one that does not, the others are quiet
+    for (i, link) in announcementURLs.enumerated() {
+        f.serve(link, i == 0 ? """
+            <?xml version="1.0"?><rss version="2.0"><channel><title>Lab</title>
+            <item><title>Robotics foundation models for vision</title><link>https://openai.com/index/robotics-vision</link><description>A new robotics and vision model.</description>
+            <pubDate>Tue, 20 Oct 2026 06:00:00 GMT</pubDate></item>
+            <item><title>A new office in a faraway city</title><link>https://openai.com/index/office</link><description>We are opening an office.</description>
+            <pubDate>Tue, 20 Oct 2026 05:00:00 GMT</pubDate></item></channel></rss>
+            """ : #"<?xml version="1.0"?><rss version="2.0"><channel><title>Quiet</title></channel></rss>"#)
+    }
+    // GitHub: the search for "robotics" has a repository that matches and one that does not; the others find nothing
+    for (i, link) in githubURLs().enumerated() {
+        f.serve(link, i == 0 ? #"{"total_count":2,"items":[{"full_name":"acme/robot-arm-vision","description":"Vision-guided robotics arm control","stargazers_count":120,"#
+            + #""created_at":"\#(iso(at(0)))","topics":["robotics","vision"],"language":"Python","fork":false,"archived":false},"#
+            + #"{"full_name":"someone/todo-app","description":"A to-do list","stargazers_count":900,"created_at":"\#(iso(at(0)))","topics":[],"language":"Go"}]}"# : #"{"total_count":0,"items":[]}"#)
+    }
 }
 
 private func vault() -> URL {
@@ -131,6 +153,20 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
 }
 
 // MARK: - what a run finds and writes
+
+@Suite struct GitHubSearchTests {
+    @Test func theSearchIsTheLastWeekMostStarredFirstAndNamesOnlyTheQuery() throws {
+        let url = Radar.githubSearch("computer vision", now: date(8), zone: utc)
+        #expect(url == "https://api.github.com/search/repositories?q=computer%20vision%20in:name,description,topics%20created:%3E2026-10-13%20stars:%3E10&sort=stars&order=desc&per_page=10")
+        // decoded, it holds the query words and the fixed qualifiers, and nothing else of the profile
+        let q = try #require(URLComponents(string: url)?.queryItems?.first { $0.name == "q" }?.value)
+        #expect(q == "computer vision in:name,description,topics created:>2026-10-13 stars:>10")
+        // a week back is the user's local day, not UTC's: 00:30 in Hanoi on the 20th is still the 19th in UTC
+        let hanoi = TimeZone(identifier: "Asia/Ho_Chi_Minh")!
+        #expect(Radar.githubSearch("x", now: date(17, 30, day: 19), zone: hanoi).contains("created:%3E2026-10-13"))  // 00:30 on the 20th there
+        #expect(Radar.githubSearch("x", now: date(17, 30, day: 19), zone: utc).contains("created:%3E2026-10-12"))
+    }
+}
 
 @Suite(.serialized) struct RadarRunTests {
     @Test func noProfileMakesTheTemplateOnceAndFetchesNothing() async throws {
@@ -173,35 +209,48 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         let f = RadarFakes()
         serveEverything(f)
         let found = await run(v, f)
-        // every source once; only categories, a company and the profile's own feed are in a URL, never what the profile says
-        #expect(f.asked.count == 11 && Set(f.asked) == [arxivURL, hfURL, topURL, hnItem(101), hnItem(102), hnItem(103), feedURL, simplifyURL, acmeURL, ctfURL, codeforcesURL])
-        for url in f.asked { for word in ["robotic", "medical", "germany", "crypto", "research internship"] { #expect(!url.lowercased().contains(word), "\(url)") } }
+        // every source once; only categories, a company, the profile's own feed and (for GitHub) the three strongest interests are in a URL
+        #expect(f.asked.count == sourcesOfAFullRun)
+        #expect(Set(f.asked) == Set([arxivURL, hfURL, topURL, hnItem(101), hnItem(102), hnItem(103), feedURL, simplifyURL, acmeURL, ctfURL, codeforcesURL]
+            + announcementURLs + githubURLs()))
+        // ...and never what else the profile says: not the goals, the country, the excluded words; GitHub gets the interests and nothing more
+        for url in f.asked { for word in ["germany", "crypto", "research internship"] { #expect(!url.lowercased().contains(word), "\(url)") } }
+        for url in f.asked where !url.hasPrefix("https://api.github.com/") { for word in ["robotic", "medical"] { #expect(!url.lowercased().contains(word), "\(url)") } }
+        #expect(f.asked.filter { $0.hasPrefix("https://api.github.com/") }.count == 3)
         #expect(f.hosts == ["news.example.org"] && found.done && found.failed.isEmpty)
 
         let text = try #require(note(v))
         let heads = text.split(separator: "\n").filter { $0.hasPrefix("#") }.map(String.init)
-        #expect(heads == ["# Radar · 2026-10-20", "## Papers", "## News", "## Opportunities", "## Contests"])
+        #expect(heads == ["# Radar · 2026-10-20", "## Papers", "## Announcements", "## News", "## Code", "## Opportunities", "## Contests"])
         let lines = Set(text.split(separator: "\n").map(String.init))
         for line in ["- [Robot arm calibration with vision](https://arxiv.org/abs/2610.00001) · arxiv.org · matches: robotics, vision · ✓ a primary source · a preprint: not peer reviewed",
                      "- [Medical imaging AI wins a prize](https://news.example.org/a) · news.example.org · matches: medical imaging",
                      "- [Acme Robotics — Robotics Research Intern](https://careers.acmerobotics.com/jobs/1) · careers.acmerobotics.com · matches: robotics · its address matches the employer's name (that does not prove the employer is real)",
                      "- [Robotics CTF 2026](https://ctftime.org/event/3451) · ctftime.org · matches: robotics · ✓ a primary source",
+                     "- [Robotics foundation models for vision](https://openai.com/index/robotics-vision) · openai.com · matches: robotics, vision",
+                     "- [acme/robot-arm-vision](https://github.com/acme/robot-arm-vision) · github.com · matches: robotics, vision · written by anyone: not checked by an editor",
                      "  - deadline: none stated", "  - deadline: 2026-10-22 08:00", "  - event start: 2026-10-24 14:00",
                      "  - eligibility unclear, check", "  - fits what you told Robo", RadarNote.standingLine] {
             #expect(lines.contains(line), "\(line)")
         }
         // what does not fit, or is excluded, or is over, or is not early-career, is not there
         for word in ["Tokyo Vision", "rypto", "Old round", "Senior Staff Engineer"] { #expect(!text.contains(word), "\(word)") }
+        // and nothing that matches no interest of the profile is a paper, an announcement, news, code or an internship (the 2026-10-22 note
+        // had four of five internships and a CSS article "outside your interests")
+        for word in ["faraway city", "todo-app", "Shady"] { #expect(!text.contains(word), "\(word)") }
+        let readingAndCode = text.components(separatedBy: "\n## Opportunities").first ?? ""
+        #expect(!readingAndCode.contains("outside your interests"))
 
         // the digest is one offer with the real count and the first two titles; the best contest and a closing internship are their own
         let n = text.split(separator: "\n").filter { $0.hasPrefix("- [") }.count
         let titles = text.split(separator: "\n").filter { $0.hasPrefix("- [") }
             .compactMap { line in line.range(of: "](https://").map { String(line[line.index(line.startIndex, offsetBy: 3)..<$0.lowerBound]) } }
         let digest = try #require(found.offers.first { $0.category == .digest })
-        let reads = listed(text, ["Papers", "News"]), looks = listed(text, ["Opportunities", "Contests"])
+        let reads = listed(text, ["Papers", "Announcements", "News"]), looks = listed(text, ["Code", "Opportunities", "Contests"])
         #expect(reads > 0 && looks > 0 && reads + looks == n)
         #expect(digest.id == "radar-digest-2026-10-20" && digest.title == "\(reads) to read, \(looks) to look into" && digest.note == "Radar/2026-10-20.md" && digest.url == nil)
-        #expect(digest.detail == titles.prefix(2).joined(separator: " · ") && n == 13 && found.seen.count == n && Set(found.seen).count == n)
+        #expect(digest.detail == titles.prefix(2).joined(separator: " · ") && n == 14 && found.seen.count == n && Set(found.seen).count == n)
+        #expect(digest.title == "5 to read, 9 to look into")  // 3 papers, 1 announcement and 1 news item; 1 repository, 5 opportunities, 3 contests
         let contest = try #require(found.offers.first { $0.category == .contest })
         #expect(contest.id == "radar-contest-ctftime:3451" && contest.title == "Robotics CTF 2026" && contest.url == "https://ctftime.org/event/3451" && contest.note == nil)
         #expect(contest.dueAt == date(14, day: 24) && contest.detail.hasPrefix("starts ") && contest.detail.hasSuffix("ctftime.org"))
@@ -611,20 +660,20 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         tick(r, at(6, 59))
         #expect(!r.window.radar.running && r.radarFake.asked.isEmpty && r.window.radar.state.day == "")
         tick(r, at(7))
-        #expect(await finished(r) && r.radarFake.asked.count == 11 && note(r.vault) != nil)
+        #expect(await finished(r) && r.radarFake.asked.count == sourcesOfAFullRun && note(r.vault) != nil)
         for t in [at(7, 1), at(10), at(18)] { tick(r, t) }
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(r.radarFake.asked.count == 11, "one run a day")
+        #expect(r.radarFake.asked.count == sourcesOfAFullRun, "one run a day")
         r.window.nudge = NudgeModel()  // a restart the same day
         r.window.startNudges()
         tick(r, at(12))
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(r.radarFake.asked.count == 11 && r.window.radar.state.day == "2026-10-20")
+        #expect(r.radarFake.asked.count == sourcesOfAFullRun && r.window.radar.state.day == "2026-10-20")
         r.radarFake.forget()
         tick(r, at(6, 59, day: 21))
         #expect(!r.window.radar.running && r.radarFake.asked.isEmpty)
         tick(r, at(7, day: 21))
-        #expect(await finished(r, day: "2026-10-21") && r.radarFake.asked.count == 11)
+        #expect(await finished(r, day: "2026-10-21") && r.radarFake.asked.count == sourcesOfAFullRun)
     }
 
     @Test func whatTheNoteListedIsRememberedAcrossDaysAndRestarts() async throws {
@@ -635,7 +684,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         let first = try #require(note(r.vault))
         let listed = first.split(separator: "\n").filter { $0.hasPrefix("- [") }
         let seen = files(r).loadRadar(now: date(8)).seen
-        #expect(listed.count == 13 && seen.count == 13 && seen.values.allSatisfy { $0 == date(8) })
+        #expect(listed.count == 14 && seen.count == 14 && seen.values.allSatisfy { $0 == date(8) })
         r.window.nudge = NudgeModel()  // the app is closed and opened again
         r.window.radar = RadarModel()
         r.window.startNudges()
@@ -654,7 +703,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         tick(r, at(8))
         #expect(await finished(r) && note(r.vault) == nil && r.window.radar.state.offers.isEmpty)
         let asked = r.radarFake.asked.count
-        #expect(asked == 6)  // arXiv, Hugging Face, the Hacker News list, SimplifyJobs, CTFtime, Codeforces
+        #expect(asked == 6 + 7 + 1)  // arXiv, Hugging Face, the Hacker News list, SimplifyJobs, CTFtime, Codeforces; the 7 blogs; 1 GitHub search
         for t in [at(8, 1), at(9), at(10)] { tick(r, t) }
         try? await Task.sleep(for: .milliseconds(100))
         #expect(!r.window.radar.running && r.radarFake.asked.count == asked, "the day's run happened, with or without a note")
@@ -688,7 +737,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         #expect(!r.window.radar.running && r.radarFake.asked.isEmpty && r.window.radar.state.day == "" && note(r.vault) == nil)
         r.window.menu(.nudges)
         tick(r, at(8, 1))
-        #expect(await finished(r) && r.radarFake.asked.count == 11)
+        #expect(await finished(r) && r.radarFake.asked.count == sourcesOfAFullRun)
     }
 
     @Test func aDayWithNoNetworkShowsNothingAndTriesAgainInHalfAnHour() async {
@@ -737,7 +786,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         // 13:00: the digest, which opens the note
         tick(r, at(13))
         #expect(w.nudge.shown.map(\.candidate.id) == ["radar-digest-2026-10-20"])
-        #expect(w.card.nudge.label.text == "WORTH A LOOK ▸" && w.card.nudge.well.text.hasPrefix("\(listed(text, ["Papers", "News"])) to read, \(listed(text, ["Opportunities", "Contests"])) to look into\n") && !w.card.nudge.open.isHidden)
+        #expect(w.card.nudge.label.text == "WORTH A LOOK ▸" && w.card.nudge.well.text.hasPrefix("\(listed(text, ["Papers", "Announcements", "News"])) to read, \(listed(text, ["Code", "Opportunities", "Contests"])) to look into\n") && !w.card.nudge.open.isHidden)
         let digestTitles = w.card.nudge.well.text.components(separatedBy: "\n")[1]
         #expect(digestTitles.contains(" · ") && !w.card.nudge.well.text.contains("↗"))  // two titles, and no domain line
         w.card.nudge.open.onClick?()
@@ -822,7 +871,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         defer { r.close() }
         r.window.radar.force = true  // what Machine's radarNow sets at launch
         tick(r, at(3))
-        #expect(await finished(r) && r.radarFake.asked.count == 11)
+        #expect(await finished(r) && r.radarFake.asked.count == sourcesOfAFullRun)
         r.radarFake.forget()
         tick(r, at(3, 1))
         tick(r, at(5, day: 21))  // the first run used the switch up: the ordinary rules are back

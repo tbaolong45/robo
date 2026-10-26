@@ -74,16 +74,35 @@ public enum Feeds {
 
     // MARK: news: RSS 2.0 and Atom
 
-    /// A user-chosen feed (RSS 2.0, RSS 1.0 or Atom): title, link, date and a plain-text snippet of the description. `source`
-    /// names the feed; empty, the item's own domain is used.
-    public static func news(_ data: Data, source: String = "") -> [RadarItem] {
-        entries(data, limit: 100).compactMap { e in
-            let link = [e.fields["link"], e.fields["guid"], e.fields["id"]].compactMap { $0 }.first { Plain.https($0) != nil }
+    /// A feed (RSS 2.0, RSS 1.0 or Atom): title, link, date and a plain-text snippet of the description. `source` names the feed;
+    /// empty, the item's own domain is used. A feed the user wrote is `.news`; the labs' and companies' own blogs robo knows are
+    /// `.announcement` (a little more trusted).
+    public static func news(_ data: Data, source: String = "", kind: RadarItem.Kind = .news) -> [RadarItem] {
+        // A lab's own blog that still links with http (BAIR's feed does, 2026-10-23) is read over https anyway: its links are upgraded.
+        // A feed the user added keeps the strict rule: an http link is dropped.
+        func secure(_ text: String) -> String { kind == .announcement && text.hasPrefix("http://") ? "https://" + text.dropFirst(7) : text }
+        return entries(data, limit: 100).compactMap { e in
+            let link = [e.fields["link"], e.fields["guid"], e.fields["id"]].compactMap { $0 }.map(secure).first { Plain.https($0) != nil }
             let body = e.fields["description"] ?? e.fields["summary"] ?? e.fields["content:encoded"] ?? e.fields["content"] ?? ""
             let when = e.fields["pubDate"] ?? e.fields["published"] ?? e.fields["updated"] ?? e.fields["dc:date"]
-            return RadarItem(kind: .news, title: e.fields["title"] ?? "", url: link ?? "", source: source, snippet: body,
-                             published: When.parse(when), tags: Array(e.categories.prefix(4)), trust: 0.6)
+            return RadarItem(kind: kind, title: e.fields["title"] ?? "", url: link ?? "", source: source, snippet: body,
+                             published: When.parse(when), tags: Array(e.categories.prefix(4)), trust: kind == .announcement ? 0.8 : 0.6)
         }
+    }
+
+    // MARK: GitHub repositories
+
+    /// `api.github.com/search/repositories`: new repositories, most starred first (the query asks for the last week). The stars are the
+    /// popularity, the topics and the language the tags, the description the snippet. The link is built from the repository's full name
+    /// (`owner/name`, letters, digits and `._-`), never taken from the answer; forks, archived and private ones are left out.
+    public static func githubRepos(_ data: Data) -> [RadarItem] {
+        Array(list((json(data) as? [String: Any])?["items"]).lazy.compactMap { d -> RadarItem? in
+            guard d["fork"] as? Bool != true, d["archived"] as? Bool != true, d["private"] as? Bool != true, let name = str(d, "full_name"),
+                  name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$"#, options: .regularExpression) != nil else { return nil }
+            return RadarItem(id: "github:" + name.lowercased(), kind: .repo, title: name, url: "https://github.com/" + name, source: "GitHub",
+                             snippet: str(d, "description") ?? "", published: When.parse(str(d, "created_at")), popularity: num(d, "stargazers_count"),
+                             tags: strings(d["topics"]) + [str(d, "language")].compactMap { $0 }, trust: 0.5)
+        }.prefix(100))
     }
 
     // MARK: internships

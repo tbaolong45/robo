@@ -225,6 +225,29 @@ func aDriftEndsOnAWallAndReboundsOffItBeforeSettling(seed: UInt64) {
     #expect(Set(run(c, 12, 3, called: true).map(\.pos)) == [corner] && !c.bouncing)  // and nothing hops on arrival
 }
 
+/// With the chat up (Swift app) a call goes to the middle of the nearest SIDE, not a corner; the nearer side wins, and it stays there.
+@Test(arguments: [(700.0, 300.0, true), (1300.0, 300.0, false), (800.0, 900.0, true), (961.0, 50.0, false)])
+func aCallWithTheChatGoesToTheMiddleOfTheNearestSide(x: Double, y: Double, left: Bool) {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(x, y))
+    r.callToSide = true
+    let side = ivec(Vec(left ? Roam.edge : screen.w - face.x - Roam.edge, (screen.h - face.y) / 2))
+    #expect(run(r, 0, 12, called: true).last?.pos == side)
+    #expect(Set(run(r, 12, 3, called: true).map(\.pos)) == [side] && r.mode == .come && !r.bouncing)  // and it stays
+}
+
+@Test func theSideCallLeavesTheCornerCallAsItWas() {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))
+    #expect(!r.callToSide)
+    #expect(run(r, 0, 12, called: true).last?.pos == ivec(Vec(Roam.edge, Roam.edge)))  // the top-left corner, as before
+}
+
+@Test func theSideIsOnTheScreenItIsOn() {
+    let r = Roamer(screens: both, size: face, seed: 1, start: Vec(4000, 600))  // on the right monitor, nearer its right side
+    r.callToSide = true
+    let side = ivec(Vec(rightScreen.x + rightScreen.w - face.x - Roam.edge, rightScreen.y + (rightScreen.h - face.y) / 2))
+    #expect(run(r, 0, 12, called: true).last?.pos == side)
+}
+
 @Test func neverFasterThanTheSpeedLimit() {
     let r = Roamer(screens: screens, size: face, seed: 6)
     let path = [Sample(t: 0, pos: r.step(now: 0, asleep: false, engaged: false))] + run(r, 0, 600)

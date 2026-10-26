@@ -22,6 +22,9 @@ private func tmp() -> URL {
         state.courses = [course]
         state.coursesDay = "2026-10-20"
         state.scanned = [course.url: "2026-10-20"]
+        state.materials = [LMSPosts.Material(id: "lms-material:math201:slides", course: "MATH201", title: "Lecture 5 slides", url: course.url,
+                                             posted: "2026-10-20", quote: "Updated File: Lecture 5 slides",
+                                             firstSeen: Date(timeIntervalSince1970: 1_792_480_000))]
         #expect(files.save(state))
         #expect(files.loadLMS() == state)
         let mode = try FileManager.default.attributesOfItem(atPath: files.lmsFile.path)[.posixPermissions] as? Int
@@ -40,7 +43,12 @@ private func tmp() -> URL {
         #expect(files.loadLMS() == LMSState())
         try #"{"coursesDay": "2026-10-20"}"#.write(to: files.lmsFile, atomically: true, encoding: .utf8)
         let partial = files.loadLMS()
-        #expect(partial.coursesDay == "2026-10-20" && partial.courses.isEmpty && partial.scanned.isEmpty)
+        #expect(partial.coursesDay == "2026-10-20" && partial.courses.isEmpty && partial.scanned.isEmpty && partial.materials.isEmpty)
+        // the file as it was before materials existed (the live one, 2026-10-22) still reads, and keeps what it had
+        try #"{"courses": [{"name": "A", "url": "https://moodle.example.edu/course/view.php?id=1"}], "coursesDay": "2026-10-20", "scanned": {"https://moodle.example.edu/course/view.php?id=1": "2026-10-22"}}"#
+            .write(to: files.lmsFile, atomically: true, encoding: .utf8)
+        let old = files.loadLMS()
+        #expect(old.courses.count == 1 && old.scanned.count == 1 && old.materials.isEmpty)
     }
 }
 

@@ -49,20 +49,23 @@ public struct RadarState: Codable, Equatable, Sendable {
 }
 
 /// `lms.json`: the courses the LMS scan knows (names and course page addresses, from the agent's `list` run), the day that list was
-/// read, and for each course (by address) the day of its last good scan. What the scans found lives in `agenda.json`.
+/// read, and for each course (by address) the day of its last good scan. What the scans found with a date lives in `agenda.json`; the
+/// learning materials (no date) are kept here, so that one is told only once.
 public struct LMSState: Codable, Equatable, Sendable {
     public var courses: [LMSPosts.Course] = []
     public var coursesDay = ""
     public var scanned: [String: String] = [:]
+    public var materials: [LMSPosts.Material] = []
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case courses, coursesDay, scanned }
+    private enum CodingKeys: String, CodingKey { case courses, coursesDay, scanned, materials }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         courses = try c.decodeIfPresent([LMSPosts.Course].self, forKey: .courses) ?? []
         coursesDay = try c.decodeIfPresent(String.self, forKey: .coursesDay) ?? ""
         scanned = try c.decodeIfPresent([String: String].self, forKey: .scanned) ?? [:]
+        materials = try c.decodeIfPresent([LMSPosts.Material].self, forKey: .materials) ?? []
     }
 }
 

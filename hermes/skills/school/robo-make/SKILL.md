@@ -15,9 +15,9 @@ metadata:
 ## When to Use
 The user asks you to create, draw, design or visualise something that needs a browser: a
 diagram or mind map, a web page or HTML design, a chart of their data or results, slides,
-flashcards. Notes, summary sheets, study guides, essay drafts and plans are text, not this skill:
-follow `robo-notes`, which writes them into the user's Obsidian vault. Quizzes are not this
-skill either: follow `study-quiz`.
+flashcards. Notes, summary sheets, study guides, essay drafts and plans are text, not this skill: answer
+them in the chat, and only when the user asks for a note follow `robo-notes`, which writes it
+into their Obsidian vault. Quizzes are not this skill either: follow `study-quiz`.
 
 ## Where
 Write ONE self-contained file in `~/Robo/` (create the folder if needed), named
@@ -42,4 +42,4 @@ Check the file is complete (closing tags, no placeholders) before you finish.
 
 ## Reply
 One or two sentences: what you made and its file name. Keep the long content in the file, not
-in the bubble.
+in the chat.

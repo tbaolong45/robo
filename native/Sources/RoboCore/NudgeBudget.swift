@@ -6,10 +6,11 @@
 //   until" of the study ledger, or in quiet hours (22:00-08:00)
 // - normal nudges only in the slots 09:00, 13:00, 19:00: a slot opens at its time and stays open until the next one, and
 //   each slot is used at most once; at most 3 normal nudges a day. All the deadlines and events of one moment are ONE nudge;
-//   any other category is a nudge of its own (an opportunity, then the digest, then a contest, one per slot)
+//   any other category is a nudge of its own (an opportunity, then new course materials, then the digest, then a contest, one per slot)
 // - urgent candidates (the last hours of a deadline, the last minutes before a meeting) show as soon as the app is not held,
 //   outside quiet hours, merged into one nudge, and use no slot; at most 4 a day (a fifth waits for a slot like any other)
-// - a digest at most once a day (every other day after 3 dismissed in a row); a contest at most once a day and 3 a week
+// - a digest at most once a day (every other day after 3 dismissed in a row); a contest at most once a day and 3 a week; new course
+//   materials at most once a day
 // - an opportunity only when saved, urgent, or due within 72 hours
 // - "Later" snoozes a candidate to the next slot, "Not for me" mutes it for 30 days and, 3 times in a row in one category,
 //   mutes the category until the user turns it on (`NudgeState.unmute`); a candidate shown once is not shown again
@@ -17,6 +18,8 @@ import Foundation
 
 public enum NudgeCategory: String, Codable, Sendable, CaseIterable {
     case deadline, event, digest, contest, opportunity
+    /// New learning materials in a course (the LMS scan): at most one card a day.
+    case course
 }
 
 /// One thing that could be shown. `id` is stable for the thing (a reminder's key, "digest-2026-10-20", a posting's id).
@@ -171,6 +174,8 @@ public enum NudgeBudget {
                 return (dayGap(last, today) ?? 2) >= 2  // after 3 dismissed: every other day
             case .contest:
                 return (state.sentByCategory["contest"] ?? 0) < 1 && state.contestThisWeek < contestPerWeek
+            case .course:
+                return (state.sentByCategory["course"] ?? 0) < 1
             case .deadline, .event, .opportunity:
                 return true
             }
@@ -193,7 +198,7 @@ public enum NudgeBudget {
         }
         // Normal nudges. A fifth urgent candidate is in `pool` and waits for a slot like the rest.
         guard state.sentToday < normalPerDay, let slot = slots.last(where: { $0 * 60 <= minutes }), !state.slotsUsed.contains(slot) else { return [] }
-        let groups: [(categories: Set<NudgeCategory>, merged: Bool)] = [([.deadline, .event], true), ([.opportunity], false), ([.digest], false), ([.contest], false)]
+        let groups: [(categories: Set<NudgeCategory>, merged: Bool)] = [([.deadline, .event], true), ([.opportunity], false), ([.course], false), ([.digest], false), ([.contest], false)]
         for (categories, merged) in groups {
             let pick = pool.filter { categories.contains($0.category) }
             guard let first = pick.first else { continue }

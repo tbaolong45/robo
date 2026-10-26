@@ -71,7 +71,7 @@ private func parse(_ lines: String...) -> Profile { Profile.parse(markdown: line
     @Test func theTemplateExplainsEveryKeyInAQuote() {
         let template = Profile.template()
         for key in ["interests", "goals", "level", "graduation", "country", "citizenship", "needsSponsorship", "remote", "arxivCategories",
-                    "companies", "feeds", "exclude"] {
+                    "companies", "feeds", "github", "exclude"] {
             #expect(template.contains("\n- \(key):"), "no line for \(key)")
             let lines = template.components(separatedBy: "\n")
             let at = lines.firstIndex { $0.hasPrefix("- \(key):") }!
@@ -142,6 +142,25 @@ private func parse(_ lines: String...) -> Profile { Profile.parse(markdown: line
                       + "javascript:alert(1) https://a.example/feed.xml ftp://d.example/f https://user:pw@e.example/x")
         #expect(p.feeds == ["https://a.example/feed.xml", "https://b.example/rss", "https://c.example/atom.xml"])
         #expect(parse("- feeds: " + (0..<50).map { "https://f\($0).example/x" }.joined(separator: " ")).feeds.count == 20)
+    }
+
+    @Test func githubSearchesTheStrongestInterestsUnlessTheNoteSaysOtherwise() {
+        let p = parse("- interests: robotics, computer vision*3, nlp*3, medical imaging*2, ai safety")
+        #expect(p.githubQueries == ["computer vision", "nlp", "medical imaging"])  // the heaviest three; the note's order breaks the tie
+        #expect(parse("- interests: a b\n- github: rust, wasm runtime").githubQueries == ["rust", "wasm runtime"])  // the github line wins
+        #expect(parse("- interests: robotics\n- github: alpha, beta, gamma, delta, epsilon").githubQueries == ["alpha", "beta", "gamma"])  // and is capped (the search allows 10 a minute)
+        for off in ["none", "None", "off", "no"] { #expect(parse("- interests: robotics\n- github: \(off)").githubQueries.isEmpty, "\(off)") }
+        #expect(parse("- interests:\n").githubQueries.isEmpty)  // nothing to look up
+        #expect(parse("- interests: robotics\n- github:\n").githubQueries == ["robotics"])  // an empty line is the default
+        #expect(Profile().githubQueries.isEmpty)
+    }
+
+    @Test func aWordOfTheNoteCannotAddASearchQualifier() {
+        // the words are the only part of the profile that is in a URL: letters, digits, spaces and hyphens, nothing that GitHub reads as a qualifier
+        let p = parse("- interests: user:octocat stars:>9999, repo:a/b, in:readme fork:true, -language:go, self-driving")
+        #expect(p.githubQueries == ["useroctocat stars9999", "repoab", "inreadme forktrue"])
+        #expect(parse("- github: ***, [], user:").githubQueries == ["user"])  // what is left of an empty word is dropped
+        #expect(parse("- interests: self-driving cars").githubQueries == ["self-driving cars"])
     }
 
     @Test func excludedWordsAreLowerCasedTrimmedAndUnique() {

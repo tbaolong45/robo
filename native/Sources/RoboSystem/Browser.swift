@@ -17,6 +17,8 @@ public enum Browser {
     public static let macBrave = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
     public static let signinURLs = ["https://outlook.office.com/mail/", "https://teams.microsoft.com/"]
     public static let binary = findBrave()
+    /// Where robo's Brave saves what it downloads. Outside `~/.hermes`, so the agent may move a file out of it.
+    public static var downloadsDir: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Robo/Downloads") }
 
     /// Brave on PATH, else where its installer puts it.
     public static func findBrave(which: (String) -> String? = Host.which) -> String {
@@ -28,9 +30,34 @@ public enum Browser {
         Host.httpStatus("\(cdpURL)/json/version", timeout: 2) == 200
     }
 
-    /// Start robo's Brave unless it already answers on `port`; true if this call started it.
+    /// Make robo's Brave save downloads into `folder`, and download a PDF instead of showing it. A headless Brave has no download
+    /// folder, so nothing it fetched ever reached the disk; CDP's `setDownloadBehavior` does not outlive one connection, and Hermes
+    /// opens a new one per call. Brave rewrites its Preferences when it exits, so this works only before a start. A Preferences file
+    /// that does not parse is left alone.
+    static func allowDownloads(_ dataDir: URL, into folder: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let profile = dataDir.appendingPathComponent("Default")
+        try fm.createDirectory(at: profile, withIntermediateDirectories: true)
+        let file = profile.appendingPathComponent("Preferences")
+        var prefs: [String: Any] = [:]
+        if let data = try? Data(contentsOf: file) {
+            guard let old = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+            prefs = old
+        }
+        var download = prefs["download"] as? [String: Any] ?? [:]
+        download["default_directory"] = Host.path(folder)
+        download["prompt_for_download"] = false
+        prefs["download"] = download
+        var plugins = prefs["plugins"] as? [String: Any] ?? [:]
+        plugins["always_open_pdf_externally"] = true
+        prefs["plugins"] = plugins
+        try JSONSerialization.data(withJSONObject: prefs, options: [.sortedKeys]).write(to: file, options: .atomic)
+    }
+
+    /// Start robo's Brave unless it already answers on `port`; true if this call started it. `downloads`: where it saves files.
     @discardableResult
-    public static func ensure(_ dataDir: URL, headless: Bool = true, url: String? = nil,
+    public static func ensure(_ dataDir: URL, headless: Bool = true, url: String? = nil, downloads: URL? = nil,
                               up: () -> Bool = Browser.up, spawn: ([String]) throws -> Void = Host.spawn,
                               sleep: (TimeInterval) -> Void = Thread.sleep(forTimeInterval:),
                               wait: Double = 20) throws -> Bool {
@@ -38,6 +65,7 @@ public enum Browser {
         try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
         // cookies of the user's school accounts
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDir.path)
+        if let downloads { try allowDownloads(dataDir, into: downloads) }
         var argv = [binary, "--user-data-dir=\(Host.path(dataDir))", "--remote-debugging-port=\(port)",
                     "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check"]
         if headless { argv.append("--headless=new") }
@@ -92,7 +120,7 @@ public enum Browser {
             throw BrowserError("Will not open \(bad.debugDescription) in robo's Brave: only https:// addresses.")
         }
         stop(dataDir)
-        _ = try ensure(dataDir, headless: false, url: signinURLs[0])
+        _ = try ensure(dataDir, headless: false, url: signinURLs[0], downloads: downloadsDir)
         for url in signinURLs.dropFirst() + extra {
             try Host.spawn([binary, "--user-data-dir=\(Host.path(dataDir))", url])  // opens a tab in that instance
         }

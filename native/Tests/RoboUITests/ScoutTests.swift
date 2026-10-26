@@ -28,6 +28,22 @@ private func fenced(_ list: [[String: Any]]) -> String {
 
 private func courses(_ list: [LMSPosts.Course]) -> String { fenced(list.map { ["name": $0.name, "url": $0.url] }) }
 
+/// A reply with the agent's own sentence in front of the block.
+private func said(_ before: String, _ list: [[String: Any]] = []) -> String {
+    let data = try! JSONSerialization.data(withJSONObject: list, options: [.sortedKeys])
+    return before + "\n\n```json\n" + String(decoding: data, as: UTF8.self) + "\n```"
+}
+
+/// One new learning material of MATH201 (the skill's example); `change` overrides fields.
+private func material(_ change: [String: String] = [:]) -> [String: Any] {
+    var o: [String: Any] = [
+        "course": "MATH201", "post_url": courseA.url, "posted": "2026-10-20", "title": "Lecture 5 slides", "due": NSNull(),
+        "kind": "material", "quote": "Updated File: Lecture 5 slides",
+    ]
+    for (key, value) in change { o[key] = value }
+    return o
+}
+
 /// One post that states a deadline; `change` overrides fields.
 private func post(_ change: [String: String] = [:]) -> [String: Any] {
     var o: [String: Any] = [
@@ -355,6 +371,125 @@ private final class Replies: @unchecked Sendable {
         tick(r, at(8, day: 28))  // a week later the list is read again; B is no longer there
         #expect(await settled(r))
         #expect(state(r).courses == [courseA] && Set(state(r).scanned.keys) == [courseA.url])
+    }
+
+    // MARK: an empty answer from an agent that could not read is not "nothing new"
+
+    @Test(arguments: [
+        "Announcements has no post since 28 Sept. I couldn't load the recent-activity view back to 21 Oct because that request was blocked.",  // 2026-10-22
+        "I couldn't finish this scan. My click to open the Announcements forum was denied, so I stopped.",  // 2026-10-21
+    ])
+    func anEmptyListFromAnAgentThatCouldNotReadIsNoScanAndIsTriedAgain(sentence: String) async {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [courses([courseA]), said(sentence), fenced([])])
+        tick(r, at(8))
+        #expect(await settled(r))
+        tick(r, at(8, 1))
+        #expect(await settled(r))
+        #expect(state(r).scanned.isEmpty && r.window.scout.failures[courseA.url] == 1)  // not marked read: nothing is skipped for good
+        tick(r, at(8, 20))  // too early
+        #expect(r.window.scout.running == nil && asked(r).count == 2)
+        tick(r, at(8, 32))
+        #expect(await settled(r))
+        #expect(state(r).scanned == [courseA.url: "2026-10-20"] && asked(r).count == 3)
+        #expect(asked(r)[1] == asked(r)[2])  // the retry reads the same days: SINCE did not move
+    }
+
+    @Test func anIncompleteReplyKeepsNothingItHolds() async {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [courses([courseA]), said("INCOMPLETE: the recent-activity page was refused.", [post(), material()])])
+        for wall in [at(8), at(8, 1)] {
+            tick(r, wall)
+            #expect(await settled(r))
+        }
+        #expect(lmsItems(r).isEmpty && state(r).materials.isEmpty && state(r).scanned.isEmpty)
+    }
+
+    @Test func aCourseListThatSaysAClickWasDeniedIsNotKept() async {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [said("Only one course URL was confirmed, because my click to open the next course was denied.", [["name": courseA.name, "url": courseA.url]])])
+        tick(r, at(8))
+        #expect(await settled(r))
+        #expect(state(r).courses.isEmpty && r.window.scout.failures["list"] == 1)
+    }
+
+    // MARK: new learning materials
+
+    @Test func aNewMaterialIsKeptListedInTheVaultAndOfferedAsOneCardADay() async throws {
+        let r = await launch()
+        defer { r.close() }
+        let lab = material(["course": "PHYS101", "post_url": courseB.url, "title": "Lab 3 notebook", "quote": "Added File: Lab 3 notebook"])
+        serve(r, [courses([courseA, courseB]), fenced([post(), material()]), fenced([lab])])
+        for wall in [at(8), at(8, 1)] {
+            tick(r, wall)
+            #expect(await settled(r))
+        }
+        // the first course: the deadline goes to the agenda, the material is only told
+        #expect(lmsItems(r).count == 1 && state(r).materials.map(\.title) == ["Lecture 5 slides"])
+        let note = r.vault.appendingPathComponent("Radar/Courses-2026-10-20.md")
+        let text = try String(contentsOf: note, encoding: .utf8)
+        #expect(text.contains("[Lecture 5 slides](\(courseA.url)) · MATH201 · added 2026-10-20") && text.contains("“Updated File: Lecture 5 slides”"))
+        var offers = r.window.radar.state.offers.filter { $0.category == .course }
+        #expect(offers.count == 1 && offers[0].title == "1 new course material" && offers[0].detail == "Lecture 5 slides")
+        #expect(offers[0].id == "lms-materials-2026-10-20" && offers[0].note == "Radar/Courses-2026-10-20.md")
+        // the second course, the same day: the same card for two, and the note holds both
+        tick(r, at(8, 2))
+        #expect(await settled(r))
+        offers = r.window.radar.state.offers.filter { $0.category == .course }
+        #expect(offers.count == 1 && offers[0].title == "2 new course materials")
+        #expect(try String(contentsOf: note, encoding: .utf8).contains("Lab 3 notebook"))
+        // a restart reads the same, and the offer is a candidate of the radar's card with the note Open shows
+        #expect(NudgeFiles(dir: r.nudgeDir).loadLMS() == state(r) && NudgeFiles(dir: r.nudgeDir).loadRadar(now: Date(timeIntervalSince1970: at(8))) == r.window.radar.state)
+        r.window.machine.radarOn = true
+        let candidates = r.window.radarCandidates(Date(timeIntervalSince1970: at(9)))
+        #expect(candidates.map(\.category) == [.course] && candidates[0].note == "Radar/Courses-2026-10-20.md")
+        #expect(Radar.noteURL(candidates[0].note ?? "", vault: r.vault) == note)  // the path Open is allowed to show
+    }
+
+    @Test func aMaterialIsToldOnceWhateverTheNextScansSayAboutIt() async {
+        let r = await launch()
+        defer { r.close() }
+        let reading = material(["title": "Reading list", "quote": "Added URL: Reading list"])
+        serve(r, [courses([courseA]), fenced([material()]), fenced([material(), reading])])
+        for wall in [at(8), at(8, 1)] {
+            tick(r, wall)
+            #expect(await settled(r))
+        }
+        #expect(state(r).materials.count == 1)
+        tick(r, at(8, day: 21))  // the same slides again, and a new reading
+        #expect(await settled(r))
+        #expect(state(r).materials.map(\.title).sorted() == ["Lecture 5 slides", "Reading list"])
+        let offers = r.window.radar.state.offers.filter { $0.category == .course }.sorted { $0.id < $1.id }
+        #expect(offers.map(\.id) == ["lms-materials-2026-10-20", "lms-materials-2026-10-21"])
+        #expect(offers[1].title == "1 new course material" && offers[1].detail == "Reading list")  // only the new one
+    }
+
+    @Test func aScanWithNothingNewMakesNoCardAndNoNote() async {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [courses([courseA]), fenced([post()])])
+        for wall in [at(8), at(8, 1)] {
+            tick(r, wall)
+            #expect(await settled(r))
+        }
+        #expect(r.window.radar.state.offers.filter { $0.category == .course }.isEmpty && state(r).materials.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: r.vault.appendingPathComponent("Radar").path))
+    }
+
+    @Test func aMaterialsWordsCannotBecomeMarkupInTheNote() async throws {
+        let r = await launch()
+        defer { r.close() }
+        serve(r, [courses([courseA]), fenced([material(["title": "[free](https://evil.example/x) **now** #tag", "quote": "![i](https://evil.example/p.png) %% hide %%"])])])
+        for wall in [at(8), at(8, 1)] {
+            tick(r, wall)
+            #expect(await settled(r))
+        }
+        let text = try String(contentsOf: r.vault.appendingPathComponent("Radar/Courses-2026-10-20.md"), encoding: .utf8)
+        #expect(text.contains(#"\[free\]"#) && text.contains(#"\*\*now\*\*"#) && text.contains("\\#tag") && text.contains(#"\%\%"#))
+        #expect(!text.contains("https://evil") && text.contains(#"https\://evil.example"#))  // no word of it is a link
     }
 }
 

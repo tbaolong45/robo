@@ -13,11 +13,15 @@ import RoboVoice
 /// folder and downloads from the public sources, so use it with a throwaway HOME.
 public struct DevSwitches: Equatable {
     public var noVoice: Bool, noWatch: Bool, otherGateway: Bool
+    /// ROBO_CHAT_DEMO=1 (a test copy only): the chat window opens at launch with a made-up conversation, so its look over a bright and a
+    /// dark backdrop can be checked without an agent.
+    public var chatDemo: Bool
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         noVoice = environment["ROBO_NO_VOICE"] == "1"
         noWatch = environment["ROBO_NO_WATCH"] == "1"
         otherGateway = !(environment["ROBO_HERMES_URL"] ?? "").isEmpty
+        chatDemo = environment["ROBO_CHAT_DEMO"] == "1"
     }
 }
 
@@ -51,7 +55,7 @@ public enum RoboApp {
         let dev = DevSwitches(environment: environment)
         let connection: (url: String, key: String)
         do {
-            connection = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir) })
+            connection = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir, downloads: Browser.downloadsDir) })
         } catch {
             Host.warn("robo: \(error)")
             return 1
@@ -81,6 +85,7 @@ public enum RoboApp {
         let delegate = RoboAppDelegate(window)
         app.delegate = delegate
         window.show()
+        if dev.chatDemo { window.demoChat() }
         withExtendedLifetime((window, delegate)) { app.run() }
         return 0
     }

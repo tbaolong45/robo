@@ -189,9 +189,9 @@ enum Markdown {
         let lineH: CGFloat  // the multiple of the font's line
         let indent: CGFloat
 
-        init(_ t: Theme) {  // the system's colours: they follow light and dark and the glass behind the card
-            text = Chrome.text; head = Chrome.text; link = .linkColor
-            codeBg = Chrome.wash(0.07); codeFg = Chrome.text; inlineBg = Chrome.wash(0.10); grid = Chrome.textDim
+        init(_ t: Theme, ink: Double?) {  // the system's colours: they follow light and dark and the glass behind the card
+            text = Chrome.text(ink); head = Chrome.text(ink); link = .linkColor
+            codeBg = Chrome.wash(0.07, ink); codeFg = Chrome.text(ink); inlineBg = Chrome.wash(0.10, ink); grid = Chrome.textDim(ink)
             body = .systemFont(ofSize: CGFloat(t.textPx))
             lineH = CGFloat(t.lineH) / 100
             indent = Markdown.indent
@@ -225,9 +225,13 @@ enum Markdown {
     // MARK: the styled text
 
     /// `markdown` as rich text in the theme's look. The last `hidden` UTF-16 units are laid out but painted transparent
-    /// (the typewriter's unrevealed tail: a word that will not fit the line wraps before it appears).
-    static func attributed(_ markdown: String, theme t: Theme, hidden: Int = 0) -> NSAttributedString {
-        let look = Look(t), blocks = parse(markdown), out = NSMutableAttributedString()
+    /// (the typewriter's unrevealed tail: a word that will not fit the line wraps before it appears). `ink` is the card's (the global
+    /// `Chrome.ink`, baked into the colours); the chat window passes nil: the system's own colours, which follow its panel's appearance.
+    /// `mathWidth`: the column a typeset formula must fit (a wider one is set smaller).
+    static func attributed(_ markdown: String, theme t: Theme, ink: Double? = Chrome.ink, hidden: Int = 0, mathWidth: CGFloat = 280) -> NSAttributedString {
+        // LaTeX is taken out first (the parser would eat the backslashes of `\frac`), and typeset into the text once the blocks are built
+        let (source, formulas) = Latex.extract(markdown)
+        let look = Look(t, ink: ink), blocks = parse(source), out = NSMutableAttributedString()
         var tables: [Int: NSTextTable] = [:]
         // Qt's table is as wide as its cells need (text, 4 px of padding each side, 1 px lines); AppKit's would fill the line
         var needs: [Int: [Int: CGFloat]] = [:]
@@ -324,6 +328,7 @@ enum Markdown {
                 out.append(NSAttributedString(string: "\n", attributes: a))
             }
         }
+        if !formulas.isEmpty { MainActor.assumeIsolated { Math.restore(in: out, spans: formulas, font: look.body, ink: ink, maxWidth: mathWidth) } }
         if out.length > 0, let last = blocks.last {  // an empty last block is a line of its own height, not of the default font's
             let tiny = NSFont.systemFont(ofSize: 1), p = NSMutableParagraphStyle()
             p.maximumLineHeight = measurer.defaultLineHeight(for: tiny)

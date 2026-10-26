@@ -43,10 +43,23 @@ public protocol RadarFetching: AnyObject, Sendable {
 }
 
 public enum RadarHosts {
-    public static let builtin: Set<String> = [
-        "rss.arxiv.org", "huggingface.co", "hacker-news.firebaseio.com", "ctftime.org", "codeforces.com", "raw.githubusercontent.com",
-        "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com",
+    /// The blogs of labs and companies in the user's field, read as announcements. Each answered 200 on its own host with a feed robo
+    /// parses (checked 2026-10-23); a feed that moves to another host is refused by the fetcher until it is updated here. Not here:
+    /// MBZUAI (its news feed answers bots with 403) and Anthropic (no feed).
+    public static let announcements: [(name: String, link: String)] = [
+        ("OpenAI", "https://openai.com/news/rss.xml"),
+        ("Google DeepMind", "https://deepmind.google/blog/rss.xml"),
+        ("Hugging Face blog", "https://huggingface.co/blog/feed.xml"),
+        ("Google Research", "https://research.google/blog/rss/"),
+        ("NVIDIA", "https://developer.nvidia.com/blog/feed/"),
+        ("Berkeley AI Research", "https://bair.berkeley.edu/blog/feed.xml"),
+        ("Microsoft Research", "https://www.microsoft.com/en-us/research/feed/"),
     ]
+
+    public static let builtin = Set([
+        "rss.arxiv.org", "huggingface.co", "hacker-news.firebaseio.com", "ctftime.org", "codeforces.com", "raw.githubusercontent.com",
+        "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com", "api.github.com",
+    ]).union(announcements.compactMap { URL(string: $0.link)?.host()?.lowercased() })
 
     /// The host of a feed the user wrote in their profile: https and a name, not an address on this network (an IP number,
     /// localhost, .local). ponytail: a LAN host name still passes; it is the user's own note.

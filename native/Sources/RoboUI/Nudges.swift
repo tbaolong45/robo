@@ -227,7 +227,7 @@ extension RoboWindow {
     /// Something that must not be interrupted is going on, or the user is not there.
     var nudgeHeld: Bool {
         !card.isHidden || busy || !approvals.isEmpty || tw.pending || mind.activity == .listening || now() < followUntil
-            || typerOpen || press != nil || shutdownStarted || machine.userAway()
+            || typerOpen || chat?.inputActive == true || press != nil || shutdownStarted || machine.userAway()
     }
 
     /// Every 30 s of wall time (from `tick`): refresh when it is time, read the ledger, and show what the budget lets through.

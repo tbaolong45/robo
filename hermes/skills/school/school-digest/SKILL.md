@@ -17,16 +17,15 @@ The first wake of the day, or whenever the user asks for the digest or "what's u
 
 ## Procedure
 Load and follow each skill with `skill_view`; the digest only reads and never acts for the
-user (its one write is the plan note in step 5):
+user (it writes no file; a note only if the user asks, with `robo-notes`):
 1. `school-timetable`: today's classes only (with start and end, for the plan).
 2. `school-moodle`: everything due in the next 7 days, plus anything overdue.
 3. `school-mail`: new important mail (unread, school-related).
 4. `school-teams`: Teams highlights (unread chats).
 
 5. `study-plan`, unless it is after 20:00: plan today from what steps 1-2 found (do not
-   fetch them again). It writes the plan as a Plans note (`robo-notes`) and adds nothing to
-   the calendar until the user says yes. The digest shows only one line saying the plan is in
-   Obsidian, then the calendar question; it does not list the blocks.
+   fetch them again). It lists the blocks in the digest (its chat format) and adds nothing to
+   the calendar until the user says yes; no plan note is written unless the user asks for one.
 6. `study-ledger`, **Exam readiness** (never Moodle course pages here): for the nearest exam
    within 14 days, ONE bullet with its colour and weakest topic. It is the day's one nudge, so
    no second bullet and no reminders. Leave it out outside 08:00-22:00, and while the ledger
@@ -36,7 +35,7 @@ If a source fails or is not signed in, still report the others and add one bulle
 source that needs `robo signin`.
 
 ## Output
-It shows in a small bubble: at most 8 digest bullets, one per item, most urgent first, and
+It shows in the chat: at most 8 digest bullets, one per item, most urgent first, and
 leave out empty sources (after 20:00 there is no plan: leave out the **Plan** line and the
 calendar question). Feel `concerned` if anything is overdue, due within 48 h or red for an
 exam, otherwise `happy` or `calm`:
@@ -50,6 +49,8 @@ exam, otherwise `happy` or `calm`:
 - **Teams** PHYS101 chat: quiz moved to Thursday
 - **Ready?** MATH201 midterm in 4 days: amber, last quiz 60%, weakest eigenvalues
 
-**Plan** is in Obsidian: 2 blocks today, Lab report 2 first.
+**Plan** (2 blocks today):
+**10:45-12:15** Lab report 2
+**14:00-15:00** MATH201 problem set 4
 Put the plan in your Robo Plan calendar?
 ```

@@ -244,6 +244,28 @@ private func show(_ state: inout NudgeState, _ cs: [NudgeCandidate], _ now: Date
         #expect(tick(&state, [digest("g2")], vn(9, 0, day: 21)) == ["g2"])
     }
 
+    @Test func newCourseMaterialsComeBeforeTheDigestAndOnlyOnceADay() {
+        var state = NudgeState()
+        let course = { (id: String) in cand(id, .course, due: nil) }
+        let pool = [digest("g"), course("m1"), course("m2")]
+        #expect(tick(&state, pool, vn(9, 0)) == ["m1"])  // ahead of the digest, one a slot
+        #expect(tick(&state, pool, vn(13, 0)) == ["g"])  // the day's second course card does not come; the digest does
+        #expect(tick(&state, pool, vn(19, 0)) == [])
+        #expect(state.sentByCategory == ["course": 1, "digest": 1])
+        #expect(tick(&state, [course("m2")], vn(9, 0, day: 21)) == ["m2"])  // tomorrow
+    }
+
+    @Test func notForMeThreeTimesMutesTheCourseCardsAndTheDigestKeepsGoing() {
+        var state = NudgeState()
+        for i in 0..<3 {
+            let got = show(&state, [cand("m\(i)", .course, due: nil)], vn(9, 0, day: 20 + i))
+            answer(&state, got, .notForMe, vn(9, 1, day: 20 + i))
+        }
+        #expect(state.mutedCategories == [.course])
+        #expect(tick(&state, [cand("again", .course, due: nil)], vn(9, 0, day: 24)) == [])
+        #expect(tick(&state, [digest("g")], vn(9, 0, day: 24)) == ["g"])
+    }
+
     @Test func aDigestIsNotCountedAgainstOtherNudgesOfTheSlot() {
         var state = NudgeState()
         #expect(tick(&state, [digest("g")], vn(9, 0)) == ["g"])

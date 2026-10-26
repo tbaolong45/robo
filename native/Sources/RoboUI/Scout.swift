@@ -165,6 +165,9 @@ extension RoboWindow {
         scout.running = nil
         if reply.cancelled { return }  // the user asked for something: nothing is counted, the next tick goes on
         guard reply.status == "completed" else { return scoutFailed(step, reply.status == "timed out" ? "timed out" : "the run did not finish") }
+        // An agent that says it could not read everything has not scanned: whatever block it left (`[]` built on a refused page is not
+        // "nothing new") is not believed, the course is not marked read, and the step is tried again.
+        guard !LMSPosts.incomplete(reply.text) else { return scoutFailed(step, "the agent could not read everything") }
         let now = wallDate
         switch step {
         case .list:
@@ -185,9 +188,41 @@ extension RoboWindow {
             nudge.agenda = Agenda.merge(old: old, fresh: old.filter { $0.source == .lms && !found.contains($0.id) } + got.values,
                                         source: .lms, now: now).items
             if nudge.agenda != old { nudgeFiles.save(nudge.agenda) }
+            var told = 0
+            if case .success(let found) = LMSPosts.materials(in: reply.text, host: host, page: course.url, today: now, zone: machine.zone, now: now) {
+                told = tellMaterials(found.values, day: day, now: now)
+            }
             scout.state.scanned[course.url] = day
             nudgeFiles.save(scout.state)
-            Posts.log.notice("posts: a course scanned, \(got.values.count, privacy: .public) dated items, \(got.dropped, privacy: .public) dropped")
+            Posts.log.notice("posts: a course scanned, \(got.values.count, privacy: .public) dated items, \(told, privacy: .public) new materials, \(got.dropped, privacy: .public) dropped")
         }
+    }
+
+    /// The materials not told before are kept (60 days, 200 at most), listed in the vault note of the day (`Radar/Courses-<day>.md`, all
+    /// of the day's scans in it), and offered on the card once a day. Returns how many were new.
+    private func tellMaterials(_ found: [LMSPosts.Material], day: String, now: Date) -> Int {
+        let known = Set(scout.state.materials.map(\.id))
+        let fresh = found.filter { !known.contains($0.id) }
+        guard !fresh.isEmpty else { return 0 }
+        let kept = scout.state.materials.filter { $0.firstSeen > now.addingTimeInterval(-60 * 86_400) }
+        scout.state.materials = Array((fresh + kept).prefix(200))
+        let today = scout.state.materials.filter { Radar.dayKey($0.firstSeen, zone: machine.zone) == day }
+        let name = "Courses-\(day).md", folder = Radar.folder(machine.vaultDir)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(RadarNote.materials(day: day, today).utf8).write(to: folder.appendingPathComponent(name), options: .atomic)
+        } catch {
+            Posts.log.warning("could not write the course materials note")
+            return fresh.count
+        }
+        let cal = Radar.calendar(machine.zone)
+        let until = cal.date(byAdding: .day, value: 2, to: cal.startOfDay(for: now)) ?? now.addingTimeInterval(2 * 86_400)  // still there tomorrow
+        let id = "lms-materials-" + day
+        let titles = today.prefix(2).map { RadarNote.short($0.title, 60) }.joined(separator: " · ")
+        radar.state.offers = radar.state.offers.filter { $0.id != id } + [RadarOffer(
+            id: id, category: .course, title: today.count == 1 ? "1 new course material" : "\(today.count) new course materials",
+            detail: titles, note: "Radar/" + name, until: until)]
+        nudgeFiles.save(radar.state)
+        return fresh.count
     }
 }

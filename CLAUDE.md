@@ -27,10 +27,10 @@ in text in the bubble. It never speaks, so don't add speech output.
   delete the `.playwright-mcp/` folder they leave in the repo.
 
 ## The machine is a live deployment
-The live profile runs `approvals.mode: manual` (timeout 120 s) since 2026-10-19, when the user approved
-`robo setup` (it was `off` before): robo-guard's asks (rm and other irreversible commands, Send/Delete/Move
+The live profile ran `approvals.mode: manual` (timeout 120 s) from 2026-10-19; on 2026-10-23 the user asked for "all permission", both setups say `off` and `robo setup` was run
+(live config `off`, checked with a nonexistent-file `rm`: it ran, no card). Under `manual`, robo-guard's asks (rm and other irreversible commands, Send/Delete/Move
 clicks, Outlook/Teams computer_use) reach the card as Allow/Deny, checked live with a nonexistent file (Deny made
-Hermes answer "BLOCKED... do NOT retry"). Switch back with `approvals.mode` `"off"` in both setups + `robo setup`. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
+Hermes answer "BLOCKED... do NOT retry"). Switch back with `approvals.mode` `"manual"` in both setups + `robo setup`; the blocks (graded work, own setup, remote content in notes) hold in every mode. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
 skills' command) to point at the build it is run from: the Python checkout, or the Swift app
 (`~/Applications/Robo.app` is the one that runs at login since 2026-10-13). Don't run `setup` or
 `signin` while testing, and send Hermes nothing but a harmless prompt if a live check is needed.
@@ -164,6 +164,57 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   change on the INSTALLED app, not only on a fresh copy, and look at the picture, not only at the numbers.
   To test: launch a copy with `open -n` (so the permission is Robo's, not your shell's), put an opaque window of your own at
   level `.floating - 1` under it, pin the pet with Stay (it roams otherwise), capture only that region.
+- **Chat window (Swift app, 2026-10-23, user request: a bigger, detached, bubble-style, adaptive Liquid Glass chat so the agent need not write a note for long answers)**.
+  `ChatPanel`/`ChatView` (`ChatPanel.swift`), `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore
+  `Transcript` (memory only, one per Hermes session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a window of its own, **fixed
+  about 520x640, centred on the main display** each time it opens (not attached to the pet, never pinned by it), opens on `ask()` (typed, spoken, digest, the
+  automatic digest too), **closes only by `Intent.closesChat`** ("close the chat", whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent) **or Esc
+  while its text box has the keyboard** (added 2026-10-23 at the user's request, `ChatPanel.onEscape`; the panel is non-activating, so Esc in another app never reaches it); no timer, no close button, a face click does not close it, English only. The pet's card keeps what is quick (menu, "listening", Allow/Deny, nudges);
+  `say()` notices become robo bubbles while the chat is open (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` ->
+  `chatBegin` (your turn + an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to `ChatView.setLive`,
+  `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask -> `chatInterrupted` (partial kept, footer "stopped", an
+  empty turn is dropped). **Close mid-run falls back to the pet's card** (`render()` routes by `chatOpen`), so nothing is lost. `Machine.chatOn` is true in
+  the app and **false in the `Rig` by default** (`Rig(chat: true)` in `ChatTests.swift`), so every card test is unchanged; `showChat`/`focusChat` are the seams
+  (the rig records, never orders front). **Adaptive glass**: its own `Shade` (`chatShade`), looks every 0.5 s while open, `GlassSurface(radius:)` crossfades and the
+  PANEL's `appearance` flips at level 0.5, so text (system dynamic colours: `Markdown.attributed(..., ink: nil)`, `Chrome.text(_ ink:)`) follows with no rebuild and
+  `Chrome.ink` stays the card's. The card's look and the chat's share the one `sampling` flag: `Backdrop` is single-flight and silently drops a second caller (its
+  `done` never runs), so two flags would stick forever. The panel is non-activating, `becomesKeyOnlyIfNeeded`; a click on its text box takes the keyboard
+  (`EditKeys`, handback through `Focus`), `nudgeHeld` waits while that is so. **Looked at, not only tested** (installed build, own backdrop windows at `.floating - 1`,
+  `ROBO_CHAT_DEMO=1` on a throwaway HOME, 2026-10-23): light glass over black, dark over white, real transparency over half-and-half, bubbles with sheen and rim,
+  capsule input, header orb, fades under the header and over the input. A test copy launched from a scratch path made macOS ask "bypass the system private window
+  picker" for Screen Recording: do not click it for the user; test through the INSTALLED app (`open -n ~/Applications/Robo.app --env HOME=<throwaway> ...`),
+  which has the grant. **Not verified**: typing in the text box on a real keyboard (spike pending: non-activating key panel), Spaces/full-screen, dragging, the
+  1 Hz-ish capture cost over time, the agent side live (the persona/skill edits need `robo setup`; until then it still writes notes for long answers).
+  Agent side: SOUL.md "Drafts, plans and text" and the skills (robo-notes, robo-make, study-plan, school-digest, school-mail, robo-brain, study-quiz) now say
+  answer in the chat, write a file only on request; pinned in both template suites (`answersStayInTheChatAndAFileIsWrittenOnlyOnRequest`).
+- **Chat polish, called-to-side, blur, LaTeX (Swift app, 2026-10-23, same user request)**. **Look**: glossy bubbles (`BubbleView`: gradient, sheen, rim, a soft shadow
+  under each bubble and a light one under the window), capsule input, header `OrbView`, spring pop-in (none under Reduce Motion). **Called = middle of the nearest side**:
+  `Roamer.callToSide` (vertically centred; `nearestSide()` measures from the window's top-left like `Roamer.step`), `RoboWindow.roam()` counts `chatOpen` as called, so the
+  pet parks at the left or right edge while the chat is up. **Blur**: `BlurVeil` (panel at `.floating - 1`, ignores the mouse) shows a blurred half-size capture of the screen
+  WITHOUT Robo's windows (`Backdrop.blurredPicture`, `blurSigma` = 1.3, dim 0.10, refreshed every 1 s); none under Reduce Transparency or without Screen Recording. The system
+  `NSVisualEffectView` blur was rejected: at partial alpha it only ghosts the sharp screen over itself; sigma 2.5 was too strong ("a little"). **LaTeX** (SwiftMath 1.7.3, exact pin in
+  `native/Package.swift`): `Latex.extract` (RoboCore, pure) takes `$..$`, `$$..$$`, `\(..\)`, `\[..\]` out BEFORE the Markdown parse (Apple's parser eats the backslashes of `\frac`,
+  `\_`, `\{`) and leaves a private-use placeholder; `Math.restore` (`Math.swift`, called inside `Markdown.attributed` before the typewriter's hidden tail) swaps each for a
+  `MathCell` (an `NSTextAttachmentCell`, baseline = the typeset list's descent). Rules: code (fenced, inline) is never read, `\$` is a dollar, an inline `$` opens only with no space
+  after it and closes only with no space before it and no digit after it ("costs $5 and $10" is text), no formula crosses a blank line, 600 characters and 60 per reply, invalid
+  LaTeX goes back as the author's source with its dollars, a formula wider than the column is set smaller (down to 60 %). **Each formula is typeset twice** (dark and light ink) and the
+  cell picks at DRAW time by the view's `effectiveAppearance` (the chat) or the card's ink level, so the glass flipping needs no rebuild. **SwiftMath's fonts live in a resource bundle
+  that SwiftPM's accessor looks for in `Contents/Resources`: `bundle.sh` copies every `*.bundle` of the build there; without it the first formula is a `fatalError`.** SOUL.md tells
+  the agent to write `$..$`/`$$..$$` (pinned in both template suites). Looked at on the installed build over half, black and white backdrops (formulas stay legible in both inks).
+  **Test trap**: the pointer. A card stays open while the pointer is over it, and my synthetic clicks leave it over the chat's place, so `theCardKeepsAnUnansweredNudgeForAMinuteThenClosesIt` and
+  `everyOtherWayTheCardEndsIsDismissedNeverMuted(.timeout)` failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Verified live (installed app, real gateway, 2026-10-23, own white backdrop)**: a long
+  math answer typeset in the chat (fraction, root, subscripts, in a numbered list; zero new files in the vault), a typed follow-up through the real text box (answered with context), and the typed
+  "close the chat" closed the window. The agent's Python example came back WITHOUT a code fence (plain lines, `*` read as emphasis): a probe through `Markdown.attributed` shows every fenced
+  shape renders as code and `$` inside code stays text, so SOUL.md now says to fence code (needs `robo setup` to reach the live profile). **Not verified**: a formula in a table cell, dragging, Spaces/full-screen.
+- **Downloads through robo's Brave (2026-10-24, user: "I will tell it which folder")**. The headless Brave had no download folder, so nothing it fetched ever reached the
+  disk (Robo said so itself; a `curl` gets Moodle's Microsoft sign-in page, the terminal is not signed in). **`Browser.setDownloadBehavior` over CDP does not work for
+  Hermes: it ends with the connection and `browser_cdp` opens a new one per call** (tested). So `Browser.allowDownloads` (`Browser.swift`; `browser.allow_downloads` in Python)
+  writes `download.default_directory` = `~/Robo/Downloads`, `prompt_for_download` false and `plugins.always_open_pdf_externally` into the profile's `Default/Preferences`
+  before every start robo makes (Brave rewrites that file on exit, so editing a running Brave does nothing: it was restarted once on 2026-10-24; the Microsoft login
+  cookie is persistent, Moodle signed in again by itself). SOUL.md tells the agent to download with the browser and `mv` the file to the folder the user names; it lives
+  outside `~/.hermes` because `approvals.deny '*hermes*'` would refuse the move. Hermes' browser refuses `127.0.0.1` addresses ("private or internal address"), so test with a public file.
+  **Verified live**: a public PDF downloaded by the browser into `~/Robo/Downloads` and moved by the agent to a named folder. **Not verified**: the course PDFs themselves
+  (Moodle's viewer links), a download that needs a click on a Download button.
 - **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
   answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
   ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks
@@ -172,7 +223,7 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   bite in `approvals.mode: manual`. It appends receipts to `~/.local/share/robo/receipts.jsonl`; the app shows "✓ sent · host"
   or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (optional cap: `ROBO_DAILY_TOKENS`, else the
   number in `~/.local/share/robo/daily_tokens`; the file is what survives `robo setup`, which rewrites the login item without any
-  environment, and it is set to 6000000 on the live Mac since 2026-10-20; a run counts `total` including cache reads: a chat turn is
+  environment, and it was set to 6000000 on the live Mac on 2026-10-20 and REMOVED on 2026-10-22 at the user's request ("just let it use freely": a day had already used 7.2M, so Robo was refusing requests); no cap runs now, the file is moved aside, and `Usage.cap` still honours one if it comes back; a run counts `total` including cache reads: a chat turn is
   ~95k, the LMS course list ~290k, one course scan ~630k (15 tool calls) before the skill's thrift rule and ~340k (10 calls, same answer, one
   quiet course) after it, a normal day 1.8-2.3M; the cap stops chat too; Hermes reports no usage for
   failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
@@ -180,7 +231,7 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
 - **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
   `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;
   SOUL.md "Learning first" (hints before answers, graded work is never done for the student).
-- **LMS posts scan (Swift only, built 2026-10-20; NOT run live: the skill is not installed in the live profile until `robo setup`)**:
+- **LMS posts scan (Swift only, built 2026-10-20; ran live 2026-10-20 to 22, see "Live results" below)**:
   deadlines live in Moodle posts, not the calendar. `hermes/skills/school/school-posts` has two modes picked by the request's first line:
   `MODE: list` (courses as a JSON array) and `MODE: scan` + `COURSE` / `SINCE` (a day) / `TODAY` (one fenced JSON array of `{course,
   post_url, posted, title, due, kind, quote}`; `due` is `YYYY-MM-DDTHH:MM`, `YYYY-MM-DD` (read as 23:59 that day) or `null` (dropped: no
@@ -210,9 +261,21 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   quote card, `lms.json` / `agenda.json` 0600, the usage line. **Found there by looking at the picture**: `WrapLabelView.height` measured
   without the `.kern: 0` that `draw` uses, so a line that just fit wrapped when drawn and the last line (the domain) was cut off (the
   approval view had the same latent flaw); now measured with the draw attributes (`aWellMeasuresTextTheWayItIsDrawn`). A test of
-  `well.text` cannot see this: capture the window. **Not verified**: a real reply from the agent (does it load the skill
-  from a `MODE:` prompt that ends "Use the school-posts skill."? are real Moodle posts and links in the shape the decoder accepts?), the
-  cost per day, unattended 20-minute runs, `robo setup` installing the skill. The guarantees on the agent side are the skill's Pitfalls
+  `well.text` cannot see this: capture the window. **Live results (five runs on the user's Moodle, 2026-10-20 to 22)**: the agent loads the skill from the
+  `MODE:` prompt and answers in the decoder's shape. They also showed why the scan was unreliable, all fixed 2026-10-23: (a) robo-guard forgets
+  a page's elements after any click or `browser_back` (only `browser_navigate`/`browser_snapshot` refresh them) and ASKS about a click on an
+  unknown element; the scan denies every ask, so the course list stopped at 1 of 8 courses (the agent reads a course's address from
+  `frame_tree.top.url` in the snapshot after a click; the skill now says: snapshot before a click that follows a click, `browser_navigate` to
+  go back, never `browser_back`); (b) `BAD_URL` in the guard had a bare `action=` that matched Moodle's `logaction=0` in the recent-activity
+  URL (now `[?&;#]action=`); (c) an agent that could not read answered `[]`, which counted as "scanned, nothing new" and moved SINCE
+  forward: `LMSPosts.incomplete` (blocked/denied/refused/couldn't... in the words around the block, never inside it) makes such a reply a
+  failed step, tried again, and the skill says to answer `INCOMPLETE:` with no block. **Materials** (new slides, readings): the same scan
+  reports them as `kind: "material"`, `due: null` (`LMSPosts.materials`, the course page when the post link fails `postLink`); they are kept
+  in `lms.json` (`materials`, told once, 60 days, 200), listed in the vault note `Radar/Courses-<day>.md` and offered as ONE card a day of the
+  new `NudgeCategory.course` (ahead of the digest in a slot; `radar.json` `offers`, so `machine.radarOn` gates it). The agent is told never
+  to open a material itself (a click can download it or mark it viewed). **Not verified**: the fixed skill against the live agent (needs
+  `robo setup`, and a fresh `lms.json` to list all 8 courses), what the materials look like in the recent-activity page, the cost per day
+  with 8 courses (~340k tokens for a quiet one), unattended 20-minute runs. The guarantees on the agent side are the skill's Pitfalls
   (never open quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the denied asks; each
   skill rule is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
 - **Source check (Swift only, 2026-10-21, user request: "sources validation and verification - prevent the robo from providing the users
@@ -238,8 +301,8 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   doubtful, 1 hidden)** and 76 of 2,000 URLhaus malware hosts doubtful: offline shape checks cannot condemn a random page on free hosting, so this is a guard against
   impersonation and offer scams, not a phishing filter. Lists (`primary`, `boards`, `brands` with their owners, `hosting`, `shorteners`,
   `offPlatform`) are dated `SourceCheck.verified`; add a real brand domain to its `owned` set when a legitimate site is flagged. The agent's side
-  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); it reaches the live agent only at
-  the next `robo setup`. The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
+  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); `robo setup` put it in the live
+  profile on 2026-10-22 (only SOUL.md differed; approvals stayed `manual`; backup of the replaced files was kept outside the repo). The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
   innocent-looking domain, scams in other languages, and a company name taken from the feed (it never vouches; a match is only a note) pass; the
   micro-sign homograph `µtorrent.com` is hidden as a look-alike (3 of ~1,000 legitimate inputs in the hunter run were hidden, that one among them).
   The main safeguards were mutation-checked on 2026-10-21 (about 30 mutants of `SourceCheck` and the Radar/alert wiring; each failed a test).
@@ -306,7 +369,7 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   offers go stale at the next midnight, the setup one after 7 days) and `radar-cache/` (`<sha256 of the URL>.body|.json`, 0600, the
   last good body with its ETag/Last-Modified, never the URL; dropped after 30 days unused). **Offers** go into the SAME candidate list
   as the calendar reminders, so slots, 3 a day, quiet hours, holds, `enabled` and the answers are `NudgeBudget`'s: the digest
-  (`.digest`, "N to read, M to look into": N = papers + news, M = opportunities + contests of the note, an empty half is left out; detail = first two titles, `NudgeCandidate.note` = the note;
+  (`.digest`, "N to read, M to look into": N = papers + announcements + news, M = repositories + opportunities + contests of the note, an empty half is left out; detail = first two titles, `NudgeCandidate.note` = the note;
   Open opens it in Obsidian through `machine.openNote`, the path is checked by `Radar.noteURL`: `Radar/<name>.md` only), the best
   matching upcoming contest (`.contest`), and a matching internship whose deadline is within 72 h (`.opportunity`, from everything
   ranked, also what an earlier note listed). A radar offer covers no reminder key. **Sources and allowlist**: https only, hosts
@@ -314,13 +377,23 @@ Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `
   `hacker-news.firebaseio.com` (top 30, 6 requests at a time, 15 s for all), `ctftime.org` (`/api/v1/events/?limit=30`: without
   `start` it lists from now, checked), `codeforces.com`, `raw.githubusercontent.com` (SimplifyJobs `Summer<Y>-Internships/dev/.github/
   scripts/listings.json`, Y = next year from August on; `Summer2027` answered 200 on 2026-10-20, the file was 12.8 MB), the three ATS
-  APIs for the profile's `companies`, plus the hosts of the profile's `feeds` (https, a named host: no IP, localhost, `.local`);
+  APIs for the profile's `companies`, `api.github.com` (2026-10-23: new repositories of the last week, `stars:>10`, for the three strongest
+  interests or the `github` line, `none` = off; 3 searches of the 10 a minute allowed), the seven blogs of `RadarHosts.announcements` (OpenAI,
+  DeepMind, Hugging Face, Google Research, NVIDIA, BAIR, Microsoft Research: each answered 200 on its own host; MBZUAI's feed answers bots with
+  403 and Anthropic has none), plus the hosts of the profile's `feeds` (https, a named host: no IP, localhost, `.local`);
   exact host match, a redirect to another host or to http is refused. `RadarFetcher`: 20 s, caps 4 MB / arXiv 8 MB / SimplifyJobs
   24 MB, User-Agent `Robo/1.0 (personal study assistant)` (CTFtime refuses the default), gap per host 1 s (arXiv 3 s, HN 0.25 s so 30
   stories fit in 15 s), an HTTP error/too big backs the URL off for 20 h (a bit under a day so tomorrow's 07:00 run is not skipped; a
   timeout or lost network does not). LinkedIn, Indeed, Handshake, Wellfound, Devpost and Glassdoor are deliberately not touched.
   **Privacy**: a source learns the Mac's IP and which category, company or feed is watched (the URL), never the profile text, the
-  goals or the country; the note stays on the Mac. Robo never applies, signs in, pays or sends anything. **Dev switch**
+  goals or the country, EXCEPT GitHub, whose search URL carries the query words (cleaned to letters, digits, spaces, hyphens so a word
+  cannot add a `user:` qualifier); the note stays on the Mac. **What is shown (2026-10-23, user: "stop showing non-matching items")**: the
+  digest has no "explore" slot any more and takes only items matching a WHOLE interest (the test behind the "matches:" line, not the looser
+  cosine > 0, which let a repository through that the line called "outside your interests"); an internship that matches none is not
+  listed; programmes and contests are picked by goals and may still say "outside your interests". The digest is up to 3 papers, 2
+  announcements (last 14 days; a lab feed holds months), 1 news, 2 repositories. Two real-data findings: BAIR's feed links with `http://`
+  (all 10 items were dropped; `Feeds.news(kind: .announcement)` upgrades http to https, a user's own feed stays strict), and the OpenAI
+  and NVIDIA feeds are 0.8 MB each (under the 4 MB cap). Robo never applies, signs in, pays or sends anything. **Dev switch**
   `ROBO_RADAR_NOW=1` (`Machine.radarNow`): the first run after launch ignores the once-a-day and 07:00 rules (then the ordinary rules
   are back); it reads and writes the vault's `Radar/` and downloads, so use it with a throwaway `HOME`; a test copy shares
   `~/.local/share/robo`, so delete its `radar.json` and `radar-cache/` afterwards. `Rig(radar: true)` turns the radar on in tests
