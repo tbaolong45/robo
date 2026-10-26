@@ -146,7 +146,7 @@ Then restart robo: ✕ Quit in the right-click menu, then `uv run robo`. Robo ru
 
 ## Layout
 
-How the pieces fit together, with diagrams (what runs where, one request start to finish, the face's moods, where files live): [docs/architecture.md](docs/architecture.md).
+How the pieces fit together, with diagrams (what runs where, one request start to finish, the face's moods, where files live): [docs/architecture.md](docs/architecture.md). New to Swift or app development? Start with [docs/newcomer-guide.md](docs/newcomer-guide.md).
 
 | Path | What |
 |---|---|
