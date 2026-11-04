@@ -399,35 +399,12 @@ struct BrainTests {
             == .approvalNeeded("Robo wants to open https://x.example/."))
     }
 
-    @Test func desktopControlApprovalsAreMarked() {
-        let ev = HermesClient.parse(["event": "approval.request", "description": "Allow computer_use to perform `click`?",
-                                     "command": "computer_use: click (412, 300)"])
-        guard case .approvalNeeded(let description, let desktop, _)? = ev else { Issue.record("not an approval"); return }
-        #expect(desktop && description.contains("click"))
-        #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
-            == .approvalNeeded("recursive delete: rm -rf x"))
-    }
-
     @Test func approvalsCarryTheirRequestId() {
         #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
                                     "command": "<browser_navigate> (plugin approval rule)", "request_id": "9f2c"])
             == .approvalNeeded("Robo wants to open https://x.example/.", id: "9f2c"))
         #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
             == .approvalNeeded("recursive delete: rm -rf x", id: ""))  // none sent: the answer is the oldest one's
-    }
-
-    /// robo-guard's ask for a computer_use step in Outlook or Teams ("Robo wants to ..."): never marked as Hermes' own desktop
-    /// approval, so the app shows it. Hermes' own approval of the same step (which here names Outlook too) stays marked: the user
-    /// already answered the guard's ask for it and must not be asked twice.
-    @Test func guardAsksForOutlookAndTeamsAreNeverDesktopApprovals() {
-        for app in ["Microsoft Outlook", "Microsoft Teams", "com.microsoft.teams2"] {
-            #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to click in \(app) (computer_use).",
-                                        "command": "<computer_use> (plugin approval rule)", "request_id": "g1"])
-                == .approvalNeeded("Robo wants to click in \(app) (computer_use).", desktop: false, id: "g1"))
-        }
-        #expect(HermesClient.parse(["event": "approval.request", "description": "Allow computer_use to perform `focus_app`?",
-                                    "command": "computer_use: focus 'Microsoft Outlook'", "request_id": "h1"])
-            == .approvalNeeded("Allow computer_use to perform `focus_app`?: computer_use: focus 'Microsoft Outlook'", desktop: true, id: "h1"))
     }
 
     // MARK: the default session and a real socket

@@ -72,7 +72,7 @@ uv sync
 open ~/Applications/Robo.app
 ```
 
-- **The speech model is not downloaded by the app.** It reads NVIDIA Parakeet TDT 0.6B v2 from the Hugging Face cache, `~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx` (the snapshot that `refs/main` names, with `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx` and `vocab.txt`). Download that repository into the cache once, for example with the Hugging Face CLI. Without it, voice input reports that the model is missing; typing still works.
+- **The speech model is not downloaded by the app.** It reads NVIDIA Parakeet TDT 0.6B v2 from the Hugging Face cache, `~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx` (the snapshot that `refs/main` names, with `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx` and `vocab.txt`). Download that repository into the cache once: `uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx`. Without it, voice input reports that the model is missing; typing still works.
 - **`robo setup`** must be run from the installed `.app` (it refuses a bare binary). It writes `~/.local/share/robo/agent/config.json` (port 8765, model `claude-sonnet-5-5`, `approvals`, vault, Moodle address, the path of this `robo` and of `uv`, `learn`), creates the server key, writes the `ai.robo` LaunchAgent that starts the app at login, and creates the vault in `~/Documents/Robo`. Running it again keeps what you set and changes nothing else.
 - **No install step for the agent.** The service reads `agent/SOUL.md` and `agent/skills/` from the checkout the app was built in and fills their placeholders from `config.json` on every run. Editing them changes the next run.
 

@@ -243,7 +243,7 @@ struct MindTests {
     }
 
     @Test func eventsCarryPythonsDefaults() {
-        #expect(Event.approvalNeeded("x") == .approvalNeeded("x", desktop: false))
+        #expect(Event.approvalNeeded("x") == .approvalNeeded("x", id: ""))
         #expect(Event.runEnded(status: "failed") == .runEnded(status: "failed", output: "", error: ""))
     }
 

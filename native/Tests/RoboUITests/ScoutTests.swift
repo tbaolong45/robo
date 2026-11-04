@@ -219,8 +219,8 @@ private final class Replies: @unchecked Sendable {
     @Test func everyAskOfAScanIsDeniedAtOnceAndNoCardShows() async {
         let r = await launch()
         defer { r.close() }
-        r.hermes.script = [.event(.approvalNeeded("terminal: rm -rf notes", desktop: false, id: "ask1")),
-                           .event(.approvalNeeded("click Submit", desktop: true, id: "ask2")),
+        r.hermes.script = [.event(.approvalNeeded("terminal: rm -rf notes", id: "ask1")),
+                           .event(.approvalNeeded("click Submit", id: "ask2")),
                            .event(.runEnded(status: "completed", output: courses([courseA]), error: ""))]
         tick(r, at(8))
         #expect(await settled(r))

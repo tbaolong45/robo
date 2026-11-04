@@ -17,10 +17,9 @@ public enum Event: Equatable, Sendable {
     case delta(String)
     case toolStarted(String)
     case toolCompleted(tool: String, error: Bool)
-    /// Hermes paused the run until the user approves or denies (`approval.request`). `desktop` is
-    /// Hermes' own approval of a computer_use step (click, type, key...) in the user's apps. `id` is its `request_id`:
-    /// the answer names it, so it resolves this request and not the oldest one (empty: Hermes sent none).
-    case approvalNeeded(String, desktop: Bool = false, id: String = "")
+    /// The agent paused the run until the user approves or denies (`approval.request`). `id` is its `request_id`:
+    /// the answer names it, so it resolves this request and not the oldest one (empty: none was sent).
+    case approvalNeeded(String, id: String = "")
     /// What a completed run cost (`run.completed`'s `usage` and `runtime`), just before its `.runEnded`. A failed, cancelled or
     /// interrupted run carries none: Hermes counts nothing for it.
     case usage(UsageRecord)

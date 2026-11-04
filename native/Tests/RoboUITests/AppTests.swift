@@ -127,18 +127,17 @@ final class Flag: @unchecked Sendable {
         #expect(await pump(!r.window.busy))
     }
 
-    @Test func desktopControlNeedsNoPromptButIrreversibleStepsDo() async {
-        let r = Rig([.event(.approvalNeeded("Allow computer_use to perform `click`?", desktop: true)),
-                     .event(.approvalNeeded("Allow computer_use to perform `type`?", desktop: true)),
-                     .event(.approvalNeeded("recursive delete: rm -rf ~/x")), .wait, completed("ok")])
+    /// Hermes' own "Allow computer_use" approvals used to be answered "session" without a card. robo-agent sends no such ask,
+    /// and an ask that looks like one is shown like any other: nothing is approved unseen.
+    @Test func noAskIsApprovedUnseen() async {
+        let r = Rig([.event(.approvalNeeded("Allow computer_use to perform `click`?", id: "H")), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("open the calculator and compute 12*7")
-        #expect(await pump(r.window.card.approvalShown != nil))  // only the delete asks
-        #expect(await pump(r.hermes.approved.count == 2))
-        #expect(r.hermes.approved.map(\.choice) == [.session, .session] && r.hermes.approved.allSatisfy { $0.run == "run_1" })
-        #expect(r.window.card.approvalShown?.contains("rm -rf") == true)
-        r.window.card.onApprove?("once")
-        #expect(await pump(r.hermes.approved.last?.choice == .once))
+        #expect(await pump(r.window.card.approvalShown != nil))
+        _ = await pump(timeout: 0.2)
+        #expect(r.hermes.approved.isEmpty)
+        r.window.card.onApprove?("deny")
+        #expect(await pump(r.hermes.approved.map(\.id) == ["H"] && r.hermes.approved[0].choice == .deny))
         r.hermes.gate.signal()
         #expect(await pump(!r.window.busy))
     }
@@ -181,24 +180,6 @@ final class Flag: @unchecked Sendable {
         #expect(r.hermes.approved.isEmpty)
     }
 
-    /// The old bug: the app's own "session" answer to a desktop step had no id, so with an ask already waiting Hermes took it for
-    /// the OLDEST one, the user's, and approved it unseen.
-    @Test func approvingADesktopStepNeverAnswersTheAskWaitingForTheUser() async {
-        let r = Rig([.event(.approvalNeeded("Robo wants to click in Microsoft Outlook (computer_use).", id: "G")),
-                     .event(.approvalNeeded("Allow computer_use to perform `click`?", desktop: true, id: "H")), .wait, completed("ok")])
-        defer { r.close() }
-        r.window.ask("answer the mail")
-        #expect(await pump(r.hermes.approved.count == 1))
-        #expect(r.hermes.approved[0].choice == .session && r.hermes.approved[0].id == "H")
-        #expect(r.window.card.approvalShown == "Robo wants to click in Microsoft Outlook (computer_use).")  // robo-guard's ask waits for the click
-        #expect(r.window.approvals.count == 1 && r.window.card.approval.label.text == "APPROVAL ▸")
-        r.window.card.onApprove?("once")
-        #expect(await pump(r.hermes.approved.count == 2))
-        #expect(r.hermes.approved[1].choice == .once && r.hermes.approved[1].id == "G")
-        r.hermes.gate.signal()
-        #expect(await pump(!r.window.busy))
-    }
-
     @Test(arguments: ["Microsoft Outlook", "Microsoft Teams"])
     func aGuardAskForOutlookOrTeamsShowsTheCardAndWaitsForTheClick(_ app: String) async {
         let r = Rig([.event(.approvalNeeded("Robo wants to type in \(app) (computer_use).", id: "G")), .wait, completed("ok")])
@@ -217,7 +198,7 @@ final class Flag: @unchecked Sendable {
     /// Nobody is looking during the automatic digest (it only reads): every ask is denied at once, none waits on a card.
     @Test func theAutomaticDigestDeniesEveryAskAtOnce() async {
         let r = Rig([.event(.approvalNeeded("Robo wants to click \"Send\" on outlook.office.com.", id: "A")),
-                     .event(.approvalNeeded("Allow computer_use to perform `click`?", desktop: true, id: "B")), .wait, completed("ok")],
+                     .event(.approvalNeeded("Robo wants to delete a note.", id: "B")), .wait, completed("ok")],
                     digestDue: true)
         defer { r.close() }
         #expect(await pump(r.hermes.approved.count == 2))

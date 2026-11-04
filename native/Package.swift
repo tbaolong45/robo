@@ -1,12 +1,12 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// Robo, the native macOS build and the running app (the Python tree in src/robo is the spec and the fallback).
+// Robo, the macOS app. Its brain is the robo-agent service in ../agent.
 let package = Package(
     name: "Robo",
     platforms: [.macOS(.v26)],
     dependencies: [
-        // Vendored: upstream's 1.24.2 pin gives 6/200 transcripts that differ from the Python app's
+        // Vendored: upstream's 1.24.2 pin gives 6/200 transcripts that differ from the retired Python app's
         // onnxruntime 1.31; the vendored bindings use the 1.30.0 pod archive and match it (see its Package.swift).
         .package(path: "Vendor/onnxruntime-swift-package-manager"),
         // LaTeX in the chat: typesets $...$ with Core Text and its own Latin Modern Math font (MIT).

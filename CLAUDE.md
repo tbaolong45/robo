@@ -75,8 +75,8 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
 - **Tools** (`harness.TOOLS`): Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, plus the MCP servers
   `playwright` (`npx -y @playwright/mcp@0.0.83 --cdp-endpoint http://127.0.0.1:9333`, snapshots in
   `~/.local/share/robo/browser`) and `robo` (in-process: `memory_add`, `memory_search`, `memory_forget`). There is no
-  `computer_use`: SOUL.md's `{{DESKTOP_APPS}}` tells it to open GUI apps with `open -a`. The app's `desktop` approval
-  branch (`Brain.swift`, "Allow computer_use") is a Hermes leftover robo-agent never triggers. `setting_sources=[]` and
+  `computer_use`: SOUL.md's `{{DESKTOP_APPS}}` tells it to open GUI apps with `open -a`. Every approval shows the card
+  (Hermes' auto-approved "Allow computer_use" branch was removed 2026-11-04). `setting_sources=[]` and
   `strict_mcp_config`: the user's own Claude settings, CLAUDE.md files and MCP servers never reach the agent.
   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` keeps the API key out of Bash's environment, which is why no permission mode is
   set: the tools are allowed by name and the guard's explicit "allow" answers the rest.

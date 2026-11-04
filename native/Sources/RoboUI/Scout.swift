@@ -77,7 +77,7 @@ final class Scout: @unchecked Sendable {
                 case .delta(let text): streamed += text
                 case .toolStarted: reply.steps += 1
                 case .usage(let record): reply.usage = record
-                case .approvalNeeded(_, _, let id): deny(id)
+                case .approvalNeeded(_, let id): deny(id)
                 case .runEnded(let status, let output, _):
                     reply.status = status
                     reply.text = output.isEmpty ? streamed : output

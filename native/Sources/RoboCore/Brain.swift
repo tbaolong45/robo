@@ -255,10 +255,8 @@ public final class HermesClient: Sendable {
             let what = d["description"] as? String ?? ""
             var command = d["command"] as? String ?? ""
             if command.hasSuffix("(plugin approval rule)") { command = "" }  // robo-guard's sentence says it all
-            // desktop = the DESCRIPTION is Hermes' own fixed sentence (tools/computer_use `Allow computer_use to perform ...`).
-            // robo-guard's asks (also computer_use steps in Outlook or Teams) all begin "Robo wants to", so they never match.
             return .approvalNeeded(!what.isEmpty && !command.isEmpty ? "\(what): \(command)" : what.isEmpty ? command : what,
-                                   desktop: what.hasPrefix("Allow computer_use"), id: d["request_id"] as? String ?? "")
+                                   id: d["request_id"] as? String ?? "")
         case _ where terminal.contains(name):
             return .runEnded(status: String(name.dropFirst("run.".count)), output: d["output"] as? String ?? "",
                              error: d["error"] as? String ?? "")

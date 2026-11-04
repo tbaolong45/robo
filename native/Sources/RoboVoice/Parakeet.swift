@@ -362,7 +362,7 @@ public final class Parakeet {
             .appendingPathComponent(".cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx")
         guard let revision = try? String(contentsOf: repo.appendingPathComponent("refs/main"), encoding: .utf8) else {
             throw VoiceError("the speech model is not downloaded yet (expected in \(repo.path)); "
-                             + "start the Python robo once to fetch it")
+                             + "download it once with `uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx`")
         }
         return repo.appendingPathComponent("snapshots/\(trimmed(revision))")
     }

@@ -228,14 +228,11 @@ extension RoboWindow {
             feed(reply)
         case .toolStarted(let tool):
             toolLabel = Mind.toolLabel(tool)
-        case .approvalNeeded(let d, let desktop, let id):
-            if autoDigest || desktop {
+        case .approvalNeeded(let d, let id):
+            if autoDigest {
                 // The automatic digest only reads and nobody is looking: every ask is denied at once, none waits on a
-                // card (a digest from the menu is attended and asks). Otherwise this is Hermes' own approval of a desktop
-                // step; the user lets robo drive the desktop freely ("all but irreversible"), and "session" covers that
-                // kind of step for the rest of this request only. robo-guard's asks (irreversible steps, Outlook and Teams
-                // steps) are not `desktop`: they show the card.
-                answer(autoDigest ? .deny : .session, id)
+                // card (a digest from the menu is attended and asks). Every other ask shows the card: nothing is approved unseen.
+                answer(.deny, id)
                 refresh()
                 return
             }
