@@ -29,8 +29,7 @@ You don't need to read it in order. Every numbered part stands on its own.
 14. [The LMS scan: treating AI output as untrusted](#14-the-lms-scan-treating-ai-output-as-untrusted)
 15. [Testing and quality](#15-testing-and-quality)
 16. [Build tools and dependencies](#16-build-tools-and-dependencies)
-17. [The Python build](#17-the-python-build)
-18. [Trade-offs at a glance](#18-trade-offs-at-a-glance)
+17. [Trade-offs at a glance](#17-trade-offs-at-a-glance)
 
 ---
 
@@ -92,8 +91,8 @@ card, can be tested without a microphone, a network or a screen.
 **The idea.** *Porting* means rewriting a program in another language. *Golden values* are
 outputs saved from the old version that the new version must reproduce exactly.
 
-**In Robo.** The Swift app is a port of the Python app. Some decisions keep Python's behaviour on
-purpose:
+**In Robo.** The Swift app began as a port of an earlier Python app (since retired). Some decisions
+keep Python's behaviour on purpose:
 - `RoboCore/PyJSON.swift` re-implements JSON the way Python reads it (where `30` and `30.0`
   differ).
 - The face animator re-implements Python's random number generator (the Mersenne Twister) so a
@@ -207,7 +206,7 @@ Microsoft) is a library that runs them on many platforms.
   version is pinned.
 - ORT 1.30 kept the weights twice in memory (~1.4 GB), so `disable_prepacking` is set (+15–20 ms
   per clip, same text).
-- **ORT sends usage telemetry to Microsoft by default.** Both builds set
+- **ORT sends usage telemetry to Microsoft by default.** Robo sets
   `ORT_DISABLE_TELEMETRY=1`, which matters for a "no audio leaves the laptop" promise.
 
 ### 2.7 Name matching and intent
@@ -460,7 +459,7 @@ mouth movement while letters are typed.
 are fixed by a starting *seed*.
 
 **In Robo.** Blinks and glances use a Swift copy of Python's Mersenne Twister, so a seed gives
-the same blinks in both builds, and tests can compare whole animation traces.
+the same blinks as the Python original, and tests can compare whole animation traces.
 
 ### 6.4 Drawing and its cost
 **In Robo.** `RoboUI/FaceRender.swift` paints with **Core Graphics** (Apple's 2D drawing API):
@@ -475,7 +474,7 @@ measured at 0.1/255 per pixel, for less work).
 **The idea.** Screens have an *origin* and an axis direction.
 
 **In Robo.** AppKit puts (0, 0) at the **bottom-left** of the primary display with y going **up**.
-Qt, Quartz and Robo's own maths use **top-left, y down**. `RoboUI/Screens.swift` converts between
+Quartz and Robo's own maths use **top-left, y down**. `RoboUI/Screens.swift` converts between
 them using the primary display's height. Views set `isFlipped` to get y-down.
 
 ### 6.6 The roaming state machine
@@ -678,8 +677,8 @@ because a deadline keeps approaching while the laptop sleeps.
 | `~/Documents/Robo/` | the Obsidian vault: `Drafts/`, `Plans/`, `Notes/`, `Radar/`, `Brain/` |
 | `~/Robo/` | pages, charts and slides the agent makes; `Downloads/` |
 
-The split between *config* (`~/.config`) and *data* (`~/.local/share`) follows the Linux XDG
-convention.
+The split between *config* (`~/.config`) and *data* (`~/.local/share`) follows the XDG Base
+Directory convention.
 
 ### 10.2 File permissions
 **The idea.** Unix permissions in octal: `0600` = only the owner can read and write; `0700` = only
@@ -712,8 +711,7 @@ dialog.
 - website *hostnames* from Brave's history;
 - files opened.
 
-Rows are deleted after 30 days. Its table layout is shared with the Python build, so the names
-and formats must stay identical.
+Rows are deleted after 30 days.
 
 ### 10.6 Obsidian and URL schemes
 **In Robo.** Notes open with `obsidian://open?path=...`, a *custom URL scheme* that macOS routes
@@ -886,8 +884,7 @@ it the exact shape you want, then **check the shape in code** and believe nothin
 
 ### 15.1 The test frameworks
 - **Swift Testing** (`@Test`, `#expect`): ~1,300 tests in `native/Tests/`, one folder per module.
-- **pytest** for Python: ~1,470 tests in `tests/`. Qt UI tests run with
-  `QT_QPA_PLATFORM=offscreen` (Qt draws into memory instead of a real screen).
+- **pytest** for the Python side: the tests in `tests/`.
 - **ruff**: a Python *linter* (checks style and common mistakes).
 - **Template pins**: tests that read `SOUL.md` and the skills and check that key rules are still
   written there (`tests/test_templates.py`, `TemplatesTests.swift`), so an edit can't silently
@@ -900,7 +897,7 @@ it the exact shape you want, then **check the shape in code** and believe nothin
 | Whole-window tests with fakes | the real flow without hardware |
 | Golden values from Python | proof the port matches |
 | Real-data evaluation (13.3) | numbers instead of hand-made examples |
-| `voice_eval` (TTS voices, or your own recordings) | a score to compare a change with the one before |
+| `robo voice-eval` (TTS voices, or your own recordings) | a score to compare a change with the one before |
 | Mutation testing | proof the tests would notice a bug |
 | Release-mode test run | catches optimiser-only concurrency bugs |
 | Looking at captured screenshots | bugs no test sees (a cut-off line, black on black) |
@@ -909,9 +906,9 @@ it the exact shape you want, then **check the shape in code** and believe nothin
 **The idea.** CI runs the tests on fresh machines for every PR. A *flaky* test passes or fails
 depending on timing or machine speed, not on the code.
 
-**In Robo.** `.github/workflows/` runs pytest and ruff on Ubuntu and macOS. The last PR (#7) was
-merged over one red macOS run: a typing test that needs to catch a reply mid-typing failed twice
-on GitHub's runner, but passed 3/3 locally, and the PR didn't touch that code. Making such a test
+**In Robo.** `.github/workflows/tests.yml` runs the Swift tests on a macOS runner and pytest and
+ruff on Ubuntu. PR #7 was merged over one red macOS run: a typing test that needs to catch a reply
+mid-typing failed twice on GitHub's runner, but passed 3/3 locally, and the PR didn't touch that code. Making such a test
 not depend on machine speed (a fake clock instead of real waiting) is the real fix.
 
 ### 15.4 "Verified" means seen
@@ -929,31 +926,15 @@ drifting 1,200 px away while a card was up) were only found by looking at the re
 | **`native/test.sh`** | runs `swift test` with the path to the Testing macros, which the Command Line Tools ship but don't pass by themselves |
 | **`native/bundle.sh`** | release build → `.app` folder → `Info.plist` → sign (8.3) |
 | **uv** | the Python package manager (fast; `uv.lock` pins every version) |
-| **`pyproject.toml`** | Python dependencies (PySide6, onnx-asr...) and the `robo` command |
+| **`pyproject.toml`** | Python dependencies and tool settings |
 | **Git + GitHub** | `dev` for work, `master` for what runs, PRs with CI between them |
 
 **Pinning** (exact versions) matters here more than usual: one ONNX Runtime version change
-changes transcripts (2.6), and CI broke once when macOS runners moved to Python 3.15, which had
-no ONNX Runtime wheel (a *wheel* is a pre-built Python package) yet. The fix was pinning CI to
-3.13.
+changes transcripts (2.6).
 
 ---
 
-## 17. The Python build
-
-`src/robo/`, the original and the spec:
-- **Qt via PySide6** for the window, the face (QPainter) and the holo card (five themes);
-- **onnx-asr** runs the same Parakeet model;
-- **Linux support**: a GNOME Shell extension (`gnome/robo-focus@robo`) reports the focused
-  window; the app runs through **XWayland** because GNOME's Wayland doesn't let apps place
-  themselves or stay on top; logind's `PrepareForSleep` signal reports sleep;
-- the same pure-module design: `mind.py`, `typewriter.py`, `roam.py`, `plan.py`.
-
-It still wakes by name (no hotkey) and has none of the active-mode features.
-
----
-
-## 18. Trade-offs at a glance
+## 17. Trade-offs at a glance
 
 | Decision | Gained | Paid |
 |---|---|---|
@@ -962,7 +943,6 @@ It still wakes by name (no hotkey) and has none of the active-mode features.
 | Silence ends a request (3 s) | thinking pauses are fine | a noisy room keeps it open longer |
 | Agent with every tool, approvals off | it can do anything without asking | prompt injection and mistakes aren't stopped by a click |
 | Pure core + fakes | huge, fast test suite | more code: protocols, rigs, passing time around |
-| Two builds (Python + Swift) | a spec and a fallback | everything had to be done twice, then the builds drifted apart |
 | Offline scam checks | nothing leaks, nothing to keep updated | can't judge a new domain; catches ~¾ of live phishing |
 | Rules instead of AI for ranking and reminders | predictable, free, testable | less clever than a model would be |
 | Self-signed certificate | permissions survive rebuilds | a keychain to keep, launchd quirks |
@@ -970,5 +950,5 @@ It still wakes by name (no hotkey) and has none of the active-mode features.
 
 ---
 
-*Written 2026-10-26, when the project was closed. Numbers come from CLAUDE.md and the code's
+*Written 2026-10-26. Numbers come from CLAUDE.md and the code's
 comments, which record when and how each was measured.*

@@ -1,13 +1,13 @@
 # Robo, explained for a newcomer
 
 This guide is for someone new to Swift and to building apps. It explains what Robo is, how its
-pieces fit together, how to read its code, and the state it was left in. `README.md` lists the
-features and `docs/architecture.md` has detailed diagrams. This page is the gentle way in.
+pieces fit together and how to read its code. `README.md` lists the features and
+`docs/technical-deep-dive.md` explains each technology in depth. This page is the gentle way in.
 
 > **An honest note first.** Most of Robo was built by prompting AI agents, and many features were
 > never checked by a person on the real machine. The tests are real and thorough (about 1,300
-> Swift tests and the Python suite), but "the tests pass" is not the same as "it works the way
-> I want". Section 10 says what was verified and what wasn't.
+> Swift tests), but "the tests pass" is not the same as "it works the way I want". Section 9
+> says what was verified and what wasn't.
 
 ---
 
@@ -74,46 +74,25 @@ Robo *configures* Hermes, though. The `hermes/` folder in this repo holds:
 | **Profile / persona / skill** | Hermes settings for one "personality": its config, its instructions (`SOUL.md`) and its recipe files (skills). |
 | **HTTP / SSE** | Robo starts a "run" with `POST /v1/runs`, then listens to a *Server-Sent Events* stream: a connection that stays open while Hermes pushes events (text pieces, "a tool started", "the run ended"). |
 | **Parakeet / ONNX Runtime** | Parakeet is NVIDIA's speech-to-text model. ONNX Runtime is the library that runs it on the CPU. Both live on the Mac. |
-| **Qt / PySide6** | The cross-platform UI toolkit the *Python* version uses. |
 | **Pure code** | Code that only computes: no screen, no files, no clock of its own (time is passed in as an argument). It is easy to test, and Robo keeps as much as it can this way. |
-| **CI** | Continuous Integration: GitHub runs the tests on Ubuntu and macOS for every pull request (`.github/workflows/`). |
+| **CI** | Continuous Integration: GitHub runs the Swift tests on macOS and the Python tests on Ubuntu for every pull request (`.github/workflows/`). |
 | **`dev` / `master` / PR** | Work goes on the `dev` branch. A *pull request* (PR) proposes merging it into `master`, the branch the laptops run. It's merged when CI is green. |
 
-## 4. Two versions of the same app
-
-Robo exists twice, and that confuses people at first:
-
-| | Python version | Swift version |
-|---|---|---|
-| Where | `src/robo/` | `native/` |
-| UI toolkit | Qt (PySide6) | AppKit |
-| Runs on | Linux (GNOME) and macOS | macOS only |
-| Status | The **spec and fallback**: it came first | **The one that runs** at login since 2026-10-13 |
-| New features since mid-October | No | Yes (glass card, chat window, reminders, radar, Moodle scan, scam checks, LaTeX...) |
-
-The Swift app was a **port**, a translation of the Python one. Many Swift tests carry "golden
-values" produced by the Python code, to prove both builds compute the same thing. After the port,
-new features went into Swift only, so the README often says "(Swift app)".
-
-**Never run both at once**: both would listen to the mic and answer.
-
-## 5. A map of the repository
+## 4. A map of the repository
 
 ```
 robo/
 ├── README.md              what it does, setup, workflow
 ├── CLAUDE.md              hard-won facts for AI agents working here (dense, but true)
 ├── docs/
-│   ├── architecture.md    diagrams: what runs where, one request start to finish
-│   └── newcomer-guide.md  this file
+│   ├── newcomer-guide.md  this file
+│   └── technical-deep-dive.md  each technology, explained
 ├── hermes/                what gets installed into Hermes (the "brain" side)
 │   ├── SOUL.md            the persona
 │   ├── skills/school/     12 skills: digest, mail, moodle, posts, plan, quiz, notes...
 │   └── plugins/robo-guard the safety plugin (Python)
-├── src/robo/              the Python app (spec and fallback)
 ├── tests/                 the Python tests (pytest)
-├── scripts/               helpers: voice_eval.py, face_snapshots.py
-├── gnome/                 a small GNOME Shell extension (Linux focus tracking)
+├── scripts/               helpers: eval_live.py
 └── native/                ★ the Swift app
     ├── Package.swift      the build recipe
     ├── test.sh            run the tests (use this, not plain `swift test`)
@@ -147,11 +126,11 @@ This pays off in tests. `RoboCore` has no screen and no real clock, so a test ca
 09:00 on Tuesday, a deadline is in 4 days: which reminder fires?" and get an exact answer in
 microseconds. The UI layer is kept thin so that most of the logic lives where it can be tested.
 
-## 6. A Swift crash course, using Robo's own code
+## 5. A Swift crash course, using Robo's own code
 
 You can read most of this repo knowing about ten things.
 
-### 6.1 Constants, variables, functions
+### 5.1 Constants, variables, functions
 
 ```swift
 let cap = 80                 // `let` = constant (can't change)
@@ -161,7 +140,7 @@ func stripTags(_ reply: String) -> String { ... }   // takes a String, returns a
 
 The `_` means "no label when calling": you write `stripTags("hi")`, not `stripTags(reply: "hi")`.
 
-### 6.2 Optionals: "maybe a value"
+### 5.2 Optionals: "maybe a value"
 
 Swift makes you handle "nothing" explicitly. `String?` means "a String or `nil`".
 
@@ -174,7 +153,7 @@ guard let owned = brands[brand] else { continue }   // bail out early if missing
 
 `guard ... else` is everywhere in this repo: "make sure this is true, or leave now".
 
-### 6.3 `struct`, `enum`, `class`
+### 5.3 `struct`, `enum`, `class`
 
 - **`struct`**: a value, copied when you pass it. Most of RoboCore is structs
   (`FeelingFilter`, `Typewriter`, `Roamer`).
@@ -187,12 +166,12 @@ guard let owned = brands[brand] else { continue }   // bail out early if missing
 `public enum SourceCheck { static func ... }` is a trick for a "namespace": an enum with no cases
 can't be created, so it's just a box of functions.
 
-### 6.4 Access control
+### 5.4 Access control
 
 `private` = only this file. `public` = other modules can use it. RoboCore marks what RoboUI may
 call as `public`; everything else stays hidden.
 
-### 6.5 Closures
+### 5.5 Closures
 
 A closure is a function you pass around, written in `{ }`:
 
@@ -200,7 +179,7 @@ A closure is a function you pass around, written in `{ }`:
 tokens.first(where: { brands[$0] != nil })   // $0 is "the current element"
 ```
 
-### 6.6 Concurrency: `async`, `await`, `@MainActor`
+### 5.6 Concurrency: `async`, `await`, `@MainActor`
 
 - Only the **main thread** may touch the screen. `@MainActor` on a class or function means "this
   runs on the main thread", and the compiler enforces it.
@@ -213,7 +192,7 @@ A real lesson from this repo: a concurrency bug passed every debug-build test an
 only in the **release** build. That's why CLAUDE.md says to also run the tests in release mode
 for concurrency code.
 
-### 6.7 Tests
+### 5.7 Tests
 
 Robo uses Apple's newer **Swift Testing** library. A test is a function marked `@Test`, and
 `#expect` checks a condition. From `Tests/RoboCoreTests/FeelingsTests.swift`:
@@ -235,7 +214,7 @@ knows whether it's a tag.
 **Suggested first exercise:** open `Feelings.swift` next to `FeelingsTests.swift` and match each
 test to the code that makes it pass.
 
-## 7. One request, start to finish (Swift names)
+## 6. One request, start to finish (Swift names)
 
 "Hold Ctrl+Q, *what's due this week?*, let go":
 
@@ -261,7 +240,7 @@ test to the code that makes it pass.
 10. After the reply finishes typing there is a **15-second follow-up window**: you can answer
     without pressing the key, unless what you say would change something ("send it", "yes").
 
-## 8. Features, and where they live
+## 7. Features, and where they live
 
 | Feature | Main files |
 |---|---|
@@ -281,7 +260,7 @@ test to the code that makes it pass.
 | `robo setup` (installs the Hermes side, the login item) | `RoboSystem/Setup.swift` |
 | Usage and token cap, receipts | `RoboCore/Usage.swift`, `Receipt.swift` |
 
-## 9. Building, testing and running
+## 8. Building, testing and running
 
 All Swift commands are run from `native/`.
 
@@ -303,8 +282,8 @@ open -n --env ROBO_NO_VOICE=1 --env ROBO_NO_WATCH=1 \
 The Python side, from the repo root:
 
 ```bash
-uv sync --extra dev                                   # install dependencies
-uv run pytest -q && uv run ruff check src tests scripts hermes   # tests + linter
+uv sync                                               # install dependencies
+uv run pytest -q && uv run ruff check agent tests     # tests + linter
 ```
 
 What `bundle.sh` does, step by step (a good way to learn what a Mac app *is*):
@@ -315,28 +294,7 @@ What `bundle.sh` does, step by step (a good way to learn what a Mac app *is*):
    (`LSUIElement`) and the sentence macOS shows when asking for the microphone.
 5. It code-signs the result.
 
-## 10. The state it was left in (2026-10-26)
-
-### Git
-- All work is on GitHub. The last 9 commits (chat window, LaTeX, blur, course materials,
-  approvals off, downloads folder) only existed in a checkout that had been moved to the Trash.
-  They were pushed to `dev` on 2026-10-26.
-- PR **#7** (`dev` → `master`) carries the last 11 commits. Its first CI run failed one timing
-  test on GitHub's macOS runner (`tests/test_chat_ui.py`, a Python test the new commits didn't
-  touch). It was re-run to check whether it's just flaky.
-- The plan is to merge PR #7 if CI is green, then **archive** the GitHub repo (it becomes
-  read-only, and you can unarchive it any time).
-
-### On this Mac
-- `~/Applications/Robo.app` is the build from 2026-10-24 (the latest code).
-- **It isn't running.** The login item is loaded, but the Hermes profile
-  `~/.hermes/profiles/robo/` was recreated on 2026-10-24 and holds only a `brave/` folder (no
-  config, `.env` or skills), and the app quits without that `.env`. Running `robo setup` would
-  rebuild the profile.
-- Data stays where it was: `~/.local/share/robo/` (reminders, radar, Moodle state, usage) and
-  the Obsidian vault `~/Documents/Robo`.
-
-### What was verified, and what wasn't
+## 9. What was verified, and what wasn't
 **Checked on the real Mac at some point:** push-to-talk, the glass card flipping light/dark,
 reminders with a fake calendar server, a real radar run, the chat window's look, the microphone
 crash fix (a scratch program, not the real device change).
@@ -348,15 +306,15 @@ crash fix (a scratch program, not the real device change).
 - whether the agent actually follows the newer persona rules (scams, chat-instead-of-notes);
 - many UI states over light and dark backgrounds.
 
-### ⚠️ One setting to know about
+**One setting to know about.**
 On 2026-10-23 `approvals.mode` was set to **`off`**. With that setting the agent has every
 permission (terminal, files, mail, browser, desktop apps) and **asks before nothing**. The
 `robo-guard` blocks (graded work, its own setup) still apply. Robo also reads other people's text
-(mail, web pages), and a cleverly written message could steer the agent ("prompt injection"). If
-you ever revive Robo, consider setting it back to `"manual"` in both
-`src/robo/setup.py` and `native/Sources/RoboSystem/Setup.swift`, then run `robo setup`.
+(mail, web pages), and a cleverly written message could steer the agent ("prompt injection"). To
+turn the asks back on, set it to `"manual"` in `native/Sources/RoboSystem/Setup.swift` and run
+`robo setup`.
 
-## 11. How to read the code: a suggested order
+## 10. How to read the code: a suggested order
 
 1. `README.md` (features), then section 2 of this guide again.
 2. `native/Package.swift` (25 lines: the module map).
@@ -367,13 +325,13 @@ you ever revive Robo, consider setting it back to `"manual"` in both
 7. `RoboCore/Roam.swift`: how the pet decides where to walk.
 8. `RoboUI/Window.swift` and `App.swift`: where everything is wired together. This is the
    hardest part, so leave it for last.
-9. `docs/architecture.md` for the full diagrams.
+9. `docs/technical-deep-dive.md` for each technology in depth.
 
 Tip: the comments in this repo explain *why* (often with a date and a measurement), and CLAUDE.md
 records the traps that were found the hard way. When something looks odd, search CLAUDE.md for
 the name first: there's usually a story.
 
-## 12. What this project shows about "vibe-coding"
+## 11. What this project shows about "vibe-coding"
 
 Things that went well, worth copying next time:
 - **A pure core with many tests.** It let AI agents change a lot of code without breaking it.
@@ -388,22 +346,3 @@ Things to do differently:
   radar, a scam detector and a chat window, which is a lot to maintain alone.
 - **Be careful with permissions.** An agent with full access to your accounts and no approvals
   is a real risk, whoever wrote the code.
-
-## 13. If you ever want to restart it
-
-```bash
-cd ~/home/orca/projects/robo
-gh repo unarchive tbaolong45/robo        # only if it was archived
-git switch dev && git pull
-cd native && ./test.sh                   # everything should still pass
-ROBO_SIGN_IDENTITY="Robo Local Signing" ./bundle.sh ~/Applications/Robo.app
-~/Applications/Robo.app/Contents/MacOS/robo setup --moodle https://<your-moodle>/   # rebuilds the Hermes profile
-launchctl kickstart -k gui/$(id -u)/ai.robo
-```
-
-If it's never coming back, remove the login item so macOS stops trying to start it:
-
-```bash
-launchctl bootout gui/$(id -u)/ai.robo
-rm ~/Library/LaunchAgents/ai.robo.plist      # and ~/Applications/Robo.app if you want
-```
