@@ -363,15 +363,19 @@ final class RoboLayoutManager: NSLayoutManager {
         if let storage = textStorage {
             storage.enumerateAttribute(.codeBox, in: characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)) { value, range, _ in
                 guard let colour = value as? NSColor else { return }
-                colour.setFill()
-                let left = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.headIndent ?? 0  // the text indent is part of the box
-                enumerateLineFragments(forGlyphRange: glyphRange(forCharacterRange: range, actualCharacterRange: nil)) { rect, _, _, lineGlyphs, _ in
+                // one rounded box around the whole block (its 8 px text indent is the padding inside), even when only part is redrawn
+                var block = range
+                _ = storage.attribute(.codeBox, at: range.location, longestEffectiveRange: &block, in: NSRange(location: 0, length: storage.length))
+                var box = NSRect.null
+                enumerateLineFragments(forGlyphRange: glyphRange(forCharacterRange: block, actualCharacterRange: nil)) { rect, _, _, lineGlyphs, _ in
                     // the gap below a block is part of its last line's fragment, not of the box
                     let end = self.characterRange(forGlyphRange: lineGlyphs, actualGlyphRange: nil).upperBound - 1
                     let gap = (storage.attribute(.paragraphStyle, at: end, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacing ?? 0
                     let ends = end == storage.length - 1 || storage.string.utf16[storage.string.utf16.index(storage.string.utf16.startIndex, offsetBy: end)] == 10
-                    NSRect(x: origin.x + rect.minX + left, y: origin.y + rect.minY, width: rect.width - left, height: rect.height - (ends ? gap : 0)).fill()
+                    box = box.union(NSRect(x: origin.x + rect.minX, y: origin.y + rect.minY, width: rect.width, height: rect.height - (ends ? gap : 0)))
                 }
+                colour.setFill()
+                NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
             }
         }
         if let storage = textStorage, let tc = textContainers.first {
@@ -384,7 +388,8 @@ final class RoboLayoutManager: NSLayoutManager {
                     guard part.length > 0 else { return }
                     let x = self.boundingRect(forGlyphRange: part, in: tc)
                     let baseline = line.minY + self.location(forGlyphAt: part.location).y
-                    NSRect(x: origin.x + x.minX, y: origin.y + baseline - box.ascent, width: x.width, height: box.ascent + box.descent).fill()
+                    let r = NSRect(x: origin.x + x.minX, y: origin.y + baseline - box.ascent, width: x.width, height: box.ascent + box.descent)
+                    NSBezierPath(roundedRect: r, xRadius: 3, yRadius: 3).fill()
                 }
             }
         }

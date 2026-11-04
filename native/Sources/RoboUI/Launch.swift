@@ -84,7 +84,7 @@ final class AgentKeeper: HermesAPI {
 
 public enum RoboApp {
     /// The main menu: robo's own item and Edit. It is never on screen (the app is an accessory) but its key
-    /// equivalents are what turn Cmd-V into paste: in the Type window.
+    /// equivalents are what turn Cmd-V into paste: in the chat's text box.
     static func mainMenu() -> NSMenu {
         let main = NSMenu()
         for submenu in [NSMenu(title: "Robo"), EditKeys.menu()] {

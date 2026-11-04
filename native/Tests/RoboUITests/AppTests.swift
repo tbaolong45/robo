@@ -815,16 +815,43 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     func aRequestChangingThingsNeedsTheKeyWhenItWasSaidWithoutOne(said: String, handsFree: Bool, asked: Bool) async {
         let r = Rig([completed("ok")])
         defer { r.close() }
-        r.ear.onWake()
+        if !handsFree { r.ear.onWake() }  // the listener wakes robo itself for a held key or a click, never in a follow-up window
         r.ear.handsFree = handsFree  // the listener sets it before it delivers the text
         r.ear.onText(said)
         if asked {
             #expect(await pump(r.hermes.asked.map(\.text) == [said]))
         } else {
-            #expect(await pump(r.window.tw.text == "That would change something, so hold Ctrl+Q and say it again."))
+            #expect(await pump(r.window.card.heardShown == RoboWindow.handsFreeRefusal))
             _ = await pump(timeout: 0.2)
             #expect(r.hermes.asked.isEmpty && !r.window.busy && r.window.mind.activity == .idle)  // not listening, nothing sent
         }
+    }
+
+    /// Found 2026-11-04: the listener woke robo for a follow-up sentence before the app refused it, so every refusal stopped the
+    /// run and wiped the answer being read. Now the app wakes itself only for a sentence it takes.
+    @Test(arguments: [false, true])
+    func aRefusedHandsFreeSentenceLeavesTheReplyAndTheFollowUpWindowAsTheyWere(chat: Bool) async {
+        let r = Rig([completed("Your quiz is on Friday.")], chat: chat)
+        defer { r.close() }
+        let w = r.window!
+        w.ask("when is the quiz")
+        #expect(await r.run(until: w.typed && w.followUntil > 0))
+        let follows = r.ear.follows.count, until = w.followUntil, turns = w.transcript.turns
+        r.ear.handsFree = true  // said in the window: the listener delivers it with no wake
+        r.ear.onText("send it to Anna")
+        #expect(await pump(chat ? w.transcript.turns.count == turns.count + 1 : w.card.heardShown == RoboWindow.handsFreeRefusal))
+        #expect(w.tw.text == "Your quiz is on Friday." && w.typed && w.followUntil == until && w.mind.activity == .idle)
+        if chat {
+            #expect(Array(w.transcript.turns.prefix(turns.count)) == turns && w.transcript.turns.last?.text == RoboWindow.handsFreeRefusal)
+            #expect(w.chatOpen)
+        } else {
+            #expect(!w.card.isHidden && w.card.reply.textView.string.contains("Friday"))
+        }
+        #expect(r.ear.follows.count == follows + 1 && r.ear.follow > 0)  // the window the listener closed on delivery is open again
+        #expect(r.hermes.asked.map(\.text) == ["when is the quiz"] && r.hermes.stopped.isEmpty)
+        r.hermes.script = [completed("Tomorrow.")]
+        r.ear.onText("what is due tomorrow")  // a question in the same window is taken: robo wakes for it itself
+        #expect(await pump(r.hermes.asked.map(\.text) == ["when is the quiz", "what is due tomorrow"]))
     }
 
     @Test func speakingDuringAnApprovalStopsTheRunAndNeverApproves() async {
@@ -836,7 +863,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(await pump(r.hermes.stopped == ["run_1"]))
         r.ear.handsFree = true  // "yes, go ahead" in a window: not an approval, and a bare yes never acts without the key
         r.ear.onText("yes, go ahead")
-        #expect(await pump(r.window.tw.text == "That would change something, so hold Ctrl+Q and say it again."))
+        #expect(await pump(r.window.card.heardShown == RoboWindow.handsFreeRefusal))
         #expect(r.hermes.asked.map(\.text) == ["mail Anna"] && r.hermes.approved.isEmpty)
         r.ear.handsFree = false  // with the key held it is a new request (still not an approval)
         r.ear.onText("yes, go ahead")

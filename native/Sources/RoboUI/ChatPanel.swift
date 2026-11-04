@@ -356,12 +356,11 @@ final class ChatView: NSView, NSTextFieldDelegate {
     private var textWidth: CGFloat { maxBubble - BubbleView.pad.left - BubbleView.pad.right }
 
     private func layoutRows() {
-        let width = columnWidth, inset = BubbleView.tailSize
+        let width = columnWidth, inset = BubbleView.side
         var y: CGFloat = 12
         for (i, turn) in turns.enumerated() {
             guard let v = bubbles[turn.id] else { continue }
             let nextSame = i + 1 < turns.count && turns[i + 1].role == turn.role
-            v.tail = !nextSame
             let size = v.measure(maxWidth: maxBubble, shrink: turn.role == .you)
             let bodyW = v.bubbleSize.width
             let x = turn.role == .you ? width - Self.side - bodyW - inset : Self.side - inset

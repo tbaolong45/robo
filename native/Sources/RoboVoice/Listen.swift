@@ -191,8 +191,8 @@ public typealias Transcribe = ([Float]) throws -> String
 /// `onWake()` when robo is called by name, then `onText(request)`. A request ends after
 /// `patientSilenceS` of quiet. A sentence also counts without the name while robo expects one:
 /// after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`), after
-/// `followUp(seconds:)` (it just answered; `onWake` waits there for the words themselves, two at least, so a knock or a
-/// hum changes nothing and the reply stays, and `handsFree` is true while that text is delivered), or right after a bare "robo". A mic that stops
+/// `followUp(seconds:)` (it just answered; there only words count, two at least, so a knock or a hum changes nothing and
+/// the reply stays; the text comes with no `onWake` and `handsFree` true: the app decides), or right after a bare "robo". A mic that stops
 /// delivering is reopened; one that only gives silence is reported through `onNote`, like every
 /// other message for the user.
 ///
@@ -455,10 +455,10 @@ public final class Listener {
         guard let request = woke ? withoutName(text) : addressed(text) else { return }  // TV, other people
         if handsFree {
             // A follow-up window is open to any sound, so sound alone must not wake robo: a cough, a door or a hum would wipe
-            // the reply being read. Only words do (two at least: a lone "yeah" is what a recogniser makes of noise), and the
-            // window stays open for the real sentence.
+            // the reply being read. Only words count (two at least: a lone "yeah" is what a recogniser makes of noise), and the
+            // window stays open for the real sentence. Nor is robo woken here: the app wakes itself if it takes the sentence
+            // (`handsFree`), and one it refuses leaves the reply as it was.
             guard request.split(whereSeparator: \.isWhitespace).count >= 2 else { return }
-            onWake()
         } else if !woke {
             onWake()
         }

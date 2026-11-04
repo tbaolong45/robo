@@ -153,17 +153,31 @@ extension RoboWindow {
 
     // MARK: - voice
 
+    static let handsFreeRefusal = "Hold Ctrl+Q and say that again: without the key I only answer questions."
+
     func onHeard(_ text: String) {
-        onEvent(.listening(false))
+        onEvent(.listening(false))  // changes nothing unless robo was listening
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !said.isEmpty && ear?.handsFree == true && Intent.changesThings(said) {
-            // said in the follow-up window, without the key (the TV or the room may have said it): never act on it
-            say("That would change something, so hold Ctrl+Q and say it again.")
-        } else if !said.isEmpty {
+        if !said.isEmpty && ear?.handsFree == true {
+            // said in the follow-up window without the key (the TV or the room may have said it), and robo has not woken for it:
+            // what may change something, or what `Intent` cannot read, is never acted on, and the reply being read stays
+            if Intent.changesThings(said) { return refuseHandsFree() }
+            onEvent(.listening(true))  // taken: the wake the listener left to us (it stops a run and clears the last reply)
+            onEvent(.listening(false))
+        }
+        if !said.isEmpty {
             ask(said)
         } else if !busy {
             say("Sorry, I didn't catch that.")
         }
+    }
+
+    /// The note goes beside the reply (a line of the chat, or the card's "heard" line), and the follow-up window the listener closed
+    /// when it delivered the sentence is open again for what is left of it.
+    private func refuseHandsFree() {
+        if chatOpen { say(Self.handsFreeRefusal) } else { setHeard(Self.handsFreeRefusal) }
+        if followUntil > now() { ear?.followUp(seconds: followUntil - now()) }
+        refresh()
     }
 
     func onNote(_ text: String) {
