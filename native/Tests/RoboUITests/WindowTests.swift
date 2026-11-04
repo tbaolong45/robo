@@ -350,12 +350,12 @@ import RoboVoice
         #expect(r.window.card.isHidden && r.ear.now == 0)
     }
 
-    @Test func aDeadListenerLeavesTheClickToTheTypingWindow() async {
-        let r = Rig()
+    @Test func aDeadListenerLeavesTheClickToTheChatsTextBox() async {
+        let r = Rig(chat: true)
         defer { r.close() }
         r.ear.running = false  // its thread died after it started
         r.window.clicked()
-        #expect(r.typers.count == 1 && r.ear.now == 0)  // no "listening" nobody will end
+        #expect(r.chatFocuses == 1 && r.ear.now == 0)  // no "listening" nobody will end
         #expect(r.window.mind.activity != .listening)
     }
 
@@ -457,52 +457,13 @@ import RoboVoice
         #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))
     }
 
-    // MARK: the Type window
-
-    @Test func typeOpensItsOwnWindowAndAsks() async {
-        let r = Rig([.event(.runEnded(status: "completed", output: "ok"))])
-        defer { r.close() }
-        r.window.typeText()
-        let t = r.typers[0]
-        #expect(t.title == "Ask robo" && t.level == .floating && t.canBecomeKey)
-        t.field.stringValue = "  what is 2+2  "
-        t.ok()
-        #expect(await pump(!r.hermes.asked.isEmpty && !r.window.busy))
-        #expect(r.hermes.asked[0].text == "what is 2+2")
-    }
-
-    /// Robo is on the main display, so the Type window is too, whatever else is plugged in.
-    @Test func typeOnThePrimaryDisplayOpensThere() async {
-        let r = Rig()
-        defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(1500, 600))
-        r.window.move(to: r.window.roamer.pos)
-        r.window.typeText()
-        let t = r.typers[0]
-        #expect(abs(t.frame.midX - mainDisplay.visible.midX) <= 1 && abs(t.frame.midY - mainDisplay.visible.midY) <= 1)
-    }
-
-    @Test func nothingTypedAsksNothing() async {
-        let r = Rig()
-        defer { r.close() }
-        r.window.typeText()
-        r.typers[0].field.stringValue = "   "
-        r.typers[0].ok()
-        _ = await pump(timeout: 0.1)
-        #expect(r.hermes.asked.isEmpty && !r.window.busy)
-        r.window.typeText()  // a second one replaces the first
-        #expect(r.typers.count == 2)
-    }
-
     // MARK: the menu
 
     @Test func theMenuEntriesDoWhatTheyAreFor() async {
-        let r = Rig([.event(.runEnded(status: "completed", output: "digest"))])
+        let r = Rig([.event(.runEnded(status: "completed", output: "digest"))], chat: true)
         defer { r.close() }
         r.window.menu(.type)
-        #expect(r.typers.count == 1)
+        #expect(r.chatFocuses == 1)
         r.window.menu(.digest)
         #expect(await pump(!r.hermes.asked.isEmpty && !r.window.busy))
         #expect(r.hermes.asked[0].text == RoboWindow.digestPrompt)

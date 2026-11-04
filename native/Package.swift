@@ -1,10 +1,10 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
-// Robo, the native macOS build. Python (src/robo) stays the running one until the cutover.
+// Robo, the native macOS build and the running app (the Python tree in src/robo is the spec and the fallback).
 let package = Package(
     name: "Robo",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     dependencies: [
         // Vendored: upstream's 1.24.2 pin gives 6/200 transcripts that differ from the Python app's
         // onnxruntime 1.31; the vendored bindings use the 1.30.0 pod archive and match it (see its Package.swift).

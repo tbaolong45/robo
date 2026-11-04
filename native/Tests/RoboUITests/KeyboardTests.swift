@@ -1,5 +1,5 @@
 // The keyboard: editing shortcuts in a pet that has no menu bar, giving the keyboard back to the app that had
-// it, and the Type window's focus. Key events are built here and handed to the windows; the pasteboard is
+// it, and the chat's text box. Key events are built here and handed to the windows; the pasteboard is
 // never touched (the editing actions are replaced by counters for the length of a test).
 import AppKit
 import Foundation
@@ -82,13 +82,16 @@ private let selectAllAction = #selector(NSText.selectAll(_:))
         #expect(hits(copyAction) == 1)
     }
 
-    @Test func cmdVAndCmdAWorkInTheTypeWindow() async {
-        let r = Rig()
+    @Test func cmdVAndCmdAWorkInTheChatsTextBox() async {
+        let r = Rig(chat: true)
         defer { r.close() }
-        let panel = TypePanel { _ in }
-        defer { panel.close() }
+        r.window.openChat()
+        let panel = r.window.chat!
+        panel.setFrame(CGRect(x: 100_000, y: 100_000, width: 532, height: 652), display: false)
+        panel.orderFrontRegardless()
         panel.makeKey()
-        panel.makeFirstResponder(panel.field)
+        defer { panel.orderOut(nil) }
+        panel.chat.focusInput()
         #expect(panel.firstResponder is NSTextView)  // the field editor
         let restorePaste = spy(NSTextView.self, pasteAction), restoreAll = spy(NSTextView.self, selectAllAction)
         defer { restorePaste(); restoreAll() }
@@ -172,41 +175,34 @@ private let textKeyDown = #selector(NSTextView.keyDown(with:))
         #expect(r.window.card.isHidden)
     }
 
-    // MARK: the Type window
+    // MARK: the chat window
 
-    @Test func theTypeWindowFollowsTheUserIntoFullScreenSpacesLikeThePanel() {
-        let panel = TypePanel { _ in }
-        defer { panel.close() }
+    @Test func theChatFollowsTheUserIntoFullScreenSpacesLikeThePanel() {
+        let panel = ChatPanel(theme: Themes.glass, reduceMotion: { false })
         #expect(panel.collectionBehavior.contains(.canJoinAllSpaces) && panel.collectionBehavior.contains(.fullScreenAuxiliary))
     }
 
-    @Test func closingTheTypeWindowHandsTheKeyboardBack() async throws {
-        let r = Rig()
+    @Test func closingTheChatHandsTheKeyboardBackOnce() async throws {
+        let r = Rig(chat: true)
         defer { r.close() }
         let front = try #require(r.frontmost)
-        var submitted: [String] = []
-        for how in ["ok", "cancel", "close"] {
-            r.activated = []
-            let panel = TypePanel(focus: r.window.machine.focus) { submitted.append($0) }
-            panel.field.stringValue = "hi"
-            switch how {
-            case "ok": panel.ok()
-            case "cancel": panel.cancelled()
-            default: panel.close()  // the red button
-            }
-            #expect(r.activated.map(\.processIdentifier) == [front.processIdentifier], Comment(rawValue: how))
-        }
-        #expect(submitted == ["hi"])
+        r.window.openChat()
+        r.window.chatPreviousApp = front  // what becoming key records
+        r.window.closeChat()
+        #expect(r.activated.map(\.processIdentifier) == [front.processIdentifier])
+        r.window.chatReleased()
+        #expect(r.activated.count == 1)
     }
 
-    @Test func theTypeWindowHandsNothingBackWhenRoboWasNotActiveOrNoOneHadIt() async {
-        let r = Rig()
+    @Test func theChatHandsNothingBackWhenRoboWasNotActiveOrNoOneHadIt() async throws {
+        let r = Rig(chat: true)
         defer { r.close() }
+        r.window.openChat()
         r.appActive = false
-        TypePanel(focus: r.window.machine.focus) { _ in }.close()
+        r.window.chatPreviousApp = try #require(r.frontmost)
+        r.window.chatReleased()
         r.appActive = true
-        r.frontmost = nil
-        TypePanel(focus: r.window.machine.focus) { _ in }.close()
+        r.window.chatReleased()  // nobody recorded any more
         #expect(r.activated.isEmpty)
     }
 }

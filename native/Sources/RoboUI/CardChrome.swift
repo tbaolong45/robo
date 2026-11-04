@@ -1,6 +1,6 @@
 // Everything the card draws apart from its text: the glass pane behind it, the header with its lights and model chip,
 // the quote's bar, the caret, the typing dots and the buttons. The pane is the system's Liquid Glass
-// (`NSGlassEffectView`, macOS 26; a frosted `NSVisualEffectView` before that), so the fill, the edge and the shadow
+// (`NSGlassEffectView`), so the fill, the edge and the shadow
 // are not painted here, and the text and the status lights use the system colours, which follow light and dark and
 // stay legible over any wallpaper, until the card knows what is behind it: then it turns light over a dark backdrop and dark
 // over a light one (`Shade`, `Chrome.ink`, `GlassSurface.setShade`) and the ink is ours. The other colour of our own is the
@@ -19,23 +19,30 @@ enum Chrome {
     static let glow: CGFloat = 6  // px of margin around the glass pane (room for the glass's own edge light)
     static let headerH: CGFloat = 26
     static let gap: CGFloat = 9  // between the pane and the face below it (there is no tail: the pane floats above the face)
-    static let radius: CGFloat = 24  // the pane's corner radius
+    static let cardRadius: CGFloat = 24  // the card's pane
+    static let paneRadius: CGFloat = 34  // the chat window's pane
+    static let bubbleRadius: CGFloat = 19  // a chat bubble
     /// The card's single column: 6 margin + 13 padding at the sides, 6 + 26 header + 10 on top, 9 gap + 10 below.
     static let margins = NSEdgeInsets(top: 42, left: 19, bottom: 19, right: 19)
     static let spacing: CGFloat = 8
     static let bar: CGFloat = 2, wash: CGFloat = 5  // the quote's accent bar and the tinted strip it sits on
 
-    static func color(_ hex: String, _ alpha: Double = 1) -> NSColor { Themes.rgba(hex, alpha: alpha).ns }
     static func accent(_ t: Theme, _ hue: Double, _ alpha: Double = 1) -> NSColor { Themes.accent(t, hue, alpha: alpha).ns }
 
     /// How the card adapts to what is behind it (main thread only): 0 = light ink (a dark card), 1 = dark ink (a light card), in
     /// between while the card turns over. nil = not known (no Screen Recording, no look yet): the system's own colours below.
     static var ink: Double?
 
-    /// The ink at `alpha`: near-white to near-black along `ink`, or the system's colour when nothing is known.
-    private static func inked(_ alpha: CGFloat, system: NSColor, _ ink: Double?) -> NSColor {
+    /// Increase Contrast (System Settings > Accessibility > Display): our ink is drawn at full strength and the veil is stronger. The
+    /// system's own colours follow the setting by themselves. Read at draw time; a test sets its own.
+    static var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
+
+    /// The ink at `alpha`: near-white to near-black along `ink`, or the system's colour when nothing is known. Under Increase Contrast
+    /// the text's alphas are 1 and a wash or a hairline is twice as strong.
+    private static func inked(_ alpha: CGFloat, system: NSColor, _ ink: Double?, text: Bool = true) -> NSColor {
         guard let ink else { return system }
-        return NSColor(white: 0.96 + (0.07 - 0.96) * ink, alpha: alpha)
+        let a = !increaseContrast() ? alpha : text ? 1 : min(1, 2 * alpha)
+        return NSColor(white: 0.96 + (0.07 - 0.96) * ink, alpha: a)
     }
 
     /// The system's own colours (they resolve at draw time, so light, dark and the glass behind decide) until the card knows its
@@ -48,10 +55,10 @@ enum Chrome {
     static func text(_ ink: Double?) -> NSColor { inked(1, system: .labelColor, ink) }
     static func textDim(_ ink: Double?) -> NSColor { inked(0.6, system: .secondaryLabelColor, ink) }
     static func faint(_ ink: Double?) -> NSColor { inked(0.3, system: .tertiaryLabelColor, ink) }
-    static func hairline(_ ink: Double?) -> NSColor { inked(0.18, system: .separatorColor, ink) }
+    static func hairline(_ ink: Double?) -> NSColor { inked(0.18, system: .separatorColor, ink, text: false) }
     /// A quiet wash over glass: chips, code boxes.
     static func wash(_ alpha: CGFloat) -> NSColor { wash(alpha, ink) }
-    static func wash(_ alpha: CGFloat, _ ink: Double?) -> NSColor { inked(alpha, system: NSColor.labelColor.withAlphaComponent(alpha), ink) }
+    static func wash(_ alpha: CGFloat, _ ink: Double?) -> NSColor { inked(alpha, system: NSColor.labelColor.withAlphaComponent(alpha), ink, text: false) }
 
     /// The hue in the 2 degree steps the card follows the face in (Python `round` is half to even).
     static func quantised(_ hue: Double) -> Double {
@@ -65,7 +72,7 @@ enum Chrome {
 
     static let monoFamily: String = {
         let have = Set(NSFontManager.shared.availableFontFamilies)
-        return ["SF Mono", "Menlo", "DejaVu Sans Mono"].first(where: have.contains) ?? "Menlo"
+        return ["SF Mono", "Menlo"].first(where: have.contains) ?? "Menlo"
     }()
 
     static func mono(_ px: CGFloat, bold: Bool = false) -> NSFont {
@@ -105,69 +112,59 @@ enum Chrome {
     }
 }
 
-/// The card's glass: `NSGlassEffectView` on macOS 26 and later, a frosted `NSVisualEffectView` before. Both are a
-/// plain view behind the card's other views (not their parent), so the layout is the card's own.
+/// The card's glass (`NSGlassEffectView`): a plain view behind the card's other views (not their parent), so the layout is the
+/// card's own.
 ///
 /// It follows the system's light or dark until `setShade` gives it a level, then it is a light card, a dark card or a turn
-/// between. A glass reads light or dark by its `appearance` (a tint barely moves that), so on macOS 26 there are two: the light
-/// one below and the dark one above it fading out as the level rises. At rest only the one that shows is kept, since glass is
-/// what costs the GPU.
+/// between. A glass reads light or dark by its `appearance` (a tint barely moves that), so there are two: the light one below
+/// and the dark one above it fading out as the level rises. At rest only the one that shows is kept, since glass is what costs
+/// the GPU.
 final class GlassSurface: NSView {
-    /// How strong the veil over the glass gets (white over a light card, black over a dark one; 0 = no veil): one number to tune
-    /// the contrast of the card by eye. To drop the idea, delete `Veil`, this and the lines that name `veil`.
-    static let veilStrength: CGFloat = 0.22  // measured 2026-10-19: text contrast 4.48:1 (dark card) and 8.8:1 (light card) at 0
+    /// How strong the veil over the glass gets once the backdrop is known (white over a light card, black over a dark one): one
+    /// number to tune the contrast by eye. Measured 2026-10-19 with no veil: text contrast 4.48:1 (dark card over white) and 8.8:1
+    /// (light card over black); with this one, 6.3:1 and 10.7:1. Increase Contrast (System Settings > Accessibility) takes
+    /// `strongVeil`. To drop the idea, delete `Veil`, these and the lines that name `veil`.
+    static let veilStrength: CGFloat = 0.22
+    static let strongVeil: CGFloat = 0.4
+    static var veil: CGFloat { Chrome.increaseContrast() ? strongVeil : veilStrength }
 
-    private let light: NSView  // the light glass (`.aqua`, below); before macOS 26 the one blur, which flips appearance
-    private let dark: NSView?  // macOS 26 only
+    private let light = NSGlassEffectView()  // `.aqua`, below
+    private let dark = NSGlassEffectView()  // `.darkAqua`, above
     private let veil: Veil
     /// What `setShade` was given: nil = the system's look.
     private(set) var level: Double?
 
-    override convenience init(frame: NSRect) { self.init(frame: frame, radius: Chrome.radius) }
+    override convenience init(frame: NSRect) { self.init(frame: frame, radius: Chrome.cardRadius) }
 
-    /// `radius`: the corner of the pane (the card's is `Chrome.radius`; the chat window's is larger).
+    /// `radius`: the corner of the pane (`Chrome.cardRadius` for the card, `Chrome.paneRadius` for the chat window).
     init(frame: NSRect, radius: CGFloat) {
         veil = Veil(radius: radius)
-        if #available(macOS 26, *) {
-            let below = NSGlassEffectView(), above = NSGlassEffectView()
-            for glass in [below, above] {
-                glass.style = .regular
-                glass.cornerRadius = radius
-            }
-            // Each glass keeps its appearance for life: changing it after the glass had rendered left it showing the old one
-            // (seen live 2026-10-19: a dark card over black although the shade said light). Only which one shows changes.
-            below.appearance = NSAppearance(named: .aqua)
-            above.appearance = NSAppearance(named: .darkAqua)
-            (light, dark) = (below, above)
-        } else {
-            let blur = NSVisualEffectView()
-            blur.material = .hudWindow
-            blur.state = .active  // the panel is never the key window: follow-the-window would leave it grey
-            blur.blendingMode = .behindWindow
-            blur.wantsLayer = true
-            blur.layer?.cornerRadius = radius
-            blur.layer?.masksToBounds = true
-            (light, dark) = (blur, nil)
+        for glass in [light, dark] {
+            glass.style = .regular
+            glass.cornerRadius = radius
         }
+        // Each glass keeps its appearance for life: changing it after the glass had rendered left it showing the old one
+        // (seen live 2026-10-19: a dark card over black although the shade said light). Only which one shows changes.
+        light.appearance = NSAppearance(named: .aqua)
+        dark.appearance = NSAppearance(named: .darkAqua)
         super.init(frame: frame)
         addSubview(light)
-        if let dark { addSubview(dark) }
+        addSubview(dark)
         addSubview(veil)
-        if let dark { showSystemLook(dark) }
+        showSystemLook()
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        for v in [light, dark, veil] { v?.frame = bounds }
+        for v in [light, dark, veil] { v.frame = bounds }
     }
 
-    /// A light wash of the accent over the glass (macOS 26 only: the old blur has no tint).
+    /// A light wash of the accent over the glass.
     func tint(_ colour: NSColor) {
-        if #available(macOS 26, *) {
-            for case let glass as NSGlassEffectView in [light, dark] { glass.tintColor = colour }
-        }
+        light.tintColor = colour
+        dark.tintColor = colour
     }
 
     /// 0 = a dark card, 1 = a light card, between = the turn (the dark glass fades out over the light one); nil = the system's
@@ -176,13 +173,8 @@ final class GlassSurface: NSView {
         guard level != self.level else { return }
         self.level = level
         veil.set(level)
-        guard let dark else {  // the one blur flips at the middle, no crossfade (and `popover` is the material that follows an appearance)
-            light.appearance = level.flatMap { NSAppearance(named: $0 >= 0.5 ? .aqua : .darkAqua) }
-            (light as? NSVisualEffectView)?.material = level == nil ? .hudWindow : .popover
-            return
-        }
         guard let level else {
-            showSystemLook(dark)
+            showSystemLook()
             return
         }
         let l = min(max(level, 0), 1)
@@ -192,7 +184,7 @@ final class GlassSurface: NSView {
     }
 
     /// One glass, the one of the system's mode (the card before it knows its backdrop).
-    private func showSystemLook(_ dark: NSView) {
+    private func showSystemLook() {
         let isDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         light.alphaValue = 1; dark.alphaValue = 1
         light.isHidden = isDark
@@ -200,7 +192,7 @@ final class GlassSurface: NSView {
     }
 
     /// A flat veil over the glass, to tune the card's contrast: white at `level` x strength and black at (1 - level) x strength.
-    /// Hidden (and never drawn) while `veilStrength` is 0.
+    /// Hidden (and never drawn) while the strength is 0.
     private final class Veil: NSView {
         private var level = 0.0
         private let radius: CGFloat
@@ -215,16 +207,16 @@ final class GlassSurface: NSView {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         func set(_ level: Double?) {
-            isHidden = GlassSurface.veilStrength == 0 || level == nil
+            isHidden = GlassSurface.veil == 0 || level == nil
             guard let level, level != self.level else { return }
             self.level = level
             needsDisplay = true
         }
 
         override func draw(_ dirtyRect: NSRect) {
-            let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
-            NSColor.white.withAlphaComponent(level * GlassSurface.veilStrength).setFill(); shape.fill()
-            NSColor.black.withAlphaComponent((1 - level) * GlassSurface.veilStrength).setFill(); shape.fill()
+            let shape = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius), strength = GlassSurface.veil
+            NSColor.white.withAlphaComponent(level * strength).setFill(); shape.fill()
+            NSColor.black.withAlphaComponent((1 - level) * strength).setFill(); shape.fill()
         }
     }
 }

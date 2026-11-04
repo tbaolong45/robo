@@ -5,7 +5,7 @@
 //   - every 30 s of WALL time (the monotonic clock stops while the Mac sleeps, a deadline does not) the reminders that are due
 //     become candidates, and `NudgeBudget.next` decides whether one card shows now (slots, daily cap, quiet hours, ...)
 //   - the card never breaks in on anything: it waits while another card, a run, typing, listening, an approval, the follow-up
-//     window, the Type window, a mouse press or an absent user (locked, idle over 5 min) holds it
+//     window, the chat's text box, a mouse press or an absent user (locked, idle over 5 min) holds it
 //   - every way the card can end resolves the nudge: a button answers it, anything else (Esc, a click on the face, the minute
 //     running out, speaking, a new request) is "dismissed", which never mutes anything
 // State is in `agenda.json`, `nudges.json` and `reminders.json` of the data folder (`NudgeFiles`), not in `robo_state.json`.
@@ -227,7 +227,7 @@ extension RoboWindow {
     /// Something that must not be interrupted is going on, or the user is not there.
     var nudgeHeld: Bool {
         !card.isHidden || busy || !approvals.isEmpty || tw.pending || mind.activity == .listening || now() < followUntil
-            || typerOpen || chat?.inputActive == true || press != nil || shutdownStarted || machine.userAway()
+            || chat?.inputActive == true || press != nil || shutdownStarted || machine.userAway()
     }
 
     /// Every 30 s of wall time (from `tick`): refresh when it is time, read the ledger, and show what the budget lets through.

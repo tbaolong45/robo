@@ -162,7 +162,7 @@ private let feed = calendar(exam, standup)
 
 // MARK: - what holds it
 
-enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, listening, followUp, typer, press, away }
+enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, listening, followUp, press, away }
 
 @MainActor @Suite(.serialized) struct NudgeHeldTests {
     private func hold(_ h: Hold, _ r: Rig, on: Bool) {
@@ -174,7 +174,6 @@ enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, li
         case .typing: if on { w.feed(String(repeating: "word ", count: 40)) } else { w.skip() }
         case .listening: w.mind = w.mind.react(.listening(on), now: w.now())
         case .followUp: w.followUntil = on ? w.now() + 10 : 0
-        case .typer: if on { w.typeText() } else { r.typers.last?.close() }
         case .press: w.press = on ? Vec.zero : nil
         case .away: r.away = on
         }
@@ -472,20 +471,6 @@ enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, li
         #expect(r.window.mind.activity == .asleep)
         tick(r, at(9))
         #expect(r.window.nudge.shown.count == 1 && r.window.mind.activity == .idle && r.window.mind.emotion == "concerned")
-    }
-
-    @Test func theTypeWindowIsNotInterruptedAndTheNudgeWaitsForItsClose() async {
-        let r = await launch(feed)
-        defer { r.close() }
-        r.window.typeText()
-        #expect(r.window.typerOpen)
-        tick(r, at(9))
-        #expect(r.window.nudge.shown.isEmpty)
-        r.typers[0].cancelled()
-        #expect(!r.window.typerOpen)
-        r.window.typeText()  // a second one replaces the first; the first one closing does not mark the new one closed
-        r.typers[0].close()
-        #expect(r.window.typerOpen)
     }
 }
 

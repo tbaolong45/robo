@@ -266,8 +266,6 @@ import RoboSystem
         #expect(w.card.theme == w.theme)  // the card was restyled
         let bg = Themes.rgba("#04140a")
         #expect(w.face.hueFn != nil && w.face.bg?.0 == bg)
-        w.typeText()
-        #expect(r.typers.count == 1)
     }
 
     @Test func aThemeJsonEditedByHandShowsWhenTheMenuOpens() async {

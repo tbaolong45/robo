@@ -270,16 +270,9 @@ private func receipt(_ at: Double) -> String {
         let r = Rig(chat: true)
         defer { r.close() }
         r.window.typeText()
-        #expect(r.window.chatOpen && r.chatFocuses == 1 && r.typers.isEmpty)  // not the small Type window
+        #expect(r.window.chatOpen && r.chatFocuses == 1)
         r.window.typeText()
         #expect(r.chats.count == 1 && r.chatFocuses == 2)  // the same window, not placed again
-    }
-
-    @Test func withTheChatOffTheTypeActionIsTheSmallWindow() {
-        let r = Rig()
-        defer { r.close() }
-        r.window.typeText()
-        #expect(!r.window.chatOpen && r.typers.count == 1 && r.chatFocuses == 0)
     }
 
     @Test func theTextBoxSendsLikeAnyOtherRequest() async {

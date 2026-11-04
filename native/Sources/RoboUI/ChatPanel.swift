@@ -85,7 +85,7 @@ final class ChatView: NSView {
 
     private(set) var theme: Theme
     let reduceMotion: () -> Bool
-    let glass = GlassSurface(frame: .zero, radius: ChatView.radius)
+    let glass = GlassSurface(frame: .zero, radius: Chrome.paneRadius)
     private let titleLabel = NSTextField(labelWithString: "Robo")
     private let statusLabel = NSTextField(labelWithString: "")
     let scroll = NSScrollView()

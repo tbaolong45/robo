@@ -137,12 +137,8 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         }
     }
 
-    @Test func theGlassIsTheSystemsGlassOnMacOS26() {
-        if #available(macOS 26, *) {
-            #expect(makeCard().glass.subviews.first is NSGlassEffectView)
-        } else {
-            #expect(makeCard().glass.subviews.first is NSVisualEffectView)
-        }
+    @Test func theGlassIsTheSystemsGlass() {
+        #expect(makeCard().glass.subviews.prefix(2).allSatisfy { $0 is NSGlassEffectView })
     }
 
     @Test func theCardDrawsNothingItselfOnlyTheMarksOnTheGlass() {
@@ -207,7 +203,6 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theGlassIsTintedWithTheAccentAndAHueStepChangesTheTint() {
-        guard #available(macOS 26, *) else { return }
         let card = makeCard()
         let pane = card.glass.subviews.first as! NSGlassEffectView
         #expect(CardView.tint == 0.10)
@@ -221,7 +216,6 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func aHueInTheSameStepLeavesTheTintAlone() {
-        guard #available(macOS 26, *) else { return }
         let card = makeCard()
         let pane = card.glass.subviews.first as! NSGlassEffectView
         card.setHue(100)
@@ -302,7 +296,6 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theGlassShowsOneGlassOfTheSystemsModeUntilItHasAShadeAndNeverChangesAppearance() {
-        guard #available(macOS 26, *) else { return }
         let card = makeCard()
         let light = card.glass.subviews[0] as! NSGlassEffectView, dark = card.glass.subviews[1] as! NSGlassEffectView
         let systemDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -319,7 +312,6 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theLightGlassIsBelowAndTheDarkOneFadesOutAboveItAsTheLevelRises() {
-        guard #available(macOS 26, *) else { return }
         let card = makeCard()
         let light = card.glass.subviews[0] as! NSGlassEffectView, dark = card.glass.subviews[1] as! NSGlassEffectView
         #expect(dark.appearance?.name == .darkAqua)
@@ -337,7 +329,6 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     }
 
     @Test func theTintReachesBothGlasses() {
-        guard #available(macOS 26, *) else { return }
         let card = makeCard()
         card.setHue(250)
         let tints = card.glass.subviews.prefix(2).map { ($0 as! NSGlassEffectView).tintColor }
@@ -351,7 +342,7 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         fitted(card)
         card.setShade(level: 0.5, ink: 0.5)
-        #expect(card.glass.subviews.last!.isHidden == (GlassSurface.veilStrength == 0))
+        #expect(card.glass.subviews.last!.isHidden == (GlassSurface.veil == 0))
         #expect(card.glass.subviews.allSatisfy { $0.frame == card.glass.bounds })  // every layer of the glass fills the pane
         #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 328, height: card.frame.height - 6 - 9))
     }
