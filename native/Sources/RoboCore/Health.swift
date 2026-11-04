@@ -1,11 +1,11 @@
-// Is the Hermes gateway answering? One tiny GET now and then, reported as ok / warn / bad.
+// Is robo's agent answering? One tiny GET now and then, reported as ok / warn / bad.
 // Port of src/robo/health.py.
 import Foundation
 
-/// What the HERMES header light shows: answering, one miss (amber), two misses in a row (red).
+/// What the agent's header light shows: answering, one miss (amber), two misses in a row (red).
 public enum HealthState: String, Sendable { case ok, warn, bad }
 
-/// Polls `<gateway>/health` on its own task and calls `onState` from there (the app must hop to
+/// Polls `<agent>/health` on its own task and calls `onState` from there (the app must hop to
 /// the main actor). The first failure is `.warn`, the second in a row `.bad`; failures re-poll
 /// after `retry` seconds, a good poll waits `every`.
 public final class HealthPoller: @unchecked Sendable {
@@ -26,7 +26,9 @@ public final class HealthPoller: @unchecked Sendable {
     public init(url: String, onState: @escaping @Sendable (HealthState) -> Void, every: Double = 20,
                 retry: Double = 5, fetch: @escaping Fetch = HealthPoller.status,
                 sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
-        health = url.components(separatedBy: "/p/")[0] + "/health"  // as setup._wait_healthy; no key needed
+        var base = url
+        while base.hasSuffix("/") { base.removeLast() }
+        health = base + "/health"  // no key needed
         self.onState = onState
         self.every = every
         self.retry = retry

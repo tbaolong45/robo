@@ -220,12 +220,12 @@ struct BrainTests {
         let events = try await collect(client { _ in .fail(.cannotConnectToHost) }.events("r1"))
         #expect(events.count == 1)
         let error = failedMessage(events) ?? ""
-        #expect(error.contains("not running") && error.contains("`hermes gateway start`"))
+        #expect(error.contains("not running") && error.contains("agent.log"))
     }
 
     @Test func httpErrorOnStreamEndsFailed() async throws {
         let events = try await collect(client { _ in .json(404, ["error": ["message": "gone"]]) }.events("r1"))
-        #expect(events == [.runEnded(status: "failed", error: "Hermes error 404: gone")])
+        #expect(events == [.runEnded(status: "failed", error: "Robo's agent error 404: gone")])
     }
 
     @Test func aRejectedKeyOnTheStreamEndsFailedAndReadable() async throws {
@@ -245,7 +245,7 @@ struct BrainTests {
         #expect(seen.all == [nil, nil])
 
         let twice = try await collect(client { _ in .sse(Data("data: [1]\n\n".utf8)) }.events("r1"))
-        #expect(failedMessage(twice) == "Hermes sent malformed data")
+        #expect(failedMessage(twice) == "Robo's agent sent malformed data")
     }
 
     /// SSE allows \r\n and a lone \r as line ends; ids may carry spaces.
@@ -283,7 +283,7 @@ struct BrainTests {
         } catch {
             let message = "\(error)"
             #expect(message.lowercased().contains("key") && !message.contains(KEY))
-            #expect(message.contains("`robo setup`"))  // the fix for a key Hermes no longer knows
+            #expect(message.contains("`robo setup`"))  // the fix for a key the agent no longer knows
         }
     }
 
@@ -293,7 +293,7 @@ struct BrainTests {
                 try await client { _ in body }.stop("r1")
                 Issue.record("expected a BrainError")
             } catch {
-                #expect("\(error)" == "Hermes error 500: Internal Server Error")
+                #expect("\(error)" == "Robo's agent error 500: Internal Server Error")
             }
         }
     }
@@ -303,7 +303,7 @@ struct BrainTests {
             try await client { _ in .fail(.cannotConnectToHost) }.stop("r1")
             Issue.record("expected a BrainError")
         } catch let e as BrainError {
-            #expect(e.message.contains("not running") && e.message.contains("`hermes gateway start`"))
+            #expect(e.message.contains("not running") && e.message.contains("agent.log"))
         } catch {
             Issue.record("wrong error \(error)")
         }
@@ -379,7 +379,7 @@ struct BrainTests {
             for try await e in c.ask("hi", sessionId: "s1") { seen.append(e) }
             Issue.record("expected a BrainError")
         } catch let e as BrainError {
-            #expect(e.message == "Hermes error 500: down")
+            #expect(e.message == "Robo's agent error 500: down")
         } catch {
             Issue.record("wrong error \(error)")
         }

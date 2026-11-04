@@ -254,7 +254,7 @@ import RoboSystem
         w.open(closeAfter: 20)
         w.closeAt = r.clock.now() - 1  // the reply's time is up
         w.tick()
-        #expect(w.card.isHidden && r.frame.size == CGSize(width: 136, height: 104))
+        #expect(w.card.isHidden && r.frame.size == CGSize(width: 136, height: 136))
         w.open()
         w.closeAt = r.clock.now() - 1
         w.busy = true  // a run is going: the card stays

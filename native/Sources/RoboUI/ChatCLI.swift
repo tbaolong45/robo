@@ -1,4 +1,4 @@
-// `robo chat`: a text-only debug REPL on the same Hermes client (chat in src/robo/cli.py).
+// `robo chat`: a text-only debug REPL on the same agent client as the app (chat in src/robo/cli.py).
 import Foundation
 import RoboCore
 import RoboSystem
@@ -65,15 +65,17 @@ func runChat(_ hermes: HermesAPI, session: String, readLine: () -> String? = { S
     }
 }
 
-/// `robo chat` for real: the Hermes client of this Mac (robo's Brave is made sure of first, unless
-/// ROBO_HERMES_URL points elsewhere, see `DevSwitches`).
+/// `robo chat` for real: the agent of this Mac, started if it is not up (and stopped at the end if this started it), with robo's
+/// Brave made sure of first, unless ROBO_AGENT_URL points elsewhere (see `DevSwitches`).
 public func chatMain(environment: [String: String] = ProcessInfo.processInfo.environment) async -> Int32 {
-    let profile = HermesProfile(env: environment)
+    let agent = AgentHome(env: environment)
     do {
-        let dev = DevSwitches(environment: environment)
-        let c = try profile.clientConnection(ensureBrowser: { dir in dev.otherGateway ? true : try Browser.ensure(dir, downloads: Browser.downloadsDir) })
-        let session = "robo-chat-\(CalendarDay().iso)-\(profile.personaStamp())"
-        return await runChat(HermesClient(baseURL: c.url, key: c.key), session: session)
+        let c = try agent.clientConnection()
+        let service = agent.service()
+        defer { service?.stop() }
+        let session = "robo-chat-\(CalendarDay().iso)-\(agent.personaStamp())"
+        return await runChat(AgentKeeper(HermesClient(baseURL: c.url, key: c.key), service: service, hasKey: { agent.hasAnthropicKey }),
+                             session: session)
     } catch {
         Host.warn("robo: \(error)")
         return 1

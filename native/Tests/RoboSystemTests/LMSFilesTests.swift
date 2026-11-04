@@ -53,30 +53,24 @@ private func tmp() -> URL {
 }
 
 @Suite struct PostsMoodleTests {
-    /// A profile in a temp folder; `skill` puts the school-posts skill in it, `env` is the text of its .env.
-    private func profile(skill: Bool, env: String?) throws -> (HermesProfile, URL) {
+    /// The agent's files in a temp folder; `config` is the text of its config.json (nil: none).
+    private func agent(config: String?) throws -> (AgentHome, URL) {
         let root = tmp()
-        let p = HermesProfile(home: root.appendingPathComponent("home"), env: ["HERMES_HOME": root.path])
-        try FileManager.default.createDirectory(at: p.dir, withIntermediateDirectories: true)
-        if let env { try env.write(to: p.dir.appendingPathComponent(".env"), atomically: true, encoding: .utf8) }
-        if skill {
-            let folder = p.dir.appendingPathComponent("skills/school/school-posts")
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try "---\nname: school-posts\n---\n".write(to: folder.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
-        }
-        return (p, root)
+        let a = AgentHome(home: root.appendingPathComponent("home"), env: [:])
+        try FileManager.default.createDirectory(at: a.dir, withIntermediateDirectories: true)
+        if let config { try config.write(to: a.configFile, atomically: true, encoding: .utf8) }
+        return (a, root)
     }
 
-    @Test func theScanNeedsTheSkillAndTheAddress() throws {
-        for (skill, env, want) in [(true, "MOODLE_BASE_URL=https://moodle.example.edu\n", "https://moodle.example.edu" as String?),
-                                   (false, "MOODLE_BASE_URL=https://moodle.example.edu\n", nil),  // `robo setup` has not installed the skill
-                                   (true, "", nil), (true, "MOODLE_BASE_URL=\n", nil),  // no address
-                                   (true, "MOODLE_BASE_URL=http://moodle.example.edu\n", nil),  // not https
-                                   (true, "MOODLE_BASE_URL=--remote-debugging-port=1\n", nil),
-                                   (true, nil, nil)] {  // no .env at all
-            let (p, root) = try profile(skill: skill, env: env)
+    @Test func theScanNeedsAnHTTPSAddressInTheConfig() throws {
+        for (config, want) in [("{\"moodle_url\": \"https://moodle.example.edu/my/\"}", "https://moodle.example.edu" as String?),
+                               ("{}", nil), ("{\"moodle_url\": null}", nil), ("{\"moodle_url\": \"\"}", nil),  // no address
+                               ("{\"moodle_url\": \"http://moodle.example.edu\"}", nil),  // not https
+                               ("{\"moodle_url\": \"--remote-debugging-port=1\"}", nil),
+                               ("not json", nil), (nil, nil)] {  // no config at all
+            let (a, root) = try agent(config: config)
             defer { try? FileManager.default.removeItem(at: root) }
-            #expect(Setup.postsMoodle(p) == want, "skill \(skill), env \(env ?? "none")")
+            #expect(Setup.postsMoodle(a) == want, "config \(config ?? "none")")
         }
     }
 }

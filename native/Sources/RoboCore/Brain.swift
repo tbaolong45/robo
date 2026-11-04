@@ -1,4 +1,4 @@
-// Talk to Hermes Agent over its HTTP API server (`/v1/runs` + SSE events).
+// Talk to robo's agent (`robo-agent`, which serves the run API Hermes Agent had) over HTTP (`/v1/runs` + SSE events).
 // Port of src/robo/brain.py.
 import Foundation
 
@@ -86,7 +86,7 @@ public final class HermesClient: Sendable {
     public func startRun(_ text: String, sessionId: String) async throws -> String {
         let data = try await send("POST", "/v1/runs", ["input": text, "session_id": sessionId])
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let id = object?["run_id"] as? String else { throw BrainError("Hermes sent malformed data") }
+        guard let id = object?["run_id"] as? String else { throw BrainError("Robo's agent sent malformed data") }
         return id
     }
 
@@ -169,7 +169,7 @@ public final class HermesClient: Sendable {
                     events.forEach { out.yield($0) }
                     if case .runEnded? = events.last { return }
                 }
-                failure = "Hermes stream ended without a result"
+                failure = "Robo's agent stream ended without a result"
             } catch let e as BrainError {  // an error response: retrying would get the same
                 out.yield(.runEnded(status: "failed", error: e.message))
                 return
@@ -183,7 +183,7 @@ public final class HermesClient: Sendable {
     }
 
     private func makeRequest(_ method: String, _ path: String, timeout: Double) throws -> URLRequest {
-        guard let url = URL(string: base + path) else { throw BrainError("Hermes address looks wrong: \(base)") }
+        guard let url = URL(string: base + path) else { throw BrainError("Robo's agent address looks wrong: \(base)") }
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(auth, forHTTPHeaderField: "Authorization")
@@ -203,26 +203,26 @@ public final class HermesClient: Sendable {
     }
 
     private static func describe(_ e: Error) -> String {
-        if e is Malformed { return "Hermes sent malformed data" }
-        guard let e = e as? URLError else { return "Hermes connection failed (\(type(of: e)))" }
+        if e is Malformed { return "Robo's agent sent malformed data" }
+        guard let e = e as? URLError else { return "Robo's agent connection failed (\(type(of: e)))" }
         switch e.code {
         case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet:
-            return "Hermes is not running (connection refused); start it with `hermes gateway start`."
+            return "Robo's agent is not running (connection refused); it starts again with your next request (log: ~/Library/Logs/Robo/agent.log)."
         case .timedOut:
-            return "Hermes timed out"
+            return "Robo's agent timed out"
         default:
-            return "Hermes connection failed (URLError \(e.code.rawValue))"
+            return "Robo's agent connection failed (URLError \(e.code.rawValue))"
         }
     }
 
     /// Throw `BrainError` for an error response.
     private static func check(_ response: URLResponse, body: () async -> Data) async throws {
         guard let r = response as? HTTPURLResponse, r.statusCode >= 400 else { return }
-        if r.statusCode == 401 { throw BrainError("Hermes rejected the API key (401); run `robo setup` again.") }
+        if r.statusCode == 401 { throw BrainError("Robo's agent rejected the app's key (401); run `robo setup` again, then restart Robo.") }
         let object = try? JSONSerialization.jsonObject(with: await body()) as? [String: Any]
         let detail = ((object?["error"] as? [String: Any])?["message"] as? String)
             ?? HTTPURLResponse.localizedString(forStatusCode: r.statusCode).capitalized
-        throw BrainError("Hermes error \(r.statusCode): \(detail)")
+        throw BrainError("Robo's agent error \(r.statusCode): \(detail)")
     }
 
     /// The events of one frame: a `run.completed` that reports its usage gives `.usage` first, then `.runEnded`.

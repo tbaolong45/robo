@@ -2,7 +2,7 @@
 // `school-posts`) to read the posts of each course since the last scan, and puts what it finds in the agenda, where the usual
 // reminders and the nudge budget take over. The strict half (what a reply may hold, the plan of the day) is `LMSPosts` in RoboCore;
 // this is the window's side of it:
-//   - OFF until `robo setup` has installed the skill and the profile has a Moodle address (`machine.postsMoodle`), and while the
+//   - OFF until the agent's config.json has a Moodle address (`machine.postsMoodle`, `robo setup --moodle URL`), and while the
 //     🔔 Nudges chip is off. The first tick after 07:00 local starts the day's first step, one run at a time: the course list (read
 //     again every 7 days), then one run per course (the user chose a daily scan and no backfill: a course never scanned reads back
 //     one day, a course scanned before reads back to its last good scan).

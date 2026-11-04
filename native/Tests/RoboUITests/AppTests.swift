@@ -862,10 +862,10 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     }
 
     @Test func theHermesLightFollowsTheHealthPoller() async {
-        let r = Rig(health: "http://127.0.0.1:8642/p/robo")
+        let r = Rig(health: "http://127.0.0.1:8765")
         defer { r.close() }
         let p = r.pollers[0]
-        #expect(p.url == "http://127.0.0.1:8642/p/robo" && p.started == 1 && r.window.link == .unknown)
+        #expect(p.url == "http://127.0.0.1:8765" && p.started == 1 && r.window.link == .unknown)
         for (state, led) in [(HealthState.ok, LedState.ok), (.warn, .warn), (.bad, .bad), (.ok, .ok)] {
             p.onState(state)  // what the poller's thread does through the bridge
             #expect(await pump(r.window.link == led))
@@ -919,18 +919,52 @@ extension Thread {
 
 @Suite struct StartTests {
     @Test func theDevSwitchesAreOffUnlessSet() {
-        #expect(DevSwitches(environment: [:]) == DevSwitches(environment: ["ROBO_NO_VOICE": "0", "ROBO_HERMES_URL": ""]))
+        #expect(DevSwitches(environment: [:]) == DevSwitches(environment: ["ROBO_NO_VOICE": "0", "ROBO_AGENT_URL": ""]))
         let off = DevSwitches(environment: [:])
-        #expect(!off.noVoice && !off.noWatch && !off.otherGateway)
-        let on = DevSwitches(environment: ["ROBO_NO_VOICE": "1", "ROBO_NO_WATCH": "1", "ROBO_HERMES_URL": "http://127.0.0.1:9"])
-        #expect(on.noVoice && on.noWatch && on.otherGateway)
+        #expect(!off.noVoice && !off.noWatch && !off.otherAgent)
+        let on = DevSwitches(environment: ["ROBO_NO_VOICE": "1", "ROBO_NO_WATCH": "1", "ROBO_AGENT_URL": "http://127.0.0.1:9"])
+        #expect(on.noVoice && on.noWatch && on.otherAgent)
+        #expect(!DevSwitches(environment: ["ROBO_HERMES_URL": "http://127.0.0.1:9"]).otherAgent)  // the old name means nothing now
         #expect(DevSwitches(environment: ["ROBO_NO_VOICE": "1"]).noWatch == false)  // each on its own
     }
 
-    /// The card's header chip is the model `robo setup` configures, not a copy of its name.
-    @Test func theHeaderChipShowsTheModelSetupConfigured() {
-        #expect(Setup.model.hasPrefix("claude-"))
-        #expect(Themes.chipText(Themes.glass, configuredModel: Setup.model) == String(Setup.model.dropFirst(7)))
+    /// The card's header chip is the model of the agent's config.json, not a copy of its name.
+    @Test func theHeaderChipShowsTheModelOfTheAgentsConfig() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("robo-chip-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let model = Machine(home: home, environment: [:]).model
+        #expect(model == "claude-sonnet-5-5")  // no config yet: the default
+        #expect(Themes.chipText(Themes.glass, configuredModel: model) == String(model.dropFirst(7)))
+        let file = AgentHome(home: home, env: [:]).configFile
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{\"model\": \"claude-opus-5-5\"}".utf8).write(to: file)
+        #expect(Machine(home: home, environment: [:]).model == "claude-opus-5-5")
+    }
+
+    /// The app's client: no Anthropic key = one clear line and nothing started; else the service is made sure of before the request.
+    @Test func theKeeperSaysWhenTheKeyIsMissingAndStartsTheAgentBeforeAsking() async throws {
+        final class Box: @unchecked Sendable { var launches = 0, up = false }
+        let box = Box()
+        let service = AgentService(command: ["uv"], environment: [:], log: URL(fileURLWithPath: "/dev/null"), healthy: { box.up },
+                                   launch: { _, _, _ in box.launches += 1; box.up = true; return Process() }, sleep: { _ in })
+        let fake = FakeHermes([.event(.runEnded(status: "completed", output: "hi"))])
+        var hasKey = false
+        let keeper = AgentKeeper(fake, service: service, hasKey: { hasKey })
+        do {
+            for try await _ in keeper.ask("hello", sessionId: "s", started: nil) {}
+            Issue.record("expected the key error")
+        } catch let e as BrainError {
+            #expect(e.message == AgentHome.noKeyMessage && e.message.contains("robo key set anthropic"))
+        }
+        #expect(box.launches == 0 && fake.asked.isEmpty)
+        hasKey = true
+        var events: [Event] = []
+        for try await e in keeper.ask("hello", sessionId: "s", started: nil) { events.append(e) }
+        #expect(box.launches == 1 && fake.asked.map(\.text) == ["hello"] && events.count == 1)
+        // ROBO_AGENT_URL: no service, the client itself (no key check: that agent is not ours)
+        hasKey = false
+        for try await _ in AgentKeeper(fake, service: nil, hasKey: { hasKey }).ask("again", sessionId: "s", started: nil) {}
+        #expect(fake.asked.map(\.text) == ["hello", "again"])
     }
 
     @Test func theMachineKeepsEverythingUnderTheHome() {
