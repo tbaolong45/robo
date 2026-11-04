@@ -58,7 +58,12 @@ enum Chrome {
     static func hairline(_ ink: Double?) -> NSColor { inked(0.18, system: .separatorColor, ink, text: false) }
     /// A quiet wash over glass: chips, code boxes.
     static func wash(_ alpha: CGFloat) -> NSColor { wash(alpha, ink) }
-    static func wash(_ alpha: CGFloat, _ ink: Double?) -> NSColor { inked(alpha, system: NSColor.labelColor.withAlphaComponent(alpha), ink, text: false) }
+    static func wash(_ alpha: CGFloat, _ ink: Double?) -> NSColor { inked(alpha, system: washes(alpha), ink, text: false) }
+    /// Black or white at `alpha`, picked when drawn. `labelColor.withAlphaComponent` was not: it kept the app's look (white on a light
+    /// chat when the Mac is dark). Named, so two washes of one alpha are equal (the Markdown is compared for purity).
+    private static func washes(_ alpha: CGFloat) -> NSColor {
+        NSColor(name: "robo.wash.\(alpha)") { NSColor(white: $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 1 : 0, alpha: alpha) }
+    }
 
     /// The hue in the 2 degree steps the card follows the face in (Python `round` is half to even).
     static func quantised(_ hue: Double) -> Double {
@@ -315,14 +320,14 @@ struct Led {
     }
 }
 
-/// The strip at the top of the pane: an orb in the accent, the bot's name, a Hermes and a microphone light, the model
+/// The strip at the top of the pane: an orb in the accent, the bot's name, an agent and a microphone light, the model
 /// chip on the right, a hairline under it. When too narrow the chip goes first (under 40 px it is hidden); the lights
 /// and the name keep their room. The card puts it at (6, 6).
 final class HeaderView: NSView {
     var theme: Theme { didSet { place(); needsDisplay = true } }
     var hue: Double { didSet { needsDisplay = true } }
     var model: String { didSet { place() } }  // the configured model (`model.default`), for the chip when the theme names none
-    private(set) var link = Led("HERMES"), mic = Led("MIC", hot: "LISTENING", state: .off)
+    private(set) var link = Led("AGENT"), mic = Led("MIC", hot: "LISTENING", state: .off)
     /// Where the model chip is drawn (nil: hidden), and its text.
     private(set) var chip: CGRect?
     private(set) var chipText = ""

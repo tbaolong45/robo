@@ -351,9 +351,9 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
 // MARK: lights and header
 
 @Suite @MainActor struct CardHeaderTests {
-    @Test(arguments: [("unknown", "HERMES"), ("ok", "HERMES"), ("warn", "HERMES …"), ("bad", "HERMES ✕")])
+    @Test(arguments: [("unknown", "AGENT"), ("ok", "AGENT"), ("warn", "AGENT …"), ("bad", "AGENT ✕")])
     func theHermesLightAlwaysCarriesAWord(_ state: String, _ label: String) {
-        let led = Led("HERMES", state: LedState(rawValue: state)!)
+        let led = Led("AGENT", state: LedState(rawValue: state)!)
         #expect(led.label == label && led.width > 14 + 20)
     }
 
@@ -389,19 +389,19 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         card.setLights(link: .ok, mic: .ok)
         let before = card.header.micX
-        card.setLights(link: .bad, mic: .hot)  // "HERMES ✕" is wider than "HERMES"
-        #expect(card.header.link.label == "HERMES ✕" && card.header.mic.label == "LISTENING")
+        card.setLights(link: .bad, mic: .hot)  // "AGENT ✕" is wider than "AGENT"
+        #expect(card.header.link.label == "AGENT ✕" && card.header.mic.label == "LISTENING")
         #expect(card.header.micX > before)
         #expect(card.header.micX >= card.header.linkX + card.header.link.width)
         #expect(card.header.micX + card.header.mic.width <= card.header.bounds.width)
     }
 
     @Test func blinkingAndPulsingFollowThePhaseTheWindowGives() {
-        var warn = Led("HERMES", state: .warn)
+        var warn = Led("AGENT", state: .warn)
         #expect(warn.setPhase(0.0) == false)  // lit for half a second, dark for half, at 1 Hz
         #expect(warn.setPhase(0.6) && !warn.lit)
         #expect(warn.setPhase(1.0) && warn.lit)
-        var ok = Led("HERMES", state: .ok)
+        var ok = Led("AGENT", state: .ok)
         #expect((0...4).allSatisfy { ok.setPhase(Double($0) * 0.1) == false })  // steady: nothing to redraw
         var hot = Led("MIC", hot: "LISTENING", state: .hot)
         #expect(hot.setPhase(0.0) == true && hot.pulse == 0.5)  // the pulse starts at the middle and peaks 0.3125 s in

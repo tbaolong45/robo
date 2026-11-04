@@ -287,7 +287,7 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
     let (lis, events) = start(mic, stt, clock: clock, noStall: true)
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
-    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(events.get() == .text("and tomorrow?"))  // no wake: the app wakes itself if it takes it
     #expect(lis.handsFree)  // said in the window, with no key, click or name
     clock.t = 30  // the window closed (and it was used once anyway)
     mic.feed(sentence(100))
@@ -297,14 +297,14 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
 }
 
 @Test(arguments: [(Listen.minSpeechFrames - 1, false), (Listen.minSpeechFrames, true)])
-func aFollowUpWindowWakesRoboOnlyForRealSpeech(loud: Int, wakes: Bool) {
+func aFollowUpWindowTakesOnlyRealSpeech(loud: Int, wakes: Bool) {
     let mic = FakeMic()
     let stt = FakeStt("and tomorrow?")
     let (lis, events) = start(mic, stt, clock: Clock(), noStall: true, nameWake: false)
     lis.followUp(seconds: 10)
     mic.feed(frames(0, 8) + frames(8, 8 + loud, speech) + frames(8 + loud, 30))  // `loud` frames above the gate
     if wakes {
-        #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+        #expect(events.get() == .text("and tomorrow?"))
     } else {
         drained(mic)
         #expect(events.isEmpty && stt.heard.isEmpty)  // a knock: no wake (the reply stays), nothing sent
@@ -321,7 +321,7 @@ func aFollowUpWindowWakesRoboOnlyForRealSpeech(loud: Int, wakes: Bool) {
     drained(mic)
     #expect(events.isEmpty)
     mic.feed(sentence(100))
-    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(events.get() == .text("and tomorrow?"))
     #expect(lis.handsFree)
     lis.stop()
 }
@@ -336,7 +336,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     mic.feed(sentence(0))  // loud enough to be transcribed, and heard as no words
     drained(mic)  // that recording is over before the next sentence starts (else they would be one)
     mic.feed(sentence(100))  // the window is still open for the real sentence
-    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])  // so the first one changed nothing
+    #expect(events.get() == .text("and tomorrow?"))  // so the first one changed nothing
     #expect(lis.handsFree && stt.heard.count == 2)
     lis.stop()
 }
@@ -390,7 +390,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     #expect(!lis.handsFree)
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
-    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(events.get() == .text("and tomorrow?"))
     #expect(lis.handsFree)
     lis.hold()  // a held key
     clock.t = 5
@@ -412,7 +412,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     let (lis, events) = start(mic, FakeStt("and tomorrow?", "Robo, what time is it?"), clock: clock, noStall: true)
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
-    #expect([events.get(), events.get()] == [.wake, .text("and tomorrow?")])
+    #expect(events.get() == .text("and tomorrow?"))
     #expect(lis.handsFree)
     clock.t = 30  // the window closed
     mic.feed(sentence(100))
@@ -634,7 +634,7 @@ final class Gate {
     #expect(events.isEmpty)  // one wake per sentence
 }
 
-@Test func aFollowUpSentenceWakesRoboOnceItsWordsAreRead() {
+@Test func aFollowUpSentenceIsDeliveredWithoutAWake() {
     let order = Log<String>(), done = Events(), mic = FakeMic()
     let lis = Listener(onWake: { order.append("wake") }, onText: { done.put(.text($0)) }, onNote: { _ in },
                        mic: { mic }, transcriber: { { _ in order.append("final"); return "and tomorrow?" } },
@@ -644,7 +644,7 @@ final class Gate {
     mic.feed(sentence(0))
     #expect(done.get() == .text("and tomorrow?"))
     lis.stop()
-    #expect(order.all == ["final", "wake"])  // robo shows the request once its words are known: sound alone must not wipe the reply
+    #expect(order.all == ["final"])  // the listener never wakes robo here: the app does once it takes the words (it may refuse them)
     #expect(lis.handsFree)
 }
 

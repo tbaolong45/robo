@@ -1,6 +1,6 @@
 // The bubbles of the chat window: the text of one turn at a fixed width (as tall as it needs, no scroll view of its own: the chat scrolls,
-// and a scroll view inside a scroll view would take the mouse wheel), and the rounded bubble around it with its tail, its footer and the
-// "typing" dots. Colours are the system's own and follow the chat panel's appearance (light or dark), so they never need a rebuild.
+// and a scroll view inside a scroll view would take the mouse wheel), and the rounded bubble around it with its footer and the "typing"
+// dots. Colours are the system's own and follow the chat panel's appearance (light or dark), so they never need a rebuild.
 // Views are y-down (isFlipped).
 import AppKit
 import RoboCore
@@ -64,12 +64,12 @@ final class BubbleText: NSView {
 }
 
 /// One turn as a rounded bubble: yours on the right in a tint of the face's colour, Robo's on the left in a quiet wash, a failure in
-/// red. The last bubble of a run has a small tail at its lower corner. The view is `tailSize` wider than the body at each side.
+/// red. The view is `side` wider than the body at each side, room for the soft shadow.
 final class BubbleView: NSView {
     enum Look { case you, robo, failed }
 
     static let pad = NSEdgeInsets(top: 9, left: 13, bottom: 9, right: 13)
-    static let tailSize: CGFloat = 7
+    static let side: CGFloat = 7
     static let footerGap: CGFloat = 3
     static let shadowTop: CGFloat = 2, shadowBottom: CGFloat = 7  // room above and below the body for its soft shadow
 
@@ -84,7 +84,6 @@ final class BubbleView: NSView {
     private(set) var source = ""
     /// The bubble's own size (the footer is under it, outside the rounded shape).
     private(set) var bubbleSize = CGSize.zero
-    var tail = false { didSet { if tail != oldValue { needsDisplay = true } } }
 
     init(turn: Turn, theme: Theme, textWidth: CGFloat, reduceMotion: @escaping () -> Bool = { false }) {
         turnID = turn.id
@@ -189,7 +188,7 @@ final class BubbleView: NSView {
         if working { inner = CGSize(width: 32, height: 16) }
         let size = CGSize(width: (inner.width + pad.left + pad.right).rounded(.up), height: (inner.height + pad.top + pad.bottom).rounded(.up))
         bubbleSize = size
-        let inset = Self.tailSize  // room at both sides for the tail: the body is drawn this far in
+        let inset = Self.side  // room at both sides for the shadow: the body is drawn this far in
         text.setFrameOrigin(NSPoint(x: inset + pad.left, y: Self.shadowTop + pad.top))
         text.isHidden = working
         dots?.frame = CGRect(x: inset + pad.left - 5, y: Self.shadowTop + pad.top - 1, width: 32, height: 16)
@@ -204,22 +203,9 @@ final class BubbleView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let body = CGRect(origin: CGPoint(x: Self.tailSize, y: Self.shadowTop), size: bubbleSize)
+        let body = CGRect(origin: CGPoint(x: Self.side, y: Self.shadowTop), size: bubbleSize)
         guard body.width > 0 else { return }
         let shape = NSBezierPath(roundedRect: body, xRadius: Chrome.bubbleRadius, yRadius: Chrome.bubbleRadius)
-        if tail {
-            let t = Self.tailSize
-            let right = look == .you
-            let tip = right ? CGPoint(x: body.maxX + t - 1, y: body.maxY) : CGPoint(x: body.minX - t + 1, y: body.maxY)
-            let a = right ? CGPoint(x: body.maxX - 12, y: body.maxY - t - 1) : CGPoint(x: body.minX + 12, y: body.maxY - t - 1)
-            let b = right ? CGPoint(x: body.maxX - 2, y: body.maxY - 1) : CGPoint(x: body.minX + 2, y: body.maxY - 1)
-            let beak = NSBezierPath()
-            beak.move(to: a)
-            beak.curve(to: tip, controlPoint1: CGPoint(x: a.x + (right ? 2 : -2), y: body.maxY - 1), controlPoint2: CGPoint(x: tip.x + (right ? -2 : 2), y: tip.y))
-            beak.line(to: b)
-            beak.close()
-            shape.append(beak)
-        }
         // Liquid: a tinted body, a sheen across its upper half like light on a drop, and a thin rim that is bright on top and fades below.
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let (top, bottom, rim): (NSColor, NSColor, NSColor)
@@ -251,17 +237,16 @@ final class BubbleView: NSView {
         NSColor.black.setFill()
         shape.fill()
         NSGraphicsContext.restoreGraphicsState()
-        let wide = body.insetBy(dx: -Self.tailSize, dy: 0)
         NSGraphicsContext.saveGraphicsState()
         shape.addClip()
-        NSGradient(starting: top, ending: bottom)?.draw(in: wide, angle: 90)  // flipped view: 90 runs from the top down
+        NSGradient(starting: top, ending: bottom)?.draw(in: body, angle: 90)  // flipped view: 90 runs from the top down
         NSGradient(colors: [NSColor.white.withAlphaComponent(dark ? 0.14 : 0.40), NSColor.white.withAlphaComponent(0)])?
-            .draw(in: CGRect(x: wide.minX, y: body.minY, width: wide.width, height: body.height * 0.55), angle: 90)
+            .draw(in: CGRect(x: body.minX, y: body.minY, width: body.width, height: body.height * 0.55), angle: 90)
         NSGraphicsContext.restoreGraphicsState()
         // the rim: bright over the upper half, a hint below
         shape.lineWidth = 1
-        for (zone, alpha) in [(CGRect(x: wide.minX, y: body.minY - 1, width: wide.width, height: body.height * 0.5 + 1), 1.0),
-                              (CGRect(x: wide.minX, y: body.midY, width: wide.width, height: body.height * 0.5 + 1), 0.16)] {
+        for (zone, alpha) in [(CGRect(x: body.minX - 1, y: body.minY - 1, width: body.width + 2, height: body.height * 0.5 + 1), 1.0),
+                              (CGRect(x: body.minX - 1, y: body.midY, width: body.width + 2, height: body.height * 0.5 + 1), 0.16)] {
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: zone).addClip()
             rim.withAlphaComponent(rim.alphaComponent * alpha).setStroke()

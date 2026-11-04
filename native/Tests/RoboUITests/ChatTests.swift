@@ -511,14 +511,13 @@ private func receipt(_ at: Double) -> String {
         #expect(you.frame.midX > column / 2 && robo.frame.midX < column / 2)
         #expect(robo.bubbleSize.width <= ((column - 2 * ChatView.side) * ChatView.widthShare).rounded(.down) + 0.5)
         #expect(you.bubbleSize.width < robo.bubbleSize.width)  // yours shrinks to its two letters
-        #expect(you.frame.maxX <= v.bounds.width && robo.frame.minX >= 0)  // the tail room is inside the window
+        #expect(you.frame.maxX <= v.bounds.width && robo.frame.minX >= 0)  // the shadow room is inside the window
     }
 
-    @Test func onlyTheLastBubbleOfARunHasATailAndTheRowsDoNotOverlap() {
+    @Test func theRowsDoNotOverlap() {
         let t = conversation()
         let v = view(t)
         let b = t.turns.map { v.bubbles[$0.id]! }
-        #expect(b.map(\.tail) == [true, false, true, true])  // you | robo robo | you
         for (a, c) in zip(b, b.dropFirst()) { #expect(a.frame.maxY <= c.frame.minY) }
     }
 
