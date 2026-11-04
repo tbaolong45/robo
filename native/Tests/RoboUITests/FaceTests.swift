@@ -1,6 +1,5 @@
-// Port of the painting and widget parts of tests/test_face.py and test_look.py (the maths are in RoboCoreTests),
-// plus the visual comparison with the Python face (scripts/face_snapshots.py): set ROBO_FACE_REF to its
-// output folder (and ROBO_FACE_OUT to a folder for our PNGs) to run it.
+// The painting and widget parts of the face (begun as a port of tests/test_face.py and test_look.py; the maths are in
+// RoboCoreTests). ROBO_FACE_SHEET=<folder> writes face_sheet.png there: every expression and effect, to look at.
 import AppKit
 import Foundation
 import Testing
@@ -8,20 +7,15 @@ import RoboCore
 @testable import RoboUI
 
 extension FaceRender {
-    /// The face as a bitmap (sRGB, premultiplied): the context is flipped like an NSView's, `radius` > 0
-    /// clips it to a rounded screen with transparent corners.
+    /// The face as a bitmap (sRGB, premultiplied): the context is flipped like an NSView's.
     static func image(size: CGSize, scale: CGFloat = 1, params: FaceParams, t: Double = 0,
-                      bg: (RGBA, RGBA)? = nil, radius: CGFloat = 0) -> CGImage {
+                      bg: (RGBA, RGBA)? = nil) -> CGImage {
         let w = Int(size.width * scale), h = Int(size.height * scale)
         let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: scale, y: -scale)
         let rect = CGRect(origin: .zero, size: size)
-        if radius > 0 {
-            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
-            ctx.clip()
-        }
         render(ctx, rect: rect, params: params, t: t, bg: bg)
         return ctx.makeImage()!
     }
@@ -29,6 +23,16 @@ extension FaceRender {
 
 private let all = Activity.allCases
 private let neutral = FaceParams.target(.idle, "neutral")
+
+/// `p` with the eyes turned as far as the cursor can turn them (`Look.gain`, scaled by the pose's wander like the
+/// animator does), toward direction `i` of 8 (0 = right, 2 = down, y-down).
+private func turned(_ p: FaceParams, _ i: Int) -> FaceParams {
+    var q = p
+    let a = Double(i) * Double.pi / 4
+    q.gazeX += Look.gain * cos(a) * p.wander
+    q.gazeY += Look.gain * sin(a) * p.wander
+    return q
+}
 
 // MARK: - pixels
 
@@ -49,19 +53,23 @@ private func rgb(_ px: [UInt8], _ w: Int, _ x: Int, _ y: Int) -> (r: Int, g: Int
     return (Int(px[i]), Int(px[i + 1]), Int(px[i + 2]))
 }
 
-private func paint(_ p: FaceParams, bg: (RGBA, RGBA)? = nil, size: CGSize = CGSize(width: 64, height: 48),
+private func paint(_ p: FaceParams, bg: (RGBA, RGBA)? = nil, size: CGSize = FaceView.size,
                    t: Double = 0.5) -> [UInt8] {
     pixels(FaceRender.image(size: size, params: p, t: t, bg: bg))
 }
 
-/// Mean absolute difference of the RGB channels, 0...255.
-private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
-    var sum = 0, n = 0
-    for i in stride(from: 0, to: min(a.count, b.count), by: 4) {
-        for c in 0..<3 { sum += abs(Int(a[i + c]) - Int(b[i + c])); n += 1 }
-    }
-    return Double(sum) / Double(n)
+/// The pixel of a `side`-square face where canvas point (x, y) lands.
+private func canvas(_ x: Double, _ y: Double, side: Int) -> (Int, Int) {
+    let k = Double(side) * FaceRender.disc / 2 / FaceRender.reach
+    return (Int(Double(side) / 2 + (x - FaceRender.W / 2) * k), Int(Double(side) / 2 + (y - FaceRender.centreY) * k))
 }
+
+/// WCAG relative luminance and contrast, written out again here so the test does not trust FaceRender's own.
+private func relLum(_ r: Double, _ g: Double, _ b: Double) -> Double {
+    let lin = { (c: Double) in c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) / (min(a, b) + 0.05) }
 
 // MARK: - the widget
 
@@ -69,7 +77,7 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
     /// A face on a clock the test moves.
     final class Clock { var now = 100.0 }
     func face(_ clock: Clock = Clock(), seed: UInt64 = 1) -> FaceView {
-        FaceView(radius: 0, seed: seed, clock: { clock.now })
+        FaceView(seed: seed, clock: { clock.now })
     }
 
     @Test(arguments: Activity.allCases) func frameIntervalFollowsActivity(_ activity: Activity) {
@@ -176,22 +184,33 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
         #expect(abs(f.params.hue - 128) < 0.5)  // and it stays there
     }
 
-    @Test func theViewPaintsTheThemesScreen() {
-        let f = FaceView(radius: 0, seed: 1)
-        f.frame = CGRect(x: 0, y: 0, width: 160, height: 120)
+    @Test func theViewPaintsTheThemesBody() {
+        let f = FaceView(seed: 1)
         let blue = RGBA(r: 0x33, g: 0x66, b: 0x99, a: 255)
-        func corner() -> (r: Int, g: Int, b: Int) {
+        func body() -> (r: Int, g: Int, b: Int, a: Int) {
             let rep = f.bitmapImageRepForCachingDisplay(in: f.bounds)!
             f.cacheDisplay(in: f.bounds, to: rep)
-            let c = rep.colorAt(x: 1, y: 1)!.usingColorSpace(.sRGB)!
+            let k = rep.pixelsWide / 128
+            let c = rep.colorAt(x: 40 * k, y: 110 * k)!.usingColorSpace(.sRGB)!  // low on the left, clear of the features
             return (Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()),
-                    Int((c.blueComponent * 255).rounded()))
+                    Int((c.blueComponent * 255).rounded()), Int((c.alphaComponent * 255).rounded()))
         }
         f.setTheme(hue: nil, bg: (blue, blue))
-        let c = corner()
-        #expect(abs(c.r - 0x33) <= 1 && abs(c.g - 0x66) <= 1 && abs(c.b - 0x99) <= 1)
+        let c = body()
+        #expect(abs(c.r - 0x33) <= 1 && abs(c.g - 0x66) <= 1 && abs(c.b - 0x99) <= 1 && c.a == 255)
         f.setTheme(hue: nil, bg: nil)
-        #expect(corner() != c)
+        let white = body()
+        #expect(white.r > 220 && white.g > 220 && white.b > 220)
+    }
+
+    @Test func voiceOverSeesAButtonNamedRoboAndItsPressIsAClick() {
+        let f = face()
+        #expect(f.isAccessibilityElement() && f.accessibilityRole() == .button && f.accessibilityLabel() == "Robo")
+        #expect(f.accessibilityHelp()?.contains("Click") == true)
+        var seen: [FaceMouse] = []
+        f.onMouse = { seen.append($0) }
+        #expect(f.accessibilityPerformPress())
+        #expect(seen == [.press, .release])  // what the window reads as a click
     }
 
     /// The window hands the look to the animator (tests/test_look.py).
@@ -224,8 +243,8 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
 // MARK: - the painting
 
 @Suite struct FaceRenderTests {
-    @Test func theDefaultScreenIsTheDarkBlueItAlwaysWas() {
-        #expect(FaceRender.screen == RGBA(r: 18, g: 26, b: 42, a: 255) && FaceRender.bg == RGBA(r: 9, g: 13, b: 22, a: 255))
+    @Test func theDefaultBodyIsTheThemesWhite() {
+        #expect(FaceRender.screen == RGBA(r: 255, g: 255, b: 255, a: 255) && FaceRender.bg == RGBA(r: 226, g: 230, b: 237, a: 255))
         for (a, e) in [(Activity.idle, "neutral"), (.talking, "happy"), (.error, "sad")] {
             let p = FaceParams.target(a, e)
             let plain = paint(p)
@@ -235,211 +254,181 @@ private func mad(_ a: [UInt8], _ b: [UInt8]) -> Double {
         }
     }
 
-    @Test func aThemeScreenReplacesBothColours() {
+    @Test func aThemeBodyReplacesBothColours() {
         let p = neutral
         let blue = Themes.rgba("#336699")
         let px = paint(p, bg: (blue, blue))
-        let c = rgb(px, 64, 1, 1)  // a corner, clear of the face
+        let c = rgb(px, 128, 40, 110)  // low on the left, clear of the features
         #expect(c.r == 0x33 && c.g == 0x66 && c.b == 0x99)
         #expect(px != paint(p))
-        let corner = rgb(paint(p, bg: (Themes.rgba("#000000"), Themes.rgba("#ff0000"))), 64, 1, 1)
-        #expect(corner.r > corner.b + 100)  // the edge colour is at the corners
+        let rim = rgb(paint(p, bg: (Themes.rgba("#000000"), Themes.rgba("#ff0000"))), 128, 98, 100)
+        #expect(rim.r > rim.b + 100)  // the edge colour is toward the rim
     }
 
-    /// The 5 %-alpha halo layers have no visible edge, so antialiasing them is pure cost (about 4x at idle):
-    /// with it off, a pixel is covered by 0...7 layers and never by a fraction of one.
-    @Test func glowLayersSkipAntialiasingButTheSolidShapesKeepIt() {
-        let w = 64, h = 48
-        func alphas(antialiased: Bool) -> Set<UInt8> {
-            var data = [UInt8](repeating: 0, count: w * h * 4)
-            let ctx = CGContext(data: &data, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: srgb,
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            let path = CGPath(roundedRect: CGRect(x: 20.3, y: 14.2, width: 17, height: 11), cornerWidth: 5,
-                              cornerHeight: 5, transform: nil)
-            var p = neutral
-            p.glow = 1
-            if antialiased {  // the same strokes, antialiased: what the halo would cost without the switch
-                for i in 0..<7 {
-                    ctx.addPath(path)
-                    ctx.setStrokeColor(CGColor(red: 0, green: 1, blue: 1, alpha: 0.045 * 1.3))
-                    ctx.setLineWidth(CGFloat(30 - 4 * i))
-                    ctx.setLineCap(.round)
-                    ctx.setLineJoin(.round)
-                    ctx.strokePath()
-                }
-            } else {
-                FaceRender.glow(ctx, path, p)
+    /// The features are ink on the white body: at every hue and every saturation the table uses, their colour keeps
+    /// its hue and reads at 4.5:1 or more against both ends of the body's gradient (WCAG asks 3:1 of graphics).
+    @Test func theInkReadsOnTheBodyAtEveryHue() {
+        func lum(_ c: RGBA) -> Double { relLum(Double(c.r) / 255, Double(c.g) / 255, Double(c.b) / 255) }
+        let body = [lum(FaceRender.screen), lum(FaceRender.bg)]
+        let sats = Set(all.flatMap { a in emotions.map { FaceParams.target(a, $0).sat } }).union([1])
+        var worst = 99.0
+        for sat in sats {
+            for hue in 0..<360 {
+                let c = FaceRender.ink(hue: Double(hue), sat: sat)
+                let l = relLum(c.r, c.g, c.b)
+                for b in body { worst = min(worst, contrast(l, b)) }
+                let back = NSColor(srgbRed: c.r, green: c.g, blue: c.b, alpha: 1).hueComponent * 360
+                #expect(abs(pyFloatModTest(back - Double(hue) + 180, 360) - 180) < 1, "hue \(hue) sat \(sat)")
             }
-            return Set(stride(from: 3, to: data.count, by: 4).map { data[$0] })
         }
-        #expect(alphas(antialiased: false).count <= 8)
-        #expect(alphas(antialiased: true).count > 8)
-        // and the face as a whole still draws its solid shapes smoothly: soft edges, not a stair of 8 levels
-        let px = paint(neutral, size: CGSize(width: 128, height: 96))
-        let edge = Set(stride(from: 0, to: 128 * 96 * 4, by: 4).map { px[$0 + 1] })
-        #expect(edge.count > 40)
+        #expect(worst >= 4.5, "worst \(worst)")
+    }
+
+    @Test func theShapesAreAntialiased() {  // soft edges, not a stair of a few levels
+        let px = paint(neutral)
+        #expect(Set(stride(from: 0, to: px.count, by: 4).map { px[$0 + 1] }).count > 40)
     }
 
     /// Arcs run the way Qt's do although this context is y-down: the drop's bulge hangs below its tip.
     @Test func theSweatDropHangsDownAndThePulseArcsOpenOutward() {
+        let side = 320
         var p = neutral
         p.effects = ["sweat"]
-        let px = paint(p, size: CGSize(width: 320, height: 240), t: 0)  // 1 canvas unit = 1 px
-        func blue(_ x: Int, _ y: Int) -> Bool { let c = rgb(px, 320, x, y); return c.b > 200 && c.g > 150 && c.r < 160 }
+        let px = paint(p, size: CGSize(width: side, height: side), t: 0)
+        func blue(_ x: Double, _ y: Double) -> Bool {
+            let (i, j) = canvas(x, y, side: side)
+            let c = rgb(px, side, i, j)
+            return c.b > 180 && c.r < 120
+        }
         #expect(blue(270, 80))  // the round part, below the middle of the drop (x = 270, tip at y = 59)
         #expect(!blue(270, 95))  // and nothing hangs below it
-        #expect(blue(270, 62))  // the tip is narrow but there
-        #expect(!blue(263, 62))  // 7 px beside the tip is empty
+        #expect(blue(270, 63))  // the tip is narrow but there
+        #expect(!blue(262, 62))  // 8 units beside the tip is empty
 
         p.effects = ["pulse"]
-        let pulse = paint(p, size: CGSize(width: 320, height: 240), t: 0)
-        let outer = rgb(pulse, 320, 57 - 18, 102), inside = rgb(pulse, 320, 57 - 6, 150)
-        #expect(outer.b > inside.b + 20)  // the left pulse arc sits on the eye's outer (left) side
-        let right = rgb(pulse, 320, 263 + 18, 102)
-        #expect(right.b > inside.b + 20)
+        let pulse = paint(p, size: CGSize(width: side, height: side), t: 0)
+        func sum(_ x: Double, _ y: Double) -> Int {
+            let (i, j) = canvas(x, y, side: side)
+            let c = rgb(pulse, side, i, j)
+            return c.r + c.g + c.b
+        }
+        let body = sum(47, 150)
+        #expect(sum(47, 102) < body - 60)  // the left arc sits on the eye's outer (left) side, 14 out
+        #expect(sum(273, 102) < body - 60)  // and the right one on the right
     }
 
     @Test func everyActivityAndEmotionDrawsSomethingThatIsNotBlank() {
         for a in all {
             for e in emotions {
-                let px = paint(FaceParams.target(a, e), size: CGSize(width: 128, height: 96))
+                let px = paint(FaceParams.target(a, e))
                 let distinct = Set(stride(from: 0, to: px.count, by: 4).map { Int(px[$0]) << 16 | Int(px[$0 + 1]) << 8 | Int(px[$0 + 2]) })
                 #expect(distinct.count > 20, "\(a) \(e)")
             }
         }
     }
 
-    @Test func aRoundedScreenIsTransparentOutsideItsCorners() {
-        let img = FaceRender.image(size: FaceView.size, params: neutral, radius: 22)
-        let px = pixels(img)
-        #expect(px[3] == 0)  // the top-left pixel is outside the rounded corner
-        #expect(px[((48 * 128) + 64) * 4 + 3] == 255)  // the middle is solid
+    @Test func theFaceIsAWhiteDiscAndTransparentAroundIt() {
+        let px = paint(neutral)
+        func alpha(_ x: Int, _ y: Int) -> UInt8 { px[(y * 128 + x) * 4 + 3] }
+        #expect(alpha(0, 0) == 0 && alpha(127, 0) == 0 && alpha(0, 127) == 0 && alpha(127, 127) == 0)  // corners: clear
+        #expect(alpha(20, 20) == 0)  // still outside the disc (radius 56 around 64, 64)
+        #expect(alpha(64, 9) == 255 && alpha(9, 64) == 255)  // just inside its top and left edges
+        let mid = rgb(px, 128, 40, 110)  // low on the left, clear of the eyes and the mouth
+        #expect(mid.r > 220 && mid.g > 220 && mid.b > 220 && alpha(40, 110) == 255)
+        #expect(alpha(64, 122) > 0 && alpha(64, 122) < 80)  // the soft shadow under the disc
+        #expect(alpha(64, 1) < alpha(64, 122))  // which hangs below it
+    }
+
+    /// Nothing is cut by the circle: in the outer ring of the disc (6 to 2 canvas units from its edge) every pixel is
+    /// still the body, for every pose with the eyes turned as far as they go and every effect through its animation.
+    @Test func noFeatureOrEffectReachesTheEdgeOfTheDisc() {
+        let side = 256, k = Double(side) * FaceRender.disc / 2 / FaceRender.reach  // px per canvas unit, at 2x
+        var ring: [Int] = []
+        for y in 0..<side {
+            for x in 0..<side {
+                let r = hypot(Double(x) + 0.5 - Double(side) / 2, Double(y) + 0.5 - Double(side) / 2) / k
+                if r >= FaceRender.reach - 6 && r <= FaceRender.reach - 2 { ring.append((y * side + x) * 4) }
+            }
+        }
+        var faces: [(String, FaceParams, Double)] = []
+        for a in all {
+            for e in emotions {
+                var p = FaceParams.target(a, e)
+                p.mouthOpen = max(p.mouthOpen, a == .talking ? 1 : 0)
+                for i in 0..<8 { faces.append(("\(a) \(e) look \(i)", turned(p, i), 0.6)) }
+            }
+        }
+        for fx in ["blush", "sweat", "question", "zzz", "dots", "gear", "pulse", "sparkle"] {
+            var p = neutral
+            p.effects = [fx]
+            for t in stride(from: 0.0, to: 5.0, by: 0.2) { faces.append((fx, p, t)) }
+        }
+        for (name, p, t) in faces {
+            let px = pixels(FaceRender.image(size: CGSize(width: 128, height: 128), scale: 2, params: p, t: t))
+            let bad = ring.filter { px[$0] < 200 || px[$0 + 1] < 200 || px[$0 + 2] < 200 }.count
+            #expect(bad == 0, "\(name) t \(t)")
+        }
     }
 }
 
-// MARK: - the Python face, side by side
-
-private func png(_ url: URL) -> CGImage? {
-    guard let data = try? Data(contentsOf: url), let rep = NSBitmapImageRep(data: data) else { return nil }
-    return rep.cgImage
+/// Python's float `%` (as RoboCore's `pyFloatMod`, which is internal there).
+private func pyFloatModTest(_ a: Double, _ b: Double) -> Double {
+    let m = fmod(a, b)
+    return m < 0 ? m + b : m
 }
+
+// MARK: - the contact sheet (ROBO_FACE_SHEET=<folder>): every expression and effect, to look at
 
 private func save(_ image: CGImage, _ url: URL) {
     let rep = NSBitmapImageRep(cgImage: image)
     try? rep.representation(using: .png, properties: [:])?.write(to: url)
 }
 
-private let refDir = ProcessInfo.processInfo.environment["ROBO_FACE_REF"].map { URL(fileURLWithPath: $0) }
-private let outDir = ProcessInfo.processInfo.environment["ROBO_FACE_OUT"].map { URL(fileURLWithPath: $0) }
-private let extraDir = ProcessInfo.processInfo.environment["ROBO_FACE_EXTRA"].map { URL(fileURLWithPath: $0) }
-private let widgetDir = ProcessInfo.processInfo.environment["ROBO_FACE_WIDGET"].map { URL(fileURLWithPath: $0) }
+private let sheetDir = ProcessInfo.processInfo.environment["ROBO_FACE_SHEET"].map { URL(fileURLWithPath: $0) }
 
-@Suite struct FaceSnapshotTests {
-    private static let cw = 240, ch = 180
-
-    private func tile(_ p: FaceParams, t: Double = 0.6, bg: (RGBA, RGBA)? = nil) -> CGImage {
-        FaceRender.image(size: CGSize(width: Self.cw, height: Self.ch), params: p, t: t, bg: bg)
-    }
-
-    /// Writes our tiles and a diff grid next to the Python ones and prints the mean absolute differences.
-    @Test(.enabled(if: refDir != nil)) func everyFaceAgainstThePythonOne() throws {
-        let ref = try #require(refDir)
-        let out = outDir ?? FileManager.default.temporaryDirectory.appendingPathComponent("face_swift")
-        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        var rows: [(Activity, [(String, Double)])] = []
-        var worst = ("", 0.0)
-        var total = 0.0, count = 0
-        let cell = CGSize(width: Self.cw, height: Self.ch)
-        let grid = CGContext(data: nil, width: Self.cw * 9, height: Self.ch * all.count, bitsPerComponent: 8,
-                             bytesPerRow: 0, space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        let diffGrid = CGContext(data: nil, width: Self.cw * 9, height: Self.ch * all.count, bitsPerComponent: 8,
-                                 bytesPerRow: 0, space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        for (r, a) in all.enumerated() {
-            var cells: [(String, Double)] = []
-            for (c, e) in emotions.enumerated() {
-                let mine = tile(FaceParams.target(a, e))
-                save(mine, out.appendingPathComponent("\(a.rawValue)_\(e).png"))
-                let theirs = try #require(png(ref.appendingPathComponent("\(a.rawValue)_\(e).png")))
-                let (pm, pt) = (pixels(mine), pixels(theirs))
-                let d = mad(pm, pt)
-                cells.append((e, d))
-                total += d
-                count += 1
-                if d > worst.1 { worst = ("\(a.rawValue)_\(e)", d) }
-                // CGContext rows are bottom-up: row r is drawn from the top
-                let rect = CGRect(x: CGFloat(c * Self.cw), y: CGFloat((all.count - 1 - r) * Self.ch), width: cell.width, height: cell.height)
-                grid.draw(mine, in: rect)
-                var amplified = pm
-                for i in stride(from: 0, to: pm.count, by: 4) {
-                    for k in 0..<3 { amplified[i + k] = UInt8(min(255, 4 * abs(Int(pm[i + k]) - Int(pt[i + k])))) }
-                    amplified[i + 3] = 255
+@Suite struct FaceSheet {
+    /// Activities x emotions at 1x, then each effect (and a wink, an open mouth, the gaze extremes) at 2x and 1x
+    /// over two effect times; the left half over white, the right half over a dark grey.
+    @Test(.enabled(if: sheetDir != nil)) func contactSheet() throws {
+        let dir = try #require(sheetDir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let side = Int(FaceView.size.width)
+        var extras: [(String, FaceParams)] = ["blush", "sweat", "question", "zzz", "dots", "gear", "pulse", "sparkle"].map {
+            var p = neutral
+            p.effects = [$0]
+            return ($0, p)
+        }
+        var p = FaceParams.target(.talking, "playful")
+        p.mouthOpen = 1
+        extras.append(("open", p))
+        for i in [5, 7, 3, 1] { extras.append(("gaze", turned(FaceParams.target(.idle, "curious"), i))) }
+        let cols = emotions.count, gridH = all.count * side
+        let extraRows = (extras.count + 3) / 4
+        let half = cols * side
+        let H = gridH + extraRows * 2 * side * 2
+        let ctx = CGContext(data: nil, width: half * 2, height: H, bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        for (x, grey) in [(0, 1.0), (half, 0.16)] {
+            ctx.setFillColor(CGColor(gray: grey, alpha: 1))
+            ctx.fill(CGRect(x: x, y: 0, width: half, height: H))
+        }
+        func put(_ img: CGImage, _ x: Int, _ yTop: Int) {
+            ctx.draw(img, in: CGRect(x: x, y: H - yTop - img.height, width: img.width, height: img.height))
+        }
+        for x0 in [0, half] {
+            for (r, a) in all.enumerated() {
+                for (c, e) in emotions.enumerated() {
+                    put(FaceRender.image(size: FaceView.size, params: FaceParams.target(a, e), t: 0.6), x0 + c * side, r * side)
                 }
-                let img = amplified.withUnsafeMutableBytes { raw -> CGImage in
-                    CGContext(data: raw.baseAddress, width: Self.cw, height: Self.ch, bitsPerComponent: 8,
-                              bytesPerRow: Self.cw * 4, space: srgb,
-                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
-                }
-                diffGrid.draw(img, in: rect)
             }
-            rows.append((a, cells))
-        }
-        save(grid.makeImage()!, out.appendingPathComponent("swift_grid.png"))
-        save(diffGrid.makeImage()!, out.appendingPathComponent("diff_grid_x4.png"))
-        var report = ""
-        for (a, cells) in rows {
-            report += String(format: "%-10@", a.rawValue as NSString)
-                + cells.map { String(format: "%5.2f", $0.1) }.joined(separator: " ") + "\n"
-        }
-        report += String(format: "mean %.3f, worst %@ %.3f over %d tiles\n", total / Double(count), worst.0, worst.1, count)
-        try report.write(to: out.appendingPathComponent("mad.txt"), atomically: true, encoding: .utf8)
-        print(report)
-        #expect(total / Double(count) < 3.0)
-    }
-
-    /// Gaze, bob, open mouths, wink, a half blink and the two themed screens, at two effect times.
-    @Test(.enabled(if: extraDir != nil)) func extraFacesAgainstThePythonOne() throws {
-        let dir = try #require(extraDir)
-        let out = outDir ?? FileManager.default.temporaryDirectory.appendingPathComponent("face_swift")
-        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("cases.json")))
-            as! [String: [String: Any]]
-        var report = ""
-        for name in json.keys.sorted() {
-            let spec = json[name]!, d = spec["params"] as! [String: Any]
-            var p = FaceParams()
-            func num(_ k: String) -> Double { (d[k] as! NSNumber).doubleValue }
-            p.eyeW = num("eye_w"); p.eyeH = num("eye_h"); p.eyeRound = num("eye_round"); p.gazeX = num("gaze_x")
-            p.gazeY = num("gaze_y"); p.lidTop = num("lid_top"); p.lidAngle = num("lid_angle")
-            p.lidBottom = num("lid_bottom"); p.skew = num("skew"); p.wink = num("wink")
-            p.mouthCurve = num("mouth_curve"); p.mouthOpen = num("mouth_open"); p.mouthW = num("mouth_w")
-            p.hue = num("hue"); p.sat = num("sat"); p.glow = num("glow"); p.wander = num("wander"); p.bob = num("bob")
-            p.effects = Set(d["effects"] as! [String])
-            let bg = (spec["bg"] as? [String]).map { (Themes.rgba($0[0]), Themes.rgba($0[1])) }
-            for t in [0.6, 1.7] {
-                let mine = tile(p, t: t, bg: bg)
-                save(mine, out.appendingPathComponent("\(name)_\(t).png"))
-                let theirs = try #require(png(dir.appendingPathComponent("\(name)_\(t).png")))
-                report += String(format: "%-18@ t=%.1f  mad %.3f\n", name as NSString, t, mad(pixels(mine), pixels(theirs)))
+            for (i, (_, q)) in extras.enumerated() {
+                let row = i / 4, col = i % 4
+                for (j, t) in [0.6, 1.7].enumerated() {
+                    put(FaceRender.image(size: FaceView.size, scale: 2, params: q, t: t),
+                        x0 + col * 2 * side, gridH + (row * 2 + j) * 2 * side)
+                }
             }
         }
-        try report.write(to: out.appendingPathComponent("mad_extra.txt"), atomically: true, encoding: .utf8)
-        print(report)
-    }
-
-    /// The real widget (QWidget.grab on macOS, 72 dpi: text is 26 px, not the 34 px of a 96 dpi QImage).
-    @Test(.enabled(if: widgetDir != nil)) func widgetGrabsAgainstThePythonWidget() throws {
-        let dir = try #require(widgetDir)
-        let out = outDir ?? FileManager.default.temporaryDirectory.appendingPathComponent("face_swift")
-        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        var report = ""
-        for (a, e) in [(Activity.idle, "confused"), (.asleep, "neutral"), (.idle, "concerned"),
-                       (.thinking, "neutral"), (.working, "neutral")] {
-            let mine = tile(FaceParams.target(a, e))
-            save(mine, out.appendingPathComponent("widget_\(a.rawValue)_\(e).png"))
-            let theirs = try #require(png(dir.appendingPathComponent("\(a.rawValue)_\(e).png")))
-            report += String(format: "%-8@ %-9@ mad %.3f\n", a.rawValue as NSString, e as NSString, mad(pixels(mine), pixels(theirs)))
-        }
-        try report.write(to: out.appendingPathComponent("mad_widget.txt"), atomically: true, encoding: .utf8)
-        print(report)
+        save(ctx.makeImage()!, dir.appendingPathComponent("face_sheet.png"))
     }
 }

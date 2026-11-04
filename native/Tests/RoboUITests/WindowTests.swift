@@ -92,12 +92,12 @@ import RoboVoice
     @Test func itStartsAsJustAFaceInTheBottomRightCorner() async {
         let r = Rig()
         defer { r.close() }
-        #expect(r.frame.size == CGSize(width: 136, height: 104))
+        #expect(r.frame.size == CGSize(width: 136, height: 136))
         #expect(r.window.card.isHidden)
-        #expect(r.window.face.frame == CGRect(x: 4, y: 4, width: 128, height: 96))
+        #expect(r.window.face.frame == CGRect(x: 4, y: 4, width: 128, height: 128))  // the 112 disc and room for its shadow
         // Roam.edge (24) from the bottom-right corner of the usable area: x = 1440 - 136 - 24, 24 above the bottom
         #expect(r.frame.origin == CGPoint(x: 1280, y: 24))
-        #expect(r.window.windowTopLeft == Vec(1280, 772))
+        #expect(r.window.windowTopLeft == Vec(1280, 740))
     }
 
     /// Put the window in the middle of the display, clear of every edge.
@@ -113,11 +113,11 @@ import RoboVoice
         let before = r.faceMiddle
         r.window.open()
         #expect(!r.window.card.isHidden)
-        #expect(r.frame.width == 348 && r.frame.height >= 107)
-        #expect(r.window.face.frame.origin.x == 110)  // (348 - 128) / 2: centred under the card
+        #expect(r.frame.width == 348 && r.frame.height >= 139)
+        #expect(r.window.face.frame.origin.x == 110)  // (348 - 128) / 2: centred under the card, the disc's centre at x 174
         #expect(abs(r.faceMiddle.x - before.x) < 1 && abs(r.faceMiddle.y - before.y) < 1)
         r.window.closeBubble()
-        #expect(r.window.card.isHidden && r.frame.size == CGSize(width: 136, height: 104))
+        #expect(r.window.card.isHidden && r.frame.size == CGSize(width: 136, height: 136))
         #expect(abs(r.faceMiddle.x - before.x) < 1 && abs(r.faceMiddle.y - before.y) < 1)
     }
 
@@ -419,7 +419,7 @@ import RoboVoice
         #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))  // the main display only, not the built-in at negative x
         r.window.roamer.hold(now: r.clock.now(), pos: Vec(-1000, 600))  // a drop on the built-in display
         r.window.move(to: r.window.roamer.pos)
-        #expect(r.window.windowTopLeft == Vec(0, 600) && r.frame.origin == CGPoint(x: 0, y: 1440 - 600 - 104))  // stops at the main display's left edge
+        #expect(r.window.windowTopLeft == Vec(0, 600) && r.frame.origin == CGPoint(x: 0, y: 1440 - 600 - 136))  // stops at the main display's left edge
         #expect(r.space.display(at: r.window.faceCentre, in: userLayout) == mainDisplay)
     }
 
