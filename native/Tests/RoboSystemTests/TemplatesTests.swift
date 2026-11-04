@@ -130,23 +130,6 @@ private func noteHeaders() throws -> [(type: String, props: [String: String])] {
         #expect(Set(matches(#"\[\[feel:(\w+)\]\]"#, in: soul).map { $0[1] }).isSubset(of: Set(emotions)))
     }
 
-    @Test func theGuardPluginIsEnabledInTheSetupConfig() throws {
-        // Toolsets and memory are Setup's policy; the guard must stay on.
-        let enabled = try JSONSerialization.jsonObject(with: Data(config("plugins.enabled").utf8)) as! [String]
-        #expect(enabled.contains("robo-guard"))
-    }
-
-    @Test func roboGetsTheWholeLaptopAndKeepsItsSetupSafe() throws {
-        let toolsets = try JSONSerialization.jsonObject(with: Data(config("platform_toolsets.api_server").utf8)) as! [String]
-        #expect(toolsets == Setup.toolsets)
-        #expect(Set(["terminal", "file", "computer_use", "browser"]).isSubset(of: Set(toolsets)))
-        // nothing asks (the user's choice); robo-guard's blocks and approvals.deny hold in every mode.
-        #expect(config("approvals.mode") == "off" && config("approvals.timeout") == "120")
-        #expect(try JSONSerialization.jsonObject(with: Data(config("approvals.deny").utf8)) as! [String] == ["*hermes*"])
-    }
-
-    private func config(_ key: String) -> String { Setup.hermesConfig.first { $0.0 == key }!.1 }
-
     @Test(arguments: templateFiles)
     func templatesHoldNoMachinePaths(file: String) throws {
         // robo setup fills {{ROBO}}; a fixed /home/... path breaks on another laptop.

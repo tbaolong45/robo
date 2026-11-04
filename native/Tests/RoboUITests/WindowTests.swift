@@ -544,7 +544,7 @@ import RoboVoice
 
     @Test func closingStopsTheListenerTheWatcherAndThePoller() async {
         let watcher = FakeWatcher()
-        let r = Rig(watcher: watcher, health: "http://127.0.0.1:8642/p/robo")
+        let r = Rig(watcher: watcher, health: "http://127.0.0.1:8765")
         defer { r.close() }
         r.window.quit()
         #expect(await pump(r.terminated))

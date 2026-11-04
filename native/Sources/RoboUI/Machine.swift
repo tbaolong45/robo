@@ -1,4 +1,4 @@
-// What the window reaches the outside world through: Hermes, the microphone, the activity watcher, the
+// What the window reaches the outside world through: the agent, the microphone, the activity watcher, the
 // health poll (protocols with the real class as the conforming type) and `Machine` (displays, pointer,
 // clock, files, the Type window). The tests pass fakes for every one of them.
 import AppKit
@@ -6,7 +6,7 @@ import RoboCore
 import RoboSystem
 import RoboVoice
 
-/// What the window needs from Hermes: `HermesClient`, or a fake in tests.
+/// What the window needs from robo's agent: `HermesClient` (behind `AgentKeeper` in the app), or a fake in tests.
 protocol HermesAPI: AnyObject {
     func ask(_ text: String, sessionId: String, started: (@Sendable (String) -> Void)?) -> AsyncThrowingStream<Event, Error>
     func stop(_ runId: String) async throws
@@ -41,7 +41,7 @@ protocol Watching: AnyObject {
 }
 extension ActivityWatcher: Watching {}
 
-/// The gateway health poll: `HealthPoller`, or a fake.
+/// The agent's health poll: `HealthPoller`, or a fake.
 protocol Polling: AnyObject {
     func start()
     func poke()
@@ -75,9 +75,11 @@ struct Machine {
     var radarOn = true
     var radarNow = false
     var radarFetcher: @Sendable (_ cacheDir: URL, _ extraHosts: Set<String>) -> RadarFetching = { RadarFetcher(cacheDir: $0, extraHosts: $1) }
-    /// The LMS posts scan (Scout.swift): the Moodle address when the scan may run (the profile has one AND `robo setup` installed the
-    /// school-posts skill), else nil. The real one reads the Hermes profile (read only); the rig answers nil, so no test reads it.
+    /// The LMS posts scan (Scout.swift): the Moodle address when the scan may run (the agent's config.json has one), else nil. The
+    /// real one reads that file (read only); the rig answers nil, so no test reads it.
     var postsMoodle: () -> String? = { nil }
+    /// The model robo's agent runs (config.json), for the card's header chip.
+    var model = AgentHome.defaultModel
     var confirmLink: (URL, String) -> Bool = BoxTextView.askToOpen  // the same alert as a link in a reply
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     static let awayS = 300.0
@@ -128,8 +130,9 @@ struct Machine {
         if environment["ROBO_NUDGE_PRESENT"] == "1" { userAway = { false } }
         radarNow = environment["ROBO_RADAR_NOW"] == "1"
         dailyTokens = Usage.cap(environment, file: ActivityLog.dataDir.appendingPathComponent("daily_tokens"))
-        let profile = HermesProfile(home: home, env: environment)
-        postsMoodle = { Setup.postsMoodle(profile) }
+        let agent = AgentHome(home: home, env: environment)
+        postsMoodle = { Setup.postsMoodle(agent) }
+        model = agent.model
         outputDir = home.appendingPathComponent("Robo")
         vaultDir = Vault.dir(home: home)
         themeFile = Themes.configPath()
