@@ -94,8 +94,8 @@ private let FULL: Data = {
         Data(": open\n\n".utf8),
         frame(0, "message.delta", ["delta": "[[feel:happy]] Hel"]),
         frame(1, "reasoning.available", ["text": "hmm"]),  // post-hoc copy of the reply: ignored
-        frame(2, "tool.started", ["tool": "web_search", "preview": "robots"]),
-        frame(3, "tool.completed", ["tool": "web_search", "duration": 1.5, "error": false]),
+        frame(2, "tool.started", ["tool": "WebSearch", "preview": "robots"]),
+        frame(3, "tool.completed", ["tool": "WebSearch", "duration": 1.5, "error": false]),
         frame(4, "message.interim", ["text": "x", "already_streamed": true]),
         frame(5, "subagent.spawned", ["agent": "kid"]),
         frame(6, "approval.request", approval),
@@ -125,7 +125,7 @@ struct BrainTests {
     @Test func eventsParsesSplitFrames() async throws {
         let events = try await collect(client { _ in .sse(chunks: pieces(FULL, by: 7)) }.events("r1"))
         #expect(events == [
-            .delta("[[feel:happy]] Hel"), .toolStarted("web_search"), .toolCompleted(tool: "web_search", error: false),
+            .delta("[[feel:happy]] Hel"), .toolStarted("WebSearch"), .toolCompleted(tool: "WebSearch", error: false),
             .approvalNeeded("recursive delete: rm -rf /tmp/x", id: "q1"), .delta("lo"),
             .runEnded(status: "completed", output: "[[feel:happy]] Hello"),
         ])

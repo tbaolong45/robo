@@ -78,7 +78,7 @@ final class Flag: @unchecked Sendable {
     }
 
     @Test func theToolLabelShowsWhileWorkingAndAQuestionDuringARunWaitsForIt() async {
-        let r = Rig([.event(.toolStarted("web_search")), .wait, completed("ok")])
+        let r = Rig([.event(.toolStarted("WebSearch")), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("news?")
         #expect(await pump(r.window.mind.activity == .working))
@@ -473,8 +473,8 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
 
     @Test func aFinishedRunIsLoggedWithItsTokensStepsSecondsAndStatus() async throws {
         let usage = UsageRecord(model: "claude-opus-4-5", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15)
-        let r = Rig([.event(.toolStarted("web_search")), .event(.toolCompleted(tool: "web_search", error: false)),
-                     .event(.toolStarted("web_extract")), .event(.toolCompleted(tool: "web_extract", error: false)), .wait,
+        let r = Rig([.event(.toolStarted("WebSearch")), .event(.toolCompleted(tool: "WebSearch", error: false)),
+                     .event(.toolStarted("WebFetch")), .event(.toolCompleted(tool: "WebFetch", error: false)), .wait,
                      .event(.usage(usage)), completed("ok")])
         defer { r.close() }
         r.window.machine.wall = { 1_792_393_402 }
@@ -496,7 +496,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
 
     @Test(arguments: ["failed", "cancelled"])
     func aRunThatDidNotCompleteIsLoggedWithoutTokens(status: String) async throws {
-        let r = Rig([.event(.toolStarted("web_search")), .event(.runEnded(status: status))])
+        let r = Rig([.event(.toolStarted("WebSearch")), .event(.runEnded(status: status))])
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(!r.window.busy))
@@ -563,7 +563,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     // MARK: the working label
 
     @Test func theLabelSaysOnItAtSendThenKeepsTheLastToolBetweenTools() async {
-        let r = Rig([.event(.toolStarted("web_search")), .event(.toolCompleted(tool: "web_search", error: false)), .wait, completed("ok")])
+        let r = Rig([.event(.toolStarted("WebSearch")), .event(.toolCompleted(tool: "WebSearch", error: false)), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("news?")
         #expect(r.window.card.statusShown == "on it…" && r.window.card.dotsShown)
@@ -582,7 +582,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     }
 
     @Test func after40SecondsItSaysHowLongEvery20() async {
-        let r = Rig([.event(.toolStarted("web_search")), .wait, completed("ok")])
+        let r = Rig([.event(.toolStarted("WebSearch")), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.card.statusShown.contains("searching")))
@@ -597,7 +597,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     }
 
     @Test func theWaitForAClickIsNotCountedAsWorking() async {
-        let r = Rig([.event(.toolStarted("web_search")), .event(.approvalNeeded("send the mail")), .wait, completed("ok")])
+        let r = Rig([.event(.toolStarted("WebSearch")), .event(.approvalNeeded("send the mail")), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.card.approvalShown != nil))
@@ -920,11 +920,11 @@ extension Thread {
     }
 
     @Test func theTranscriptShowsFeelingsTextAndTools() async {
-        let h = FakeHermes([.event(.feeling("happy")), delta("Hello"), .event(.toolStarted("web_search")), delta(" there"),
+        let h = FakeHermes([.event(.feeling("happy")), delta("Hello"), .event(.toolStarted("WebSearch")), delta(" there"),
                             completed("Hello there")])
         let (code, out) = await chat(h, lines: ["hi", "", "  ", nil])
         #expect(code == 0)
-        #expect(out == "you> [happy] Hello\n  (web_search…)\n there\nyou> you> you> ")
+        #expect(out == "you> [happy] Hello\n  (WebSearch…)\n there\nyou> you> you> ")
         #expect(h.asked.map(\.text) == ["hi"] && h.asked[0].session == "robo-chat-test")
     }
 

@@ -39,7 +39,7 @@ private func fuzz(seed: UInt64) -> (digest: UInt64, visits: String, clocks: Doub
                 let ev: Event
                 switch rng.choice(Array(0..<7)) {
                 case 0: ev = .userSent("x")
-                case 1: ev = .toolStarted(rng.choice(["browser_click", "web_search", "zzz", ""]))
+                case 1: ev = .toolStarted(rng.choice(["browser_click", "WebSearch", "zzz", ""]))
                 case 2: ev = .toolCompleted(tool: "t", error: rng.random() < 0.5)
                 case 3: ev = .feeling(rng.choice(emotions + ["bogus", ""]))
                 case 4: ev = .delta("d")
@@ -83,7 +83,7 @@ struct MindTests {
     }
 
     @Test func toolDoneGoesBackToThinking() {
-        let m = runMind(.userSent("x"), .toolStarted("web_search"), .toolCompleted(tool: "web_search", error: false)).m
+        let m = runMind(.userSent("x"), .toolStarted("WebSearch"), .toolCompleted(tool: "WebSearch", error: false)).m
         #expect(m.activity == .thinking && m.label == "" && m.emotion == "neutral")
     }
 
@@ -99,14 +99,14 @@ struct MindTests {
     }
 
     @Test func toolErrorFlashesConcernedThenContinues() {
-        var (m, t) = runMind(.userSent("x"), .toolStarted("web_search"), .toolCompleted(tool: "web_search", error: true))
+        var (m, t) = runMind(.userSent("x"), .toolStarted("WebSearch"), .toolCompleted(tool: "WebSearch", error: true))
         #expect(m.activity == .thinking && m.emotion == "concerned")
         m = m.tick(now: t + Mind.flash)
         #expect(m.activity == .thinking && m.emotion == "neutral")
     }
 
     @Test func toolOkKeepsEmotion() {
-        let m = runMind(.userSent("x"), .toolStarted("memory"), .toolCompleted(tool: "memory", error: false)).m
+        let m = runMind(.userSent("x"), .toolStarted("memory_add"), .toolCompleted(tool: "memory_add", error: false)).m
         #expect(m.emotion == "neutral")
     }
 
@@ -197,8 +197,8 @@ struct MindTests {
     }
 
     @Test func toolErrorFlashGivesTheReplyEmotionBack() {
-        var (m, t) = runMind(.userSent("x"), .feeling("happy"), .toolStarted("web_search"),
-                             .toolCompleted(tool: "web_search", error: true))
+        var (m, t) = runMind(.userSent("x"), .feeling("happy"), .toolStarted("WebSearch"),
+                             .toolCompleted(tool: "WebSearch", error: true))
         #expect(m.emotion == "concerned")
         m = m.tick(now: t + Mind.flash)
         #expect(m.emotion == "happy")
@@ -228,7 +228,7 @@ struct MindTests {
     }
 
     @Test func listeningOffDuringARunChangesNothing() {
-        let (m, t) = runMind(.userSent("x"), .toolStarted("web_search"))
+        let (m, t) = runMind(.userSent("x"), .toolStarted("WebSearch"))
         #expect(m.react(.listening(false), now: t + 1).activity == .working)
     }
 

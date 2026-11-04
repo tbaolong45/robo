@@ -130,7 +130,7 @@ import RoboSystem
         #expect(await r.run(until: !w.busy && w.tw.k > 5))
         #expect(w.tw.pending && !w.card.footerShown.isEmpty && w.card.footer.isHidden)
         r.hermes.onAsk = nil
-        r.hermes.script = [.event(.toolStarted("web_search")), .wait, completed("ok")]
+        r.hermes.script = [.event(.toolStarted("WebSearch")), .wait, completed("ok")]
         w.ask("second")  // asked while the first answer is still on screen
         #expect(w.tw.text == "" && w.revealer == nil && w.closeAt == 0)
         #expect(w.card.footerShown == "" && w.card.footer.isHidden)
