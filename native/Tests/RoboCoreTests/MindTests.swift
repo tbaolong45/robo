@@ -88,8 +88,9 @@ struct MindTests {
     }
 
     @Test(arguments: [
-        ("browser_navigate", "browsing…"), ("browser_click", "browsing…"), ("web_search", "searching the web…"),
-        ("web_extract", "reading a page…"), ("memory", "remembering…"), ("skill_view", "checking a skill…"),
+        ("browser_navigate", "browsing…"), ("browser_click", "browsing…"), ("WebSearch", "searching the web…"),
+        ("WebFetch", "reading a page…"), ("memory_add", "remembering…"), ("Skill", "checking a skill…"),
+        ("Bash", "running a command…"),
         ("frobnicate", "using frobnicate…"),
     ])
     func toolStartedWorksWithLabel(tool: String, label: String) {

@@ -33,15 +33,21 @@ public struct Mind: Equatable, Sendable {
 
     // Hermes tool names (~/.hermes/hermes-agent/tools/) -> status label. browser_* -> "browsing…".
     private static let toolLabels = [
-        "web_search": "searching the web…",
-        "web_extract": "reading a page…",
-        "memory": "remembering…",
-        "skill_view": "checking a skill…",
-        "skills_list": "checking my skills…",
-        "skill_manage": "updating a skill…",
+        "WebSearch": "searching the web…",
+        "WebFetch": "reading a page…",
+        "Bash": "running a command…",
+        "Read": "reading a file…",
+        "Write": "writing a file…",
+        "Edit": "editing a file…",
+        "Glob": "looking for files…",
+        "Grep": "searching files…",
+        "Skill": "checking a skill…",
+        "memory_add": "remembering…",
+        "memory_search": "recalling…",
+        "memory_forget": "forgetting…",
     ]
 
-    /// The status line for a Hermes tool name.
+    /// The status line for an agent tool name.
     public static func toolLabel(_ tool: String) -> String {
         tool.hasPrefix("browser_") ? "browsing…" : toolLabels[tool] ?? "using \(tool)…"
     }
