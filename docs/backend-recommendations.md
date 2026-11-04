@@ -1,8 +1,9 @@
 # Backend recommendations: voice, interaction, motion, agent
 
-Written 2026-11-04 for the revamp. Every claim below was checked against the code in this checkout and cites
-`file:line` (paths under `native/Sources/` unless they say otherwise). Nothing here is built yet; each item says how
-to measure it, so a change can be compared with the code before it (the rule in `CLAUDE.md` "Verify").
+Written 2026-11-04 for the revamp; the `file:line` references were checked again after the revamp was merged
+(robo-agent, macOS 26 minimum). Every claim cites `file:line` (paths under `native/Sources/` unless they say
+otherwise). Item 1 is done; nothing else here is built yet. Each item says how to measure it, so a change can be
+compared with the code before it (the rule in `CLAUDE.md` "Verify").
 
 **Terms used once and then freely**
 - **ASR** (automatic speech recognition): audio in, text out. Robo's is NVIDIA Parakeet TDT 0.6B v2, English only,
@@ -23,7 +24,7 @@ Rank = value for the user divided by effort and risk. S = under a day, M = a few
 
 | # | Item | Area | Effort | Why first |
 |---|------|------|--------|-----------|
-| 1 | A refused hands-free sentence wipes the reply being read | interaction | S | made more frequent by the new `Intent` rule |
+| 1 | ~~A refused hands-free sentence wipes the reply being read~~ **done** | interaction | S | fixed in the revamp |
 | 2 | A follow-up utterance can run 120 s past a 15 s window | interaction / safety | S | TV speech delivered "hands-free" after the MIC light is off |
 | 3 | Voice eval measures name matching only: add timing, WER, a replay-through-`Listener` mode | voice | M | everything below needs a number first |
 | 4 | Push-to-talk feel: a "transcribing" state, a second press = "send now", shorter tail | voice / interaction | S | perceived latency, cheap |
@@ -40,29 +41,26 @@ Rank = value for the user divided by effort and risk. S = under a day, M = a few
 
 ---
 
-## 1. A refused hands-free sentence wipes the reply being read (S)
+## 1. A refused hands-free sentence wiped the reply being read (S) — DONE
 
-**Problem.** In a follow-up window the listener calls `onWake()` as soon as it has two words (`Listen.swift:456-461`),
-then delivers the text. `onWake` becomes `.listening(true)` in the app, which stops the run and clears the reply
-(`RoboUI/App.swift:202-208`). Only after that does `onHeard` check `Intent.changesThings` and refuse
-(`App.swift:159-161`), replacing the reply with "That would change something...". Since the `Intent` rule was
-inverted (only clearly read-only requests pass hands-free), many more sentences are refused, so a stray "okay so..."
-from the room now costs the user the answer they were reading.
+**Was.** In a follow-up window the listener called `onWake()` as soon as it had two words, then delivered the text;
+`onWake` became `.listening(true)`, which stopped the run and cleared the reply, and only then did `onHeard` check
+`Intent.changesThings` and refuse. With the allow-list `Intent` rule (only clearly read-only requests pass hands-free)
+a stray "okay so..." from the room cost the user the answer they were reading.
 
-**Recommendation.** Decide before waking. `RoboVoice` does not depend on `RoboCore` (`native/Package.swift:16-21`), so
-give `Listener` a filter closure (for example `acceptsHandsFree: (String) -> Bool`, passed by the app as
-`{ !Intent.changesThings($0) }`), checked in the `handsFree` branch of `heard` before `onWake()`. A refused text then
-gets a short note through `onNote` (or a new callback) that does not clear the reply; the window can stay open.
-
-**Tradeoff.** One more seam between voice and UI. **Measure.** A `RoboUITests` case: a reply is shown, the window is
-open, a refused sentence arrives; the reply text must survive. **Note for the lead:** the message in `App.swift:161`
-says "That would change something"; with the new rule "I only take questions without the key, so hold Ctrl+Q" would be
-more accurate (outside my files).
+**Fixed in the revamp, close to the recommendation.** In the `handsFree` branch, `heard` no longer wakes robo
+(`RoboVoice/Listen.swift:456-461`); the app decides. `onHeard` refuses a sentence that changes things before anything
+is woken (`RoboUI/App.swift:158-173`), and only an accepted sentence sends `.listening(true)` itself.
+`refuseHandsFree` (`App.swift:177-181`) leaves the reply, puts the note beside it (a chat line or the card's "heard"
+line) and reopens the follow-up window for the time it had left. The message is now
+"Hold Ctrl+Q and say that again: without the key I only answer questions." (`App.swift:156`). The measurement asked
+for exists: `aRefusedHandsFreeSentenceLeavesTheReplyAndTheFollowUpWindowAsTheyWere`
+(`native/Tests/RoboUITests/AppTests.swift:833`), for the card and the chat.
 
 ## 2. A follow-up utterance can outlive its window by 105 s (S)
 
-**Problem.** Two clocks own the window. The app sets `followUntil = typedAt + 15 s` (`App.swift:451-456`) and drives
-the MIC light and `nudgeHeld` from it (`App.swift:337`, `Nudges.swift:229`); the listener keeps its own `openUntil`
+**Problem.** Two clocks own the window. The app sets `followUntil = typedAt + 15 s` (`App.swift:466-471`) and drives
+the MIC light and `nudgeHeld` from it (`App.swift:351`, `Nudges.swift:229`); the listener keeps its own `openUntil`
 (`Listen.swift:216`, `:342-345`). When sound crosses the gate inside the window, `woke` is true (`Listen.swift:396-398`),
 so `record` switches to the patient settings: 3 s of silence or up to `patientMaxS` = 120 s (`Listen.swift:24`, `:504`).
 `inWindow` was captured at the start, so whatever is said during those 120 s is delivered with `handsFree: true`
@@ -81,9 +79,9 @@ today it records 120 s; after, it ends by the cap and `handsFree` text never arr
 
 ## 3. Measure first: the voice eval checks only the name matcher (M)
 
-**Problem.** `robo voice-eval` transcribes clips and scores `addressed(heard)` (`RoboVoice/VoiceEval.swift:118-120`,
-`:147-150`): did a sentence with "robo" get taken. The live app wakes by Ctrl+Q, and with the key registered name wake is
-off (`RoboUI/Launch.swift:82`, `nameWake: !byKey`). So the eval tests the fallback mode, not the words of the request,
+**Problem.** `robo voice-eval` transcribes clips and scores `addressed(heard)` (`RoboVoice/VoiceEval.swift:122`,
+`:147`): did a sentence with "robo" get taken. The live app wakes by Ctrl+Q, and with the key registered name wake is
+off (`RoboUI/Launch.swift:132`, `nameWake: !byKey`). So the eval tests the fallback mode, not the words of the request,
 and it times nothing except the model load (`VoiceEval.swift:103-106`). The gate, the endpointer, the windows and
 the pre-roll are never exercised on real audio.
 
@@ -102,8 +100,8 @@ the user's own voice (`robo voice-eval --record`), TTS only compares a change wi
 
 ## 4. Push-to-talk feel (S)
 
-**Problem a: no "transcribing" state.** Key down shows "listening" (`Window.swift:333-337`); key up only calls
-`ear.release()` (`Window.swift:178`). The transcription runs on the inference queue (`Listen.swift:486-491`) and the UI
+**Problem a: no "transcribing" state.** Key down shows "listening" (`Window.swift:331-335`); key up only calls
+`ear.release()` (`Window.swift:176`). The transcription runs on the inference queue (`Listen.swift:489-494`) and the UI
 hears nothing until `onHeard` (`App.swift:156`). The face keeps "listening" while robo is in fact busy.
 **Fix:** a callback at release (and at the end of a windowed utterance, before `infer.async`) that switches the face to
 a "thinking/transcribing" look. **Measure:** the time from key-up to `ask()` in a log line; the look should change
@@ -154,7 +152,7 @@ instead. **Measure:** `footprint <pid>` (not `ps`, per CLAUDE.md) idle before/af
 
 ## 7. A VAD model after the gate (M)
 
-**Problem.** Speech is loudness only: `rms(frame) > gate` (`Listen.swift:381`, `:388`, `Endpointer.feed` at `:153`). A
+**Problem.** Speech is loudness only: `rms(frame) > gate` (`Listen.swift:381`, `:388`, `Endpointer.feed` at `:151`). A
 door, music or a cough above the gate starts a recording and a transcription.
 
 **Recommendation.** Silero VAD v5 (an ~2 MB ONNX model) run through the ONNX Runtime already linked for Parakeet, as a
@@ -171,11 +169,11 @@ transcriptions) and the user's speech clips (misses must not go up).
 **Facts.** Parakeet TDT 0.6B v2 is English only (`Parakeet.swift:1`), so Vietnamese speech is not recognised at all
 (the Vietnamese words in `Intent` matter for typed or future input). The bit-exact numpy-matching mel code
 (`Parakeet.swift:7-19`) and the CPU-only rule were tuned for the name matcher, which the Ctrl+Q mode does not use
-(`Launch.swift:82`). The package targets macOS 14 (`native/Package.swift:7`).
+(`Launch.swift:132`). The package targets macOS 26 (`native/Package.swift:7`).
 
 **Candidates, after measuring Parakeet's RTF and WER on the user's clips:**
-- **Apple SpeechAnalyzer / SpeechTranscriber** (macOS 26, on device, streaming partial results, many languages). Needs
-  `if #available(macOS 26, *)` while the package says macOS 14. Partial results are for display only: never end a
+- **Apple SpeechAnalyzer / SpeechTranscriber** (macOS 26, on device, streaming partial results, many languages). The
+  package's macOS 26 minimum means no `#available` check is needed. Partial results are for display only: never end a
   request on a "?" and no spoken end word (CLAUDE.md constraints); the request still ends on the key or 3 s of silence.
 - **WhisperKit** (Swift package, CoreML, multilingual): a new dependency; CoreML transcribes differently from the CPU
   (CLAUDE.md), which now matters only for the fallback name wake.
@@ -184,14 +182,16 @@ transcriptions) and the user's speech clips (misses must not go up).
 **Tradeoff.** Switching moves every tuned number. **Measure:** the same clips through each candidate: WER, RTF,
 key-up-to-text time, memory. Change only for a clear win.
 
-## 9. The agent service (summary; D1-D3 own the design) (M)
+## 9. The agent service (M)
 
-The plan replaces Hermes with a local Python service on the Claude Agent SDK behind the same HTTP contract the app
-already speaks: `POST /v1/runs`, `GET /v1/runs/{id}/events` (server-sent events), `/stop`, `/approval`
-(`RoboCore/Brain.swift:85-103`, `:151-160`) and `/health` (`RoboCore/Health.swift:29`). Keeping the contract means the app
-does not change. The harness is the SDK's tool loop plus a guard hook (today's `robo-guard` blocks and asks), approvals
-and receipts; memory is local facts with BM25 (a classic keyword-ranking formula) plus the profile, Supermemory
-optional; self-improvement is a review after each run that may write a vetted "learned skill".
+Built in the revamp: `robo-agent` (`agent/robo_agent/`) replaced Hermes behind the same HTTP contract the app already
+spoke: `POST /v1/runs`, `GET /v1/runs/{id}/events` (server-sent events), `/stop`, `/approval`
+(`RoboCore/Brain.swift:85-103`, `:156`; served by `agent/robo_agent/server.py`) and `/health`
+(`RoboCore/Health.swift:31`). The harness (`harness.py`) is the SDK's tool loop plus the guard as a PreToolUse hook
+(`guard.py`), approvals and receipts; memory (`memory.py`) is local facts with BM25 (a classic keyword-ranking formula)
+plus the profile, Supermemory optional; self-improvement (`learn.py`) is a review after each run that may write a vetted
+"learned skill". The post-run review and the daily profile already use a cheaper model (`harness.CHEAP_MODEL`); the LMS
+scan runs on the main model (`config.json` `model`).
 
 **Recommendations.**
 - **Evals on every prompt or skill change.** They exist: `tests/evals/requests.jsonl` (49 read-only student requests),
@@ -201,8 +201,9 @@ optional; self-improvement is a review after each run that may write a vetted "l
 - **Prompt caching** for the fixed persona and skill text, so each run pays for it once. `Usage` already records
   `cacheRead`/`cacheWrite` per run (`RoboCore/Usage.swift:9-12`, `:41`): the hit rate can be watched from day one.
 - **Cost per run.** Tokens per run are logged to `usage.jsonl`; add the model and price so a day's spend is visible.
-  CLAUDE.md's numbers (a chat turn ~95k tokens, one course scan ~340k) are the baseline to beat.
-- **A cheap model for background passes** (LMS scan, post-run review), the strong one for the user's own requests.
+  CLAUDE.md's numbers (a chat turn ~95k tokens, one course scan ~340k, measured with Hermes) are the baseline to beat.
+- **A cheap model for the LMS scan too** (the post-run review has one already), the strong one for the user's own
+  requests.
 
 **Tradeoff.** A learned skill is code-like text the agent will obey: it must pass the same guard and evals as a
 hand-written one. **Measure:** eval pass rate, tokens and cost per request kind, cache hit rate.
@@ -210,7 +211,7 @@ hand-written one. **Measure:** eval pass rate, tokens and cost per request kind,
 ## 10. The listener's state as one explicit mode (M)
 
 **Problem.** `Listener` holds 11 fields under one lock: `loaded`, `alive`, `opening`, `generation`, `openUntil`, `asked`,
-`handsFreeText`, `held`, `heldAt`, `tapped`, `failure` (`Listen.swift:211-223`). Which combinations are legal is spread
+`handsFreeText`, `held`, `heldAt`, `tapped`, `failure` (`Listen.swift:212-223`). Which combinations are legal is spread
 over `hold`, `release`, `followUp`, `open`, `heard` and the run loop (`Listen.swift:325-350`, `:365-372`, `:453-471`).
 Items 1, 2 and 4 all change these transitions.
 
@@ -224,21 +225,21 @@ today) and add cases for 1, 2 and 4 first. **Measure:** the suite stays green; n
 ## 11. One frame clock for motion (M)
 
 **Problem.** Seven repeating main-thread timers animate the app: the face (25-30 Hz, `RoboUI/FaceView.swift:16-23`,
-`:63-67`), roaming (30 Hz moving, 2 Hz resting, `Window.swift:25`, `:262-270`), the window tick (10 Hz,
-`Window.swift:161`), typing (30 Hz while letters are due, `App.swift:409`), the card's shade ease (`App.swift:557`), the
-chat's shade ease (`RoboUI/Chat.swift:203`) and the typing dots (`RoboUI/CardChrome.swift:475`). Most run only while
+`:64-68`), roaming (30 Hz moving, 2 Hz resting, `Window.swift:25`, `:260-268`), the window tick (10 Hz,
+`Window.swift:159`), typing (30 Hz while letters are due, `App.swift:423`), the card's shade ease (`App.swift:572`), the
+chat's shade ease (`RoboUI/Chat.swift:215`) and the typing dots (`RoboUI/CardChrome.swift:478`). Most run only while
 needed, which is good, but during a reply four or five tick at slightly different rates and phases, not in step with
-the display. The face also repaints on every tick whether or not anything changed (`FaceView.swift:104-110`).
+the display. The face also repaints on every tick whether or not anything changed (`FaceView.swift:105-110`).
 
 **Recommendation.** First the cheap part: skip `needsDisplay` when the face parameters are unchanged (an idle face
 between blinks and glances). Then, if the measurement says it is worth it, one display-synchronised clock
-(`NSView.displayLink(target:selector:)`, available from macOS 14) that calls each active animation with the same `dt`
+(`NSView.displayLink(target:selector:)`, available since macOS 14, so well within the macOS 26 minimum) that calls each active animation with the same `dt`
 and stops when none is active, with `preferredFrameRateRange` capped at 30 so a 120 Hz screen does not quadruple the cost.
 
 **Tradeoff.** A display link that is left running costs more than the timers it replaces; the on-demand behaviour
 must survive. **Measure:** CPU of the running app idle, while typing, while roaming (`top -pid` over a minute, or
-Instruments' Time Profiler), before and after. CLAUDE.md's Python figure was ~5 % of a core idle; the Swift build has no
-recorded number yet.
+Instruments' Time Profiler), before and after. The retired Python build measured ~5 % of a core idle; the Swift build
+has no recorded number yet.
 
 ## 12. Roaming: a retarget starts again from zero speed (S)
 
@@ -250,8 +251,8 @@ then called, a call target that moves, `Roam.swift:165-172`) the pet stops dead 
 spring tuned to arrive as fast as possible without overshooting; `Animator` already uses one, `Animator.swift:134-140`),
 capped at the walk speed. The wall bounce (`Roam.swift:24-30`) can stay as it is.
 
-**Tradeoff.** The pure `Roamer` tests pin exact paths, and the Python tree is the spec with golden values; new golden
-values are needed. **Measure:** the speed limit test (`neverFasterThanTheSpeedLimit`) and a new test that speed is
+**Tradeoff.** The pure `Roamer` tests pin exact paths with golden values that came from the retired Python build; new
+golden values must be generated from the Swift code. **Measure:** the speed limit test (`neverFasterThanTheSpeedLimit`) and a new test that speed is
 continuous across a retarget.
 
 ## 13. Animator dictionaries every frame (S, measure first)
@@ -279,8 +280,10 @@ instead of the first free tick.
 
 ## Checked and dropped or corrected
 
-- "macOS 26 is the new minimum": the package says macOS 14 (`native/Package.swift:7`); macOS 26 APIs need `#available`.
+- "macOS 26 is the new minimum": it was macOS 14 when this was written; the revamp made it so
+  (`native/Package.swift:7`, `bundle.sh` `LSMinimumSystemVersion` 26.0), so macOS 26 APIs need no `#available`.
 - "Add an eval set of real requests": one exists (`tests/evals/`, `scripts/eval_live.py`); item 9 extends it.
-- "About 6 timers": there are 7 repeating ones plus a one-shot in `Card.swift:362` and the 1 Hz blur refresh
+- "About 6 timers": there are 7 repeating ones plus one-shots in `Card.swift:364` and `ChatPanel.swift:301` (the
+  throttled reply renders) and the 1 Hz blur refresh
   (`BlurVeil.swift:55`), and most are already on demand, so the gain is smaller than "6 always-on timers" suggests.
 - "Nudges at natural breaks instead of fixed slots": partly true already (item 14).

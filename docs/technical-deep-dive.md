@@ -39,14 +39,18 @@ You don't need to read it in order. Every numbered part stands on its own.
 **The idea.** A *process* is a running program with its own memory. Two processes can't see
 each other's variables; they talk through a channel such as a network socket.
 
-**In Robo.** Robo (the face) and Hermes (the agent) are separate processes. They talk over HTTP
-on `127.0.0.1` (*loopback*: a network address that never leaves the machine).
+**In Robo.** The app (the face, Swift) and `robo-agent` (the brain, Python, `agent/`) are
+separate processes. They talk over HTTP on `127.0.0.1:8765` (*loopback*: a network address that
+never leaves the machine). The app starts the agent (`RoboSystem/Agent.swift`, `AgentService`)
+and starts it again before a request if it has died; its output goes to
+`~/Library/Logs/Robo/agent.log`.
 
-**Why it matters.** Each side can crash, restart or be replaced on its own. Robo needs no AI
-code, and Hermes could run without Robo (`robo chat` is a text-only client for the same API).
-The price: everything that crosses the boundary must be turned into text (JSON), and either side
-can be "not answering" at any moment. That's why there's a HERMES status light
-(`RoboCore/Health.swift`: one miss turns it amber, two in a row red).
+**Why it matters.** Each side can crash, restart or be replaced on its own. The app needs no AI
+code, and the agent could run without it (`robo chat` is a text-only client for the same API).
+The agent was in fact replaced once: until 2026-11-04 it was Hermes Agent, and `robo-agent` serves
+the same API, so the app barely changed. The price: everything that crosses the boundary must be
+turned into text (JSON), and either side can be "not answering" at any moment. That's why there's
+an AGENT status light (`RoboCore/Health.swift`: one miss turns it amber, two in a row red).
 
 ### 1.2 Layers and modules
 **The idea.** Code is split into *modules* (units that compile separately). A rule says which
@@ -72,15 +76,18 @@ around the outside.
 The UI calls them on a timer and shows the result.
 
 **Why it matters.** A test can say "it is 08:59 on a Tuesday" and check the answer exactly, with
-no waiting and no real clock. That's how ~1,300 Swift tests run in seconds.
+no waiting and no real clock. That's how ~1,500 Swift tests run in seconds.
+
+The agent follows the same idea: `server.make_app` and `harness.execute` take the SDK client as a
+parameter (`connect`), so the pytest suite drives whole runs with a fake and never calls Claude.
 
 ### 1.4 Dependency injection with protocols ("seams")
 **The idea.** A *protocol* (Swift's word for an *interface*) lists what something must be able
 to do, without saying how. Code that depends on the protocol can be handed the real thing or a
 fake.
 
-**In Robo.** `RoboUI/Machine.swift` defines what the window needs from the outside world: Hermes,
-the microphone, the activity watcher, the health poll, and a `Machine` (displays, pointer,
+**In Robo.** `RoboUI/Machine.swift` defines what the window needs from the outside world: the
+agent (`HermesAPI`, named after the first agent), the microphone, the activity watcher, the health poll, and a `Machine` (displays, pointer,
 clock, files). The app passes the real ones; the tests pass fakes through a "rig" (`Rig(...)` in
 the UI tests).
 
@@ -91,7 +98,8 @@ card, can be tested without a microphone, a network or a screen.
 **The idea.** *Porting* means rewriting a program in another language. *Golden values* are
 outputs saved from the old version that the new version must reproduce exactly.
 
-**In Robo.** The Swift app began as a port of an earlier Python app (since retired). Some decisions
+**In Robo.** The Swift app began as a port of an earlier Python/Qt app (deleted from the repo in
+the 2026-11-04 revamp; the golden values stay in the Swift tests). Some decisions
 keep Python's behaviour on purpose:
 - `RoboCore/PyJSON.swift` re-implements JSON the way Python reads it (where `30` and `30.0`
   differ).
@@ -215,39 +223,45 @@ Microsoft) is a library that runs them on many platforms.
 **In Robo.** In the fallback mode (wake by name), a regex accepts what Parakeet actually writes
 for "Robo": `robo`, `roboh`, `robot`, "hey robo", "ok robo"... (`startName` and `lead` in
 `Listen.swift`). `RoboCore/Intent.swift` reads a sentence's words to decide whether it
-**changes things** ("send", "delete", "pay", Vietnamese "gửi", or a bare "yes").
+**changes things**. It is an *allow-list*: only a sentence that is clearly read-only (a question,
+"show / read / find / explain...", thanks, "close the chat") counts as harmless; any write verb
+("send", "delete", "pay", Vietnamese "gửi"), any other order, a bare "yes" and anything it can't
+read count as changing things.
 
 **Why it matters.** For 15 s after an answer you may reply without the key. That window can also
-be filled by a TV or a roommate, so a request that changes things is refused there and needs the
-key held. A sentence of only one word ("yeah") doesn't wake it either: the first version woke on
-any noise and wiped the reply being read.
+be filled by a TV or a roommate, so anything but a read-only sentence is refused there ("Hold
+Ctrl+Q and say that again: without the key I only answer questions.") and needs the key held. A
+refused sentence doesn't wake Robo, so the reply you were reading stays. A sentence of only one
+word ("yeah") doesn't wake it either: the first version woke on any noise and wiped the reply
+being read.
 
 ---
 
 ## 3. Talking to the agent: HTTP and streaming
 
-Code: `RoboCore/Brain.swift` (`HermesClient`).
+Code: the app's client is `RoboCore/Brain.swift` (`HermesClient`, named after the first agent);
+the server is `agent/robo_agent/server.py` (aiohttp).
 
 ### 3.1 HTTP and REST
 **The idea.** *HTTP* is the web's request/response protocol: a *method* (GET = read,
 POST = act), a *path*, *headers* and a *body*. A *REST API* is a set of such paths.
 
-**In Robo.** Four calls:
+**In Robo.** Four calls, plus a health check:
 | Call | What it does |
 |---|---|
-| `POST /p/robo/v1/runs` with `{"input": text, "session_id": ...}` | start a "run" (one request to the agent); returns its id |
-| `GET /p/robo/v1/runs/{id}/events` | the stream of what happens (see 3.2) |
-| `POST /p/robo/v1/runs/{id}/approval` | answer an Allow/Deny question |
-| `POST /p/robo/v1/runs/{id}/stop` | cancel the run |
-
-`/p/robo/` selects the Hermes **profile** named `robo` on the shared gateway.
+| `POST /v1/runs` with `{"input": text, "session_id": ...}` | start a "run" (one request to the agent); returns its id |
+| `GET /v1/runs/{id}/events` | the stream of what happens (see 3.3) |
+| `POST /v1/runs/{id}/approval` with `{"choice": "once"\|"session"\|"deny", "request_id": ...}` | answer an Allow/Deny question |
+| `POST /v1/runs/{id}/stop` | cancel the run |
+| `GET /health` | "are you up?" (no key needed; the AGENT light polls it) |
 
 ### 3.2 Authentication with a bearer token
 **The idea.** An *API key* is a long random secret. Sent as `Authorization: Bearer <key>`, it
 proves the caller is allowed.
 
-**In Robo.** `robo setup` generates keys (`tokenURLSafe(32)`: 32 random bytes) and stores them in
-`.env` files: one for the host gateway, and a *separate one* for the robo profile.
+**In Robo.** `robo setup` makes a server key (32 random bytes from the system's secure generator,
+base64url) and stores it in `~/.local/share/robo/agent/server_key` (0600). The app sends it with
+every call, and the server compares it in constant time (`hmac.compare_digest`).
 
 **Why it matters.** Even on loopback, any program on the Mac could otherwise drive an agent that
 has every permission.
@@ -269,7 +283,9 @@ answer.
 
 ### 3.4 Resuming, and failing safe
 **In Robo.** If the stream drops, the client reconnects once, asking for events after the last
-id it saw (Hermes replays the rest). If that fails too, it **stops the run**.
+id it saw (`Last-Event-ID`; the server keeps every event of a run and replays the rest). If that
+fails too, it **stops the run**. The server also writes a `: ping` comment every 15 s on a quiet
+stream, because the client gives up on a stream that is silent for 120 s.
 
 **Why it matters.** An agent with every permission should never keep acting when nobody can see
 what it's doing.
@@ -277,15 +293,18 @@ what it's doing.
 ### 3.5 Sessions
 **The idea.** A *session* is a conversation the agent remembers.
 
-**In Robo.** Robo uses one Hermes session id a day for normal chat, and a fresh one for each
+**In Robo.** The app uses one session id a day for normal chat (the id also holds a short hash of
+`SOUL.md` and the skills, taken when the app starts), and a fresh one for each
 automatic LMS course scan (`robo-posts-<id>`), so text from one course's posts never reaches the
-next run's context (see 14).
+next run's context (see 14). The agent maps each id to the SDK's own session in `sessions.json`
+and resumes it.
 
 ---
 
 ## 4. The agent side: LLMs, tools, skills, guard
 
-These files live in `hermes/`, and `robo setup` installs them into the profile.
+All of it lives in `agent/`. There is no install step: the service reads `SOUL.md` and the skills
+from the checkout on every run and fills their placeholders from `config.json`.
 
 ### 4.1 LLM agents and tool calling
 **The idea.** A *large language model* (LLM) predicts text. An *agent* wraps it in a loop:
@@ -295,16 +314,24 @@ These files live in `hermes/`, and `robo setup` installs them into the profile.
 3. the program runs the tool and feeds the result back;
 4. repeat until the model writes a final answer.
 
-**In Robo.** Hermes runs that loop with `claude-sonnet-5.5` (set in `Setup.swift`). The enabled
-*toolsets* are: browser, web, vision, skills, memory, session_search, todo, terminal, file,
-computer_use and code_execution. *computer_use* means it can see the screen and click and type
-in desktop apps.
+**In Robo.** `agent/robo_agent/harness.py` runs that loop with Anthropic's **Claude Agent SDK**
+and the model `claude-sonnet-5-5` (the default in `config.json`). The tools are Bash, Read,
+Write, Edit, Glob, Grep, WebSearch, WebFetch and Skill, plus two *MCP servers* (MCP, the Model
+Context Protocol, is a standard way to plug extra tools into an agent):
+- `playwright`: Microsoft's Playwright MCP (`npx @playwright/mcp`), attached over CDP to Robo's
+  own Brave (8.6), for the school sites;
+- `robo`: an in-process server with `memory_add`, `memory_search` and `memory_forget` (4.8).
+
+There is no screen control: to open a desktop app the agent runs `open -a` from Bash. The SDK's
+messages are turned into the events the app reads (`stream`), and the agent ignores the user's
+own Claude settings (`setting_sources=[]`), so nothing from another project leaks in.
 
 ### 4.2 The persona (system prompt)
 **The idea.** A *system prompt* is the standing instruction text the model reads before every
 conversation.
 
-**In Robo.** `hermes/SOUL.md`. Some of its rules:
+**In Robo.** `agent/SOUL.md`, plus a short "what Robo remembers about the user" section added
+for each request (4.8). Some of its rules:
 - start every reply with `[[feel:emotion]]`;
 - write maths in LaTeX and code in fenced blocks;
 - give hints before answers and never do graded work;
@@ -316,28 +343,35 @@ Hard guarantees need code (4.4).
 
 ### 4.3 Skills
 **The idea.** A *skill* is a Markdown recipe the agent loads when a task matches. It has *YAML
-front matter* (a block of `key: value` settings between `---` lines) with a name, a description,
-tags and the toolsets it needs.
+front matter* (a block of `key: value` settings between `---` lines) with a name and a
+description the agent uses to decide when to load it.
 
-**In Robo.** There are 12, in `hermes/skills/school/*/SKILL.md`, among them `school-digest`,
+**In Robo.** There are 12, in `agent/skills/school/*/SKILL.md`, among them `school-digest`,
 `school-mail`, `school-moodle`, `school-posts`, `study-plan`, `study-quiz`, `robo-notes` and
 `robo-brain`. Skills can call Robo's own command-line tools, for example `{{ROBO}} plan` (the
-study-plan packer, JSON in and out). `{{ROBO}}` and `{{VAULT}}` are placeholders `robo setup`
-fills in.
+study-plan packer, JSON in and out). `{{ROBO}}`, `{{VAULT}}` and `{{MOODLE_BASE_URL}}` are
+placeholders filled from `config.json` (`config.render_skills`) into a throwaway plugin folder
+for each run, which is deleted afterwards. Skills the agent learned (4.8) are added after them
+and can never replace a built-in one.
 
 **Why it matters.** It's cheaper and more reliable to give the model a tested procedure than to
 make it rediscover one each time.
 
-### 4.4 The guard plugin: hooks
+### 4.4 The guard: hooks
 **The idea.** A *hook* is a function a program calls at a fixed moment so other code can watch
 or veto.
 
-**In Robo.** `hermes/plugins/robo-guard/__init__.py` (Python, ~400 lines) registers two hooks:
-- `pre_tool_call`: **before** every tool call. It may *block* the call (graded work: Moodle quiz
-  attempt pages, assignment submits, raw scripts on school sites; changes to Hermes' own setup;
-  remote images or scripts in notes) or *ask* (send, delete, move, Outlook/Teams desktop clicks).
-- `post_tool_call`: **after** a call. It writes a **receipt** (a JSON line: what, which host,
-  ok) to `~/.local/share/robo/receipts.jsonl`.
+**In Robo.** `agent/robo_agent/guard.py` (~400 lines) is wired into the SDK as two hooks
+(`harness.hooks`):
+- `PreToolUse`: **before** every tool call. It may *block* the call (graded work: Moodle quiz
+  attempt pages, assignment submissions, forum posts, raw scripts on school sites; anything in
+  the agent's own folder with its keys and memory; remote images or scripts in notes), *ask*
+  (an irreversible shell command such as `rm` or `git push`, a Send/Reply/Delete click, a click on
+  an element it can't identify, uploads) or *allow*. If the hook itself crashes, the call is
+  denied: a crashing hook would otherwise let it through ("fail closed").
+- `PostToolUse`: **after** a call. It writes a **receipt** (a JSON line: what, which host, ok;
+  never the typed text) to `~/.local/share/robo/receipts.jsonl`, and it remembers the page's
+  latest snapshot, so the next click can be judged by its label.
 
 The app's `RoboCore/Receipt.swift` compares the reply's claims ("sent") with the receipts and
 adds "✓ sent · host" or "⚠ unverified" under the reply. The reply itself can't write that
@@ -347,12 +381,13 @@ footer.
 *labels*, so an icon-only button can slip past.
 
 ### 4.5 Approval modes
-**In Robo.** `approvals.mode` in the profile:
+**In Robo.** `approvals` in `~/.local/share/robo/agent/config.json`:
 - **`manual`**: the guard's "ask" cases reach the card as Allow/Deny; no answer in 120 s =
-  Deny.
-- **`off`**: nothing asks (blocks still hold). **The current setting**, since 2026-10-23.
+  Deny, and the agent is told not to retry.
+- **`off`**: nothing asks (blocks still hold). **The default** for a new setup, since the user
+  asked for it on 2026-10-23.
 
-An `approvals.deny` rule (`*hermes*`) stops the agent from touching its own setup.
+Any other value is read as `manual`: an unknown setting asks rather than allows.
 
 ### 4.6 Prompt injection
 **The idea.** The model can't reliably tell *your* instructions from instructions hidden in text
@@ -369,11 +404,39 @@ injected request that looks harmless can still run.
 **The idea.** LLMs are billed per *token* (a piece of a word, roughly ¾ of an English word on
 average).
 
-**In Robo.** Every finished run logs its tokens to `usage.jsonl` (`RoboCore/Usage.swift`). A daily
-cap (`~/.local/share/robo/daily_tokens`, set to 6,000,000) stops new runs. Some measured costs:
+**In Robo.** Every finished run logs its tokens to `usage.jsonl` (`RoboCore/Usage.swift`). An
+optional daily cap (`ROBO_DAILY_TOKENS`, or a number in `~/.local/share/robo/daily_tokens`) stops
+new runs; none is set now (the user removed it on 2026-10-22). Some costs measured with the old
+agent (not yet measured again with `robo-agent`):
 - a chat turn: ~95k tokens (the whole context is re-read each time);
 - one Moodle course scan: ~630k, cut to ~340k by a "be thrifty" rule in the skill;
 - a normal day: 1.8–2.3M.
+
+### 4.8 Memory and learning
+**The idea.** An LLM forgets everything between conversations unless the program stores what
+matters and shows it again. *BM25* is a classic formula for ranking texts by how well their words
+match a query (rare words count more, long texts don't win just by being long).
+
+**In Robo.**
+- `agent/robo_agent/memory.py` keeps short facts about you in `memory/facts.jsonl` (at most 500)
+  and a profile in `profile.md`. Before each request the profile and the few facts that best
+  match it (BM25) are added to the system prompt, marked as memory, not instructions.
+- A **privacy filter** refuses anything that looks like a secret (key shapes, card numbers that
+  pass the Luhn check, IBANs, passwords), e-mail addresses and pasted messages.
+- Supermemory, a hosted memory service, is an optional mirror (`robo key set supermemory`); the
+  local files stay the source of truth.
+- `agent/robo_agent/learn.py` runs after a request, in the background, with a cheaper model
+  (`claude-haiku-5-5`). It may save up to 3 facts. After a long (5+ tool calls), failed or
+  corrected run it may write a reusable **learned skill**, which is checked in code first: no
+  graded work, nothing that weakens the guard or the approvals, no HTML or remote content, no
+  secrets, under 4 KB, at most 30 skills. Every decision is logged to `learning.jsonl`, and once
+  a day the profile is rewritten from the facts.
+- `robo-agent memory list | forget ID` and `robo-agent skills list | remove NAME` show and undo it;
+  `"learn": false` in `config.json` turns learning off.
+
+**Why it matters.** A learned skill is text the agent will obey later, so it is treated like
+input from a stranger: the model's answer must be strict JSON, and code decides whether it may
+be kept.
 
 ---
 
@@ -393,8 +456,8 @@ to 80 characters), then emits `.feeling("happy")` and the clean text.
   with the previous letter, so a half mark never shows;
 - sentence ends pause a little.
 
-The app calls `advance(dt)` at 30 Hz. If the typing falls ~2 s or more behind what Hermes has
-sent, it speeds up (up to 6×; 8× once the run has ended).
+The app calls `advance(dt)` at 30 Hz. If the typing falls ~2 s or more behind what the agent
+has sent, it speeds up (up to 6×; 8× once the run has ended).
 
 **Why it matters.** It looks alive, yet it never makes you wait longer than the AI itself. Each
 tick re-renders the *prefix* as Markdown, which costs about 0.7 ms (measured), so typing uses
@@ -462,13 +525,16 @@ are fixed by a starting *seed*.
 the same blinks as the Python original, and tests can compare whole animation traces.
 
 ### 6.4 Drawing and its cost
-**In Robo.** `RoboUI/FaceRender.swift` paints with **Core Graphics** (Apple's 2D drawing API):
-ellipses, arcs and glows. The repaint rate follows the activity (fast when busy, slow when
-asleep).
+**In Robo.** `RoboUI/FaceRender.swift` paints with **Core Graphics** (Apple's 2D drawing API): a
+white disc of 112 points inside a 128×128 view (the rest is room for its shadow), lit from the top
+left, with the eyes and mouth as ellipses and arcs in "ink" of the mood's hue. The ink is kept dark
+enough (relative luminance at most 0.13) to reach the 4.5:1 contrast of 7.4 against the disc's
+edge at every hue. The repaint interval follows the activity (`FaceView.frameMS`: 33 ms when busy,
+40 idle, 66 sleepy, 100 asleep). VoiceOver sees the face as a button named "Robo".
 
-**Why it matters.** A pet that's always on screen must be cheap: idle Robo costs ~5 % of one
-core. The glow strokes are drawn without antialiasing on purpose (an invisible difference,
-measured at 0.1/255 per pixel, for less work).
+**Why it matters.** A pet that's always on screen must be cheap, so it repaints slowly when
+nothing happens; 66 ms is the slowest interval that still shows a blink. To see every expression
+at once, `ROBO_FACE_SHEET=<folder> native/test.sh --filter FaceSheet` writes a contact sheet.
 
 ### 6.5 Coordinate systems
 **The idea.** Screens have an *origin* and an axis direction.
@@ -503,7 +569,8 @@ clicked.
 - The pet lives in an `NSPanel` (`RoboUI/Panel.swift`): borderless, see-through, at the
   *floating* window level (above normal windows), on every Space, and **non-activating**, so
   clicking it never takes the keyboard from the app you're typing in.
-- Typing gets its own small window (`TypePanel.swift`) that *does* take the keyboard.
+- Typing goes to the chat window (`RoboUI/ChatPanel.swift`), also a non-activating panel, whose
+  text box takes the keyboard only when you click into it (and hands it back afterwards).
 
 **Why it matters.** A pet that stole your keyboard focus would be unbearable. One cost: with no
 menu bar, AppKit doesn't turn Cmd-C/V into copy/paste, so `RoboUI/Keys.swift` adds that back.
@@ -518,8 +585,9 @@ monitor.
 - The limit: if another app registers Ctrl+Q too, macOS doesn't report the clash.
 
 ### 7.3 Liquid Glass
-**In Robo.** On macOS 26 the card and the chat use `NSGlassEffectView` (Apple's *Liquid Glass*
-material); before that, a frosted `NSVisualEffectView`. Text uses system colours.
+**In Robo.** The card and the chat use `NSGlassEffectView` (Apple's *Liquid Glass* material,
+new in macOS 26, which is why the app needs macOS 26). Text uses system colours. With Increase
+Contrast on, the wash over the glass is stronger and secondary text is more opaque.
 
 **Why it matters, and a bug.** Changing a glass view's light/dark appearance *after* it has drawn
 could leave it showing the old one: black text on a black card, on the live app only. The fix:
@@ -599,23 +667,26 @@ The fix was `bootout` followed by `bootstrap` (re-register), not editing anythin
 
 ### 8.5 What `robo setup` changes
 `RoboSystem/Setup.swift`:
-1. turns on Hermes' API server (loopback only) with a key;
-2. creates the `robo` profile with its own key;
-3. saves the Moodle address;
-4. installs the persona, skills and guard;
-5. writes the profile config (model, toolsets, approvals, Robo's Brave address, memory review on,
-   curator off);
-6. writes the LaunchAgent;
-7. creates the Obsidian vault;
-8. restarts the gateway only if something changed.
+1. checks it runs from the `.app` and that `uv` is installed;
+2. writes `~/.local/share/robo/agent/config.json`: port, model, approvals, vault and learning get
+   a default only when missing; the Moodle address is the `--moodle` one, else the one already
+   there; the paths of this `robo` and of `uv` are always this build's;
+3. creates the server key if there is none;
+4. writes the LaunchAgent;
+5. creates the Obsidian vault;
+6. reminds you to run `robo key set anthropic` if the key is missing.
 
-It's built to be re-runnable: running it twice gives the same result (*idempotent*).
+It's built to be re-runnable: running it twice gives the same result (*idempotent*). The keys
+themselves go through `robo key set anthropic|supermemory`, which reads them from a hidden prompt
+or from stdin, never from the command line (where they would stay in the shell's history).
 
 ### 8.6 Robo's own browser
 **In Robo.** `RoboSystem/Browser.swift`: a separate Brave profile, headless, reachable only on
-`127.0.0.1:9333`. Hermes drives it over **CDP** (Chrome DevTools Protocol, the remote-control
-protocol of Chromium browsers). `robo signin` shows it once, so you can sign in to Outlook, Teams
-and Moodle.
+`127.0.0.1:9333`, started by the app. The agent drives it through Playwright MCP over **CDP**
+(Chrome DevTools Protocol, the remote-control protocol of Chromium browsers). `robo signin` shows
+it once, so you can sign in to Outlook, Teams and Moodle. Its profile stays in
+`~/.hermes/profiles/robo/brave`, where the first agent kept it, so those sign-ins survived the
+switch; the guard blocks the agent from reading anything there.
 
 **Why it matters.** Your everyday Brave locks its login databases while it runs, and a separate
 profile keeps the agent's browsing away from your personal browsing.
@@ -630,7 +701,7 @@ one, the *main thread*. Anything slow on it freezes the app.
 
 **In Robo.** These run off the main thread:
 - the microphone and the speech model (a dedicated thread, `robo-listen`);
-- the Hermes stream;
+- the agent's stream, and starting the agent (`AgentService.ensure` can wait up to 30 s);
 - calendar fetches, radar downloads and the activity watcher.
 
 Results hop to the main thread before touching the UI.
@@ -645,7 +716,9 @@ Results hop to the main thread before touching the UI.
 - A `TaskGroup` runs several tasks in parallel and collects their results.
 
 **In Robo.** `HermesClient.events(...)` is an `AsyncThrowingStream<Event, Error>`. The radar
-downloads its sources in parallel with task groups.
+downloads its sources in parallel with task groups. The agent is Python `asyncio`, the same idea
+in another language: each run is a task, and learning after a run is a background task that
+outlives it.
 
 ### 9.3 Two real concurrency lessons
 - **A crash that only happened in release.** A task group collected results into a captured
@@ -673,7 +746,9 @@ because a deadline keeps approaching while the laptop sleeps.
 |---|---|
 | `~/.local/share/robo/` (folder 0700) | state: `agenda.json`, `nudges.json`, `reminders.json`, `radar.json`, `lms.json`, `calendars.json` (secret), `usage.jsonl`, `receipts.jsonl`, `study.md`, `activity.db`, `radar-cache/` |
 | `~/.config/robo/theme.json` | settings you may edit by hand |
-| `~/.hermes/profiles/robo/` | the agent's profile (config, `.env` with the key, skills, Brave) |
+| `~/.local/share/robo/agent/` (folder 0700) | the agent: `config.json`, the keys (`api_key`, `supermemory_key`, `server_key`), `sessions.json`, `memory/`, `skills-learned/`, `learning.jsonl` |
+| `~/Library/Logs/Robo/agent.log` | the agent's output |
+| `~/.hermes/profiles/robo/brave/` | Robo's Brave profile with the school sign-ins (8.6) |
 | `~/Documents/Robo/` | the Obsidian vault: `Drafts/`, `Plans/`, `Notes/`, `Radar/`, `Brain/` |
 | `~/Robo/` | pages, charts and slides the agent makes; `Downloads/` |
 
@@ -883,9 +958,14 @@ it the exact shape you want, then **check the shape in code** and believe nothin
 ## 15. Testing and quality
 
 ### 15.1 The test frameworks
-- **Swift Testing** (`@Test`, `#expect`): ~1,300 tests in `native/Tests/`, one folder per module.
-- **pytest** for the Python side: the tests in `tests/`.
+- **Swift Testing** (`@Test`, `#expect`): ~1,500 tests in `native/Tests/`, one folder per module.
+- **pytest** for the agent: ~460 tests in `tests/` (server, guard, memory, learning, templates),
+  each in a throwaway `HOME` with a fake SDK client, plus `tests/test_canaries.py`, which replays
+  30 hostile texts (`tests/evals/canaries.jsonl`) through the guard offline.
 - **ruff**: a Python *linter* (checks style and common mistakes).
+- **`scripts/eval_live.py`**: sends the 49 read-only requests of `tests/evals/requests.jsonl` to
+  your real agent and checks that none asks to change anything. By hand only, never in CI: it
+  reads your accounts and spends your API key.
 - **Template pins**: tests that read `SOUL.md` and the skills and check that key rules are still
   written there (`tests/test_templates.py`, `TemplatesTests.swift`), so an edit can't silently
   drop a safety rule.
@@ -906,8 +986,8 @@ it the exact shape you want, then **check the shape in code** and believe nothin
 **The idea.** CI runs the tests on fresh machines for every PR. A *flaky* test passes or fails
 depending on timing or machine speed, not on the code.
 
-**In Robo.** `.github/workflows/tests.yml` runs the Swift tests on a macOS runner and pytest and
-ruff on Ubuntu. PR #7 was merged over one red macOS run: a typing test that needs to catch a reply
+**In Robo.** `.github/workflows/tests.yml` runs the Swift tests on a `macos-26` runner and pytest
+and ruff on Ubuntu. PR #7 was merged over one red macOS run: a typing test that needs to catch a reply
 mid-typing failed twice on GitHub's runner, but passed 3/3 locally, and the PR didn't touch that code. Making such a test
 not depend on machine speed (a fake clock instead of real waiting) is the real fix.
 
@@ -925,8 +1005,9 @@ drifting 1,200 px away while a card was up) were only found by looking at the re
 | **SwiftPM** (`Package.swift`) | builds the Swift modules, fetches SwiftMath (exact pin `1.7.3`), uses the vendored ONNX Runtime |
 | **`native/test.sh`** | runs `swift test` with the path to the Testing macros, which the Command Line Tools ship but don't pass by themselves |
 | **`native/bundle.sh`** | release build → `.app` folder → `Info.plist` → sign (8.3) |
-| **uv** | the Python package manager (fast; `uv.lock` pins every version) |
-| **`pyproject.toml`** | Python dependencies and tool settings |
+| **uv** | the Python package manager (fast; `uv.lock` pins every version, all at least two weeks old) |
+| **`pyproject.toml`** | the agent's dependencies (`claude-agent-sdk`, `anthropic`, `aiohttp`, exact pins), its `robo-agent` command and tool settings |
+| **Node.js / `npx`** | starts Playwright MCP (pinned `@playwright/mcp@0.0.83`) for the agent's browser |
 | **Git + GitHub** | `dev` for work, `master` for what runs, PRs with CI between them |
 
 **Pinning** (exact versions) matters here more than usual: one ONNX Runtime version change
@@ -950,5 +1031,6 @@ changes transcripts (2.6).
 
 ---
 
-*Written 2026-10-26. Numbers come from CLAUDE.md and the code's
-comments, which record when and how each was measured.*
+*Written 2026-10-26, updated 2026-11-04 for the revamp (robo-agent, the new face, macOS 26).
+Numbers come from CLAUDE.md and the code's comments, which record when and how each was
+measured.*
