@@ -127,7 +127,7 @@ final class RoboWindow {
         tw = Typewriter(Pace(cps: theme.cps))
         fidgetAt = now + Double.random(in: RoboWindow.fidgetEvery)
         card = CardView(theme: theme, hasWatch: watcher != nil, model: Setup.model)
-        face = FaceView(radius: 22, clock: machine.clock)
+        face = FaceView(clock: machine.clock)
 
         var displays = machine.displays()
         if displays.isEmpty {  // no display at all: still build the window

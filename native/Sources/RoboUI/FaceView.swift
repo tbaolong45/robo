@@ -7,7 +7,7 @@ import RoboCore
 enum FaceMouse { case press, drag, release, rightPress }
 
 final class FaceView: NSView {
-    static let size = CGSize(width: 128, height: 96)  // FACE: the floating face
+    static let size = CGSize(width: 128, height: 128)  // FACE: the floating face, a disc of 112 (FaceRender.disc) and its shadow
 
     // Repaint interval (ms) per activity: the pet sleeps most of the day and a calm face needs few frames.
     // Everything else (talking mouth 6-9 Hz, listening pulse, ...) runs at `fastMS`. A blink lasts 0.15 s,
@@ -22,7 +22,6 @@ final class FaceView: NSView {
         }
     }
 
-    let radius: CGFloat  // > 0: a rounded screen, transparent outside
     let anim: Animator
     let clock: () -> Double
     var goal = FaceParams.target(.idle, "neutral")
@@ -44,15 +43,17 @@ final class FaceView: NSView {
     override var isOpaque: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }  // a click works in a non-key window
 
-    init(radius: CGFloat = 22, seed: UInt64? = nil,
-                clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
-        self.radius = radius
+    init(seed: UInt64? = nil, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.clock = clock
         anim = Animator(seed: seed)
         t0 = clock()
         last = t0
         params = anim.step(goal, dt: 0, talking: false, now: 0)
         super.init(frame: NSRect(origin: .zero, size: FaceView.size))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Robo")
+        setAccessibilityHelp("Click to talk to Robo, to stop what it is doing, or to close its answer. Drag to move it; right-click for its menu.")
         startTimer()
     }
 
@@ -111,10 +112,6 @@ final class FaceView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        if radius > 0 {
-            ctx.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
-            ctx.clip()
-        }
         FaceRender.render(ctx, rect: bounds, params: params, t: last - t0, bg: bg)
     }
 
@@ -122,4 +119,11 @@ final class FaceView: NSView {
     override func mouseDragged(with event: NSEvent) { onMouse?(.drag) }
     override func mouseUp(with event: NSEvent) { onMouse?(.release) }
     override func rightMouseDown(with event: NSEvent) { onMouse?(.rightPress) }
+
+    /// VoiceOver's press is a click: a press and a release with no drag between.
+    override func accessibilityPerformPress() -> Bool {
+        onMouse?(.press)
+        onMouse?(.release)
+        return true
+    }
 }

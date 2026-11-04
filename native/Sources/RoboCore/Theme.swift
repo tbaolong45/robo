@@ -2,7 +2,7 @@
 // (the face background is "#rrggbb" strings, computed colours are `RGBA`), so the UI maps it to NSColor and nothing
 // here needs a display. The card itself is native glass: its fill, its text and its status lights are the system's
 // (they follow light and dark and whatever is behind the glass), so the only colours left here are the accent
-// the face's mood paints (`accent`) and the face's own screen. `Theme` is the token table, `Themes` the module.
+// the face's mood paints (`accent`) and the face's own body. `Theme` is the token table, `Themes` the module.
 // The Python build keeps the five HUD themes of src/robo/theme.py; this is not a port of it any more.
 //
 // ~/.config/robo/theme.json is configuration the user may hand-edit (state lives in ~/.local/share/robo);
@@ -51,7 +51,7 @@ public struct Theme: Equatable, Sendable {
     public internal(set) var accS = 0.85
     public internal(set) var accV = 1.0
     public internal(set) var followEmotion = true  // the card's accent follows the face's live hue (error: always)
-    public internal(set) var faceBg = FaceBG("#121a2a", "#090d16")  // face screen: centre, edge
+    public internal(set) var faceBg = FaceBG("#ffffff", "#e2e6ed")  // the face's white body: highlight, edge
     // text
     public internal(set) var textPx = 14
     public internal(set) var lineH = 116  // percent of the toolkit's line spacing
