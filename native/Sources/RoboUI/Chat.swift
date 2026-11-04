@@ -127,7 +127,19 @@ extension RoboWindow {
         guard chatOpen, let c = chat?.chat else { return }
         let waiting = self.now() < followUntil && !busy
         c.setStatus(now ? "Listening…" : busy ? (label.isEmpty ? "Working…" : label) : waiting ? "Listening for your reply" : "")
-        c.setWorking(thinking, caption: label)
+        c.setWorking(thinking)
+    }
+
+    /// VoiceOver reads a finished answer out (the chat's or the card's), as it would a new message in a chat app.
+    static var announce: (String) -> Void = { text in
+        NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    func announceReply(inChat: Bool) {
+        let text = inChat ? chat?.chat.lastRoboText ?? "" : card.reply.string.replacingOccurrences(of: "\u{FFFC}", with: "")
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { Self.announce("Robo: " + words) }
     }
 
     /// ROBO_CHAT_DEMO=1: a made-up conversation, to look at the chat over a bright and a dark backdrop without an agent (a test copy).

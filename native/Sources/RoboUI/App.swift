@@ -447,6 +447,7 @@ extension RoboWindow {
         card.showFooter()
         let toChat = machine.chatOn && chatOpen
         chatSealed()  // the answer in the conversation is final now, with its footer
+        announceReply(inChat: toChat)
         if closeAfter != 0 && !busy && !toChat { closeAt = typedAt + closeAfter }  // the chat is not closed by a timer
         if followDue && !busy {  // counted from the last letter: typing and reading must not eat the window
             followDue = false

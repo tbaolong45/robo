@@ -104,6 +104,14 @@ enum Chrome {
         NSAttributedString(string: s, attributes: attrs(font, .black, kern: kern)).size().width.rounded()
     }
 
+    /// The bead of light in the accent beside the bot's name, on the card and in the chat: a halo of `halo` radius and a lit core
+    /// `core` wide.
+    static func orb(at c: CGPoint, halo: CGFloat, core: CGFloat, _ accent: NSColor) {
+        NSGradient(colors: [accent.withAlphaComponent(0.55), accent.withAlphaComponent(0)])!.draw(fromCenter: c, radius: 0, toCenter: c, radius: halo, options: [])
+        let dot = NSBezierPath(ovalIn: CGRect(x: c.x - core / 2, y: c.y - core / 2, width: core, height: core))
+        NSGradient(starting: accent.highlight(withLevel: 0.45) ?? .white, ending: accent)!.draw(in: dot, angle: 90)
+    }
+
     /// Draw one line vertically centred in a box of height `h` whose top is at `y`, left edge at `x`.
     static func line(_ s: String, _ font: NSFont, _ colour: NSColor, kern: CGFloat = 0, x: CGFloat, y: CGFloat, h: CGFloat) {
         let m = metrics(font)
@@ -374,10 +382,7 @@ final class HeaderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let t = theme, h = Chrome.headerH
-        let orb = CGPoint(x: 14, y: h / 2)  // a bead of light in the accent
-        NSGradient(colors: [Chrome.accent(t, hue, 0.55), Chrome.accent(t, hue, 0)])!.draw(fromCenter: orb, radius: 0, toCenter: orb, radius: 9, options: [])
-        Chrome.accent(t, hue).setFill()
-        NSBezierPath(ovalIn: CGRect(x: orb.x - 3.5, y: orb.y - 3.5, width: 7, height: 7)).fill()
+        Chrome.orb(at: CGPoint(x: 14, y: h / 2), halo: 9, core: 7, Chrome.accent(t, hue))
         Chrome.line(shownName, Self.nameFont, Chrome.text, kern: Self.nameKern, x: 25, y: 0, h: h)
         link.draw(in: CGRect(x: linkX, y: 0, width: link.width, height: h), t, hue: hue)
         mic.draw(in: CGRect(x: micX, y: 0, width: mic.width, height: h), t, hue: hue)
@@ -445,12 +450,13 @@ final class CaretView: NSView {
 }
 
 /// Messenger-style "typing" dots: three dots in the accent colour that hop in turn while robo thinks. The view owns
-/// a 33 ms timer only while it is shown.
+/// a 33 ms timer only while it is shown; under Reduce Motion the dots sit still and there is no timer.
 final class TypingDotsView: NSView {
     static let hop: CGFloat = 4
     var theme: Theme { didSet { needsDisplay = true } }
     var hue: Double { didSet { needsDisplay = true } }
     var clock: () -> Double = { ProcessInfo.processInfo.systemUptime }
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion } { didSet { sync() } }
     private(set) var timer: Timer?
 
     init(theme: Theme) { (self.theme, self.hue) = (theme, theme.hue); super.init(frame: NSRect(x: 0, y: 0, width: 32, height: 16)) }
@@ -462,7 +468,7 @@ final class TypingDotsView: NSView {
     static func offsets(_ t: Double) -> [CGFloat] { (0..<3).map { -hop * CGFloat(max(0, sin((t / 1.2 - Double($0) * 0.15) * 2 * .pi))) } }
 
     private func sync() {
-        let shown = window != nil && !isHiddenOrHasHiddenAncestor
+        let shown = window != nil && !isHiddenOrHasHiddenAncestor && !reduceMotion()
         if shown && timer == nil {
             let tick = Timer(timeInterval: 0.033, repeats: true) { [weak self] _ in self?.needsDisplay = true }
             RunLoop.main.add(tick, forMode: .common)
@@ -477,14 +483,16 @@ final class TypingDotsView: NSView {
     override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); sync() }
 
     override func draw(_ dirtyRect: NSRect) {
-        for (i, dy) in Self.offsets(clock()).enumerated() {
-            Chrome.accent(theme, hue, 0.55 + 0.45 * Double(-dy / Self.hop)).setFill()
+        let still = reduceMotion()
+        for (i, dy) in (still ? [0, 0, 0] : Self.offsets(clock())).enumerated() {
+            Chrome.accent(theme, hue, still ? 0.8 : 0.55 + 0.45 * Double(-dy / Self.hop)).setFill()
             NSBezierPath(ovalIn: CGRect(x: 5 + 11 * CGFloat(i) - 2.8, y: 10 + dy - 2.8, width: 5.6, height: 5.6)).fill()
         }
     }
 }
 
-/// A capsule button on the glass: the menu chips and Allow / Deny.
+/// A capsule button on the glass: the menu chips, Allow / Deny and the nudge's answers. It takes the keyboard focus (Tab moves it
+/// along `nextKeyView`, Space or Return presses), draws the system focus ring, and VoiceOver presses it by its title.
 final class ButtonView: NSView {
     enum Kind { case plain, allow, deny }
     var title: String { didSet { needsDisplay = true; setAccessibilityLabel(title) } }
@@ -510,6 +518,23 @@ final class ButtonView: NSView {
     override func mouseExited(with event: NSEvent) { hovered = false }
     override func mouseUp(with event: NSEvent) { if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() } }
     override func accessibilityPerformPress() -> Bool { onClick?(); return true }
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() {
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+    }
+
+    /// Space, Return and Enter press it (never while it is hidden: a hidden Allow must not take a stray key); Tab and Shift+Tab move on.
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 49, 36, 76: if !isHiddenOrHasHiddenAncestor { onClick?() }
+        case 48: event.modifierFlags.contains(.shift) ? window?.selectKeyView(preceding: self) : window?.selectKeyView(following: self)
+        default: super.keyDown(with: event)
+        }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         var fill = Chrome.wash(hovered ? 0.16 : 0.08), edge = NSColor.clear, ink = Chrome.text, weight = NSFont.Weight.regular
