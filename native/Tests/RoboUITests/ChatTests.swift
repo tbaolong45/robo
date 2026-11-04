@@ -270,16 +270,21 @@ private func receipt(_ at: Double) -> String {
         let r = Rig(chat: true)
         defer { r.close() }
         r.window.typeText()
-        #expect(r.window.chatOpen && r.chatFocuses == 1 && r.typers.isEmpty)  // not the small Type window
+        #expect(r.window.chatOpen && r.chatFocuses == 1)
         r.window.typeText()
         #expect(r.chats.count == 1 && r.chatFocuses == 2)  // the same window, not placed again
     }
 
-    @Test func withTheChatOffTheTypeActionIsTheSmallWindow() {
-        let r = Rig()
+    @Test func aFinishedAnswerIsReadOutByVoiceOver() async {
+        let r = Rig([completed("The **answer** is 42.")], chat: true)
         defer { r.close() }
-        r.window.typeText()
-        #expect(!r.window.chatOpen && r.typers.count == 1 && r.chatFocuses == 0)
+        var said: [String] = []
+        let keep = RoboWindow.announce
+        RoboWindow.announce = { said.append($0) }
+        defer { RoboWindow.announce = keep }
+        r.window.ask("what is six times seven")
+        #expect(await pump(!r.window.busy && !r.window.tw.pending))
+        #expect(said == ["Robo: The answer is 42."])  // the words, not the Markdown
     }
 
     @Test func theTextBoxSendsLikeAnyOtherRequest() async {
@@ -529,11 +534,11 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "hi")
         t.append(.robo, "")
         let v = view(t)
-        v.setWorking(true, caption: "searching the web…")
+        v.setWorking(true)
         #expect(v.bubbles[t.turns[1].id]?.dots != nil && v.bubbles[t.turns[0].id]?.dots == nil)
         v.setLive(markdown: "First words", hidden: 0)
         #expect(v.bubbles[t.turns[1].id]?.dots == nil)  // the text replaced them
-        v.setWorking(false, caption: "")
+        v.setWorking(false)
         #expect(v.bubbles.values.allSatisfy { $0.dots == nil })
     }
 
@@ -602,6 +607,157 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "fresh start")
         v.set(turns: t.turns)
         #expect(v.bubbles.count == 1 && v.scroll.documentView?.subviews.count == 1)
+    }
+
+    // MARK: the text box, the empty state, jump to latest
+
+    @Test func anEmptyConversationSaysWhatToDoAndTheFirstTurnHidesIt() {
+        var t = Transcript()
+        let v = view(t)
+        #expect(!v.empty.isHidden && v.empty.stringValue.contains("Ask Robo anything"))
+        #expect(v.empty.frame.minY > v.scroll.frame.minY && v.empty.frame.maxY < v.scroll.frame.maxY)  // in the middle of the conversation
+        t.append(.you, "hi")
+        v.set(turns: t.turns)
+        #expect(v.empty.isHidden)
+    }
+
+    @Test func sendIsOffUntilThereIsSomethingToSendAndSpacesSendNothing() {
+        let v = view(Transcript())
+        var sent: [String] = []
+        v.onSubmit = { sent.append($0) }
+        #expect(!v.send.isEnabled)
+        v.input.stringValue = "   \n "
+        v.inputChanged()
+        #expect(!v.send.isEnabled)
+        v.send.performClick(nil)
+        #expect(sent.isEmpty && v.input.stringValue == "   \n ")  // nothing sent, nothing lost
+        v.input.stringValue = "  hello  "
+        v.inputChanged()
+        #expect(v.send.isEnabled)
+        v.send.performClick(nil)
+        #expect(sent == ["hello"] && v.input.stringValue.isEmpty && !v.send.isEnabled)
+    }
+
+    @Test func returnSendsAndTheBoxGrowsWithItsLinesUpToFive() {
+        let v = view(Transcript())
+        var sent: [String] = []
+        v.onSubmit = { sent.append($0) }
+        let pill = v.input.frame.height, scroll = v.scroll.frame.height
+        v.input.stringValue = "one\ntwo\nthree"
+        v.inputChanged()
+        v.layoutSubtreeIfNeeded()
+        #expect(v.inputExtra > 25 && v.input.frame.height == pill + v.inputExtra && v.scroll.frame.height == scroll - v.inputExtra)
+        let three = v.inputExtra
+        v.input.stringValue = (1...12).map(String.init).joined(separator: "\n")
+        v.inputChanged()
+        #expect(v.inputExtra > three && v.inputExtra == 2 * three)  // five lines at most: then the text scrolls in the box
+        // Return (no Shift held: there is no current event in a test) sends, it does not add a line
+        #expect(v.control(v.input, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        #expect(sent.count == 1 && v.inputExtra == 0)
+        #expect(!v.control(v.input, textView: NSTextView(), doCommandBy: #selector(NSResponder.moveLeft(_:))))  // other keys are the field's
+    }
+
+    @Test func aReaderScrolledUpGetsAJumpToLatestThatTakesThemBack() {
+        var t = Transcript()
+        for i in 0..<12 {
+            t.append(.you, "question \(i)")
+            t.append(.robo, "")
+            t.seal("An answer to the question that wraps over a couple of lines so that the conversation is taller than the window shows. \(i)")
+        }
+        let v = view(t)
+        #expect(v.jump.isHidden)  // at the end: nothing to jump to
+        v.scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        v.scroll.reflectScrolledClipView(v.scroll.contentView)
+        #expect(!v.jump.isHidden && v.jump.accessibilityLabel() == "Jump to latest")
+        t.append(.you, "one more")
+        v.set(turns: t.turns)
+        #expect(v.scroll.contentView.bounds.minY == 0 && !v.jump.isHidden)  // still where they were
+        v.jump.performClick(nil)
+        #expect(v.following && v.jump.isHidden)
+        #expect(abs(v.scroll.contentView.bounds.maxY - v.scroll.documentView!.frame.height) < 1)
+    }
+
+    @Test func theStatusIsSaidOnceInTheHeaderNotAgainUnderTheDots() {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let v = view(t)
+        v.setStatus("searching the web…")
+        v.setWorking(true)
+        let bubble = v.bubbles[t.turns[1].id]!
+        #expect(v.statusLabel.stringValue == "searching the web…" && bubble.dots != nil)
+        let labels = bubble.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
+        #expect(!labels.contains("searching the web…"))
+        #expect(bubble.bubbleSize.height == 16 + BubbleView.pad.top + BubbleView.pad.bottom)  // just the dots
+    }
+
+    // MARK: the live text is throttled like the card's
+
+    @Test func afterASlowLiveRenderTheNextWaitsAndTheLatestTextFollows() async {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let v = view(t)
+        v.renderBudget = -1  // every render counts as slow
+        v.setLive(markdown: "one", hidden: 0)
+        v.setLive(markdown: "one two", hidden: 0)
+        v.setLive(markdown: "one two three", hidden: 0)
+        let bubble = v.bubbles[t.turns[1].id]!
+        #expect(v.liveRenders == 1 && bubble.text.string == "one")
+        #expect(await pump(v.liveRenders == 2))
+        #expect(bubble.text.string == "one two three")  // the latest, not the ones in between
+        v.renderBudget = 10
+        v.endLive()  // a finished turn drops the wait
+        v.setLive(markdown: "again", hidden: 0)
+        #expect(v.liveRenders == 3)
+    }
+
+    // MARK: Copy and accessibility
+
+    @Test func robosBubblesHaveCopyAndItCopiesTheAnswerAsWritten() throws {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let source = "Use **this**:\n\n```\nls -la\n```\n\nand $x^2$."
+        t.seal(source)
+        let v = view(t)
+        let you = v.bubbles[t.turns[0].id]!, robo = v.bubbles[t.turns[1].id]!
+        #expect(you.contextMenu() == nil)
+        let menu = try #require(robo.contextMenu())
+        #expect(menu.items.map(\.title) == ["Copy"])
+        #expect(robo.text.textView.contextMenu?()?.items.map(\.title) == ["Copy"])
+        let board = NSPasteboard(name: NSPasteboard.Name("robo-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        robo.copy(to: board)
+        #expect(board.string(forType: .string) == source)
+        robo.text.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        robo.copy(to: board)
+        #expect(board.string(forType: .string) == "Use")  // a selection copies just that
+    }
+
+    @Test func voiceOverReadsWhoSaidWhat() {
+        let t = conversation()
+        let v = view(t)
+        let you = v.bubbles[t.turns[0].id]!, robo = v.bubbles[t.turns[1].id]!
+        #expect(you.isAccessibilityElement() && you.accessibilityLabel() == "You: hi")
+        #expect(robo.accessibilityLabel()?.hasPrefix("Robo: Hello there.") == true)
+        #expect(v.input.accessibilityLabel() == "Message to Robo" && v.send.accessibilityLabel() == "Send")
+        #expect(v.lastRoboText == "And a second bubble from Robo.")
+    }
+
+    @Test func theOrbAndTheDotsKeepStillUnderReduceMotion() {
+        for reduce in [false, true] {
+            let orb = OrbView()
+            orb.reduceMotion = { reduce }
+            orb.pulsing = true
+            #expect((orb.layer?.animation(forKey: "breathe") != nil) == !reduce)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 40), styleMask: .borderless, backing: .buffered, defer: true)
+            let dots = TypingDotsView(theme: Themes.glass)
+            dots.reduceMotion = { reduce }
+            window.contentView?.addSubview(dots)
+            #expect((dots.timer != nil) == !reduce)
+            dots.removeFromSuperview()
+        }
     }
 }
 

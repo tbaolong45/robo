@@ -235,7 +235,7 @@ extension CardView {
     var displays = Rig.single
     var pointer = CGPoint(x: 100, y: 100)  // AppKit coordinates
     var files: [URL] = [], notes: [(url: URL, front: Bool)] = []
-    var typers: [TypePanel] = [], ears: [FakeEar] = [], pollers: [FakePoller] = []
+    var ears: [FakeEar] = [], pollers: [FakePoller] = []
     var chats: [ChatPanel] = []  // each time the chat was put on screen, and how often its text box was asked to take the keyboard
     var chatFocuses = 0
     var blurs: [(on: Bool, frame: CGRect)] = []  // every time the blur of the background was switched
@@ -322,7 +322,6 @@ extension CardView {
         m.pointer = { [weak self] in self?.pointer ?? .zero }
         m.openFile = { [weak self] in self?.files.append($0) }
         m.openNote = { [weak self] url, front in self?.notes.append((url, front)) }
-        m.showTyper = { [weak self] in self?.typers.append($0) }
         m.chatOn = chat  // off unless a test asks for it: the pet's card tests stay as they are
         m.showChat = { [weak self] panel, visible in
             self?.chats.append(panel)

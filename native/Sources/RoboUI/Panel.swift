@@ -45,7 +45,7 @@ final class RoboPanel: NSPanel {
         let function = event.characters?.unicodeScalars.first.map { (0xF700...0xF8FF).contains($0.value) } ?? false
         if event.keyCode == 53 {
             onEscape?()
-        } else if flags.contains(.command) || function {
+        } else if flags.contains(.command) || function || firstResponder is ButtonView {  // a focused button takes Tab, Space, Return
             super.sendEvent(event)
         }
     }

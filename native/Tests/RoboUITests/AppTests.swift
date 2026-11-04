@@ -696,11 +696,11 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     }
 
     @Test func withoutAMicrophoneThereIsNoEarAndClickingTypes() async {
-        let r = Rig(micOK: false)
+        let r = Rig(micOK: false, chat: true)
         defer { r.close() }
         #expect(r.window.ear == nil)
         r.window.clicked()
-        #expect(r.typers.count == 1)
+        #expect(r.chatFocuses == 1)
     }
 
     @Test func aClickListensAtOnceAndNothingSaidGoesBackToIdle() async {

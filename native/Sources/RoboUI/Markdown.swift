@@ -459,7 +459,11 @@ final class BoxTextView: NSTextView {
     static let schemes: Set<String> = ["http", "https", "mailto"]
     static let slop: CGFloat = 4  // px a press and release may be apart and still be a click (SKIP_PX)
 
+    /// A menu of the owner's instead of the text view's own (a chat bubble offers Copy); nil keeps the text view's.
+    var contextMenu: (() -> NSMenu?)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() ?? super.menu(for: event) }
 
     override func clicked(onLink link: Any, at charIndex: Int) {
         guard let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:)), let scheme = url.scheme?.lowercased(),

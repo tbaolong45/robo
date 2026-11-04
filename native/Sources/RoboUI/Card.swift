@@ -116,6 +116,7 @@ final class ApprovalView: Placing {
         deny = ButtonView("Deny", kind: .deny)
         super.init(frame: .zero)
         for v in [label, well, allow, deny] { addSubview(v) }
+        allow.nextKeyView = deny; deny.nextKeyView = allow  // Tab goes between the two
     }
     required init?(coder: NSCoder) { fatalError("not used") }
     func height(for width: CGFloat) -> CGFloat { 12 + 6 + well.height(for: width) + 6 + MenuView.rowH }
@@ -143,6 +144,7 @@ final class NudgeView: Placing {
         notForMe = ButtonView("Not for me", kind: .deny)
         super.init(frame: .zero)
         for v in [label, well, open, later, notForMe] { addSubview(v) }
+        open.nextKeyView = later; later.nextKeyView = notForMe; notForMe.nextKeyView = open  // a hidden Open is skipped
     }
     required init?(coder: NSCoder) { fatalError("not used") }
     func height(for width: CGFloat) -> CGFloat { 12 + 6 + well.height(for: width) + 6 + MenuView.rowH }
@@ -440,15 +442,25 @@ final class CardView: NSView {
 
     // MARK: approval and menu
 
-    /// nil hides the approval; text shows it (the window grows for the buttons). `more` other asks wait behind this one.
+    /// nil hides the approval; text shows it (the window grows for the buttons). `more` other asks wait behind this one. When the
+    /// pet's window has the keyboard, Deny (the safe answer) takes the focus; Tab reaches Allow. VoiceOver hears what is asked as the
+    /// buttons' help.
     func setApproval(_ text: String?, more: Int = 0) {
         if let text {
             approval.label.text = more > 0 ? "APPROVAL ▸ +\(more) MORE" : "APPROVAL ▸"
             approval.well.text = text
+            for b in [approval.allow, approval.deny] { b.setAccessibilityHelp(text) }
             refit { approval.isHidden = false }
+            if let window, window.isKeyWindow { window.makeFirstResponder(approval.deny) }
         } else if !approval.isHidden {
+            dropFocus([approval.allow, approval.deny])
             refit { approval.isHidden = true }
         }
+    }
+
+    /// A button that goes away must not keep the keyboard focus.
+    private func dropFocus(_ buttons: [ButtonView]) {
+        if let window, buttons.contains(where: { window.firstResponder === $0 }) { window.makeFirstResponder(nil) }
     }
 
     /// nil hides the nudge; text shows it (the window grows for the buttons, Open only when the nudge has a link or a note).
@@ -459,6 +471,7 @@ final class CardView: NSView {
             nudge.open.isHidden = !text.canOpen
             refit { nudge.isHidden = false }
         } else if !nudge.isHidden {
+            dropFocus([nudge.open, nudge.later, nudge.notForMe])
             refit { nudge.isHidden = true }
         }
     }

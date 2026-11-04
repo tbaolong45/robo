@@ -1,7 +1,7 @@
 // Robo on the desktop: a floating face with a speech card. Port of the window half of src/robo/app.py
 // (layout, fit, roaming, dragging, menu, themes, screens); the conversation half is in App.swift.
 //
-// Everything here runs on the main thread. The machine (displays, pointer, clock, files, the Type window)
+// Everything here runs on the main thread. The machine (displays, pointer, clock, files, the chat window)
 // comes in through `Machine`, Hermes, the microphone, the activity watcher and the health poll through
 // the protocols below, so the tests drive the whole window with fakes.
 import AppKit
@@ -36,7 +36,6 @@ final class RoboWindow {
     let card: CardView
     let face: FaceView
     private let root = RootView()
-    var typer: TypePanel?
 
     var theme: Theme
     var themeStamp: Int
@@ -79,7 +78,6 @@ final class RoboWindow {
     var nudge = NudgeModel()  // the agenda, the budget and the card that shows now (Nudges.swift)
     var radar = RadarModel()  // the daily radar: when it last ran, what it already showed, what it offers (Radar.swift)
     var scout = ScoutModel()  // the LMS posts scan: its courses, the run in flight, its failures today (Scout.swift)
-    var typerOpen = false  // the Type window is up (a nudge does not break in on it)
 
     // The chat window (Chat.swift): the conversation, its panel, and what its glass does about the backdrop.
     var transcript = Transcript()
@@ -407,21 +405,8 @@ final class RoboWindow {
 
     // MARK: - typing a question
 
-    /// A small window of its own, on the face's display.
-    func typeText() {
-        if machine.chatOn {  // the chat has a text box of its own: it opens and takes the keyboard
-            openChat(focusInput: true)
-            return
-        }
-        typer?.close()
-        let t = TypePanel { [weak self] in self?.ask($0) }
-        t.onClose = { [weak self, weak t] in if self?.typer === t { self?.typerOpen = false } }
-        let displays = machine.displays()
-        if let d = space.display(at: faceCentre, in: displays) { t.place(on: d.visible) }
-        typer = t
-        typerOpen = true
-        machine.showTyper(t)
-    }
+    /// The chat's text box: the chat opens and the box takes the keyboard.
+    func typeText() { openChat(focusInput: true) }
 
     // MARK: - escape and leaving
 
@@ -474,7 +459,6 @@ final class RoboWindow {
         panel.orderOut(nil)
         chat?.orderOut(nil)
         if blurShown { machine.blurBackground(false, .zero) }
-        typer?.close()
         for t in [ticker, roamTimer, revealer, shadeTimer, chatShadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         let wasBusy = lock.withLock { () -> Bool in

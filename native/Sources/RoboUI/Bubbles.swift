@@ -68,7 +68,6 @@ final class BubbleText: NSView {
 final class BubbleView: NSView {
     enum Look { case you, robo, failed }
 
-    static let radius: CGFloat = 19
     static let pad = NSEdgeInsets(top: 9, left: 13, bottom: 9, right: 13)
     static let tailSize: CGFloat = 7
     static let footerGap: CGFloat = 3
@@ -78,21 +77,27 @@ final class BubbleView: NSView {
     private(set) var look: Look
     var theme: Theme { didSet { text.style(theme); dots?.theme = theme; needsDisplay = true } }
     let text: BubbleText
+    let reduceMotion: () -> Bool
     private let footerLabel = NSTextField(wrappingLabelWithString: "")
     private(set) var dots: TypingDotsView?
-    private let captionLabel = NSTextField(labelWithString: "")
+    /// The Markdown the bubble shows (what Copy copies: code fences and formulas as written).
+    private(set) var source = ""
     /// The bubble's own size (the footer is under it, outside the rounded shape).
     private(set) var bubbleSize = CGSize.zero
     var tail = false { didSet { if tail != oldValue { needsDisplay = true } } }
 
-    init(turn: Turn, theme: Theme, textWidth: CGFloat) {
+    init(turn: Turn, theme: Theme, textWidth: CGFloat, reduceMotion: @escaping () -> Bool = { false }) {
         turnID = turn.id
         look = BubbleView.look(of: turn)
         self.theme = theme
+        self.reduceMotion = reduceMotion
         text = BubbleText(width: textWidth)
         super.init(frame: .zero)
         text.style(theme)
+        text.textView.contextMenu = { [weak self] in self?.contextMenu() }
         addSubview(text)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
         footerLabel.font = .systemFont(ofSize: 11)
         footerLabel.textColor = .secondaryLabelColor
         footerLabel.isSelectable = true
@@ -101,10 +106,7 @@ final class BubbleView: NSView {
         footerLabel.drawsBackground = false
         footerLabel.isHidden = true
         addSubview(footerLabel)
-        captionLabel.font = .systemFont(ofSize: 11)
-        captionLabel.textColor = .secondaryLabelColor
-        captionLabel.isHidden = true
-        addSubview(captionLabel)
+        updateLabel()
     }
     required init?(coder: NSCoder) { fatalError("not used") }
 
@@ -113,20 +115,63 @@ final class BubbleView: NSView {
 
     static func look(of turn: Turn) -> Look { turn.role == .you ? .you : turn.failed ? .failed : .robo }
 
-    func set(look: Look) { if look != self.look { self.look = look; needsDisplay = true } }
+    func set(look: Look) { if look != self.look { self.look = look; needsDisplay = true; updateLabel() } }
 
-    /// Turn the "typing" dots on or off (a Robo turn that has no text yet), with what it is doing under them.
-    func setWorking(_ working: Bool, caption: String) {
+    /// Show `s`, built from the Markdown `source`.
+    func show(_ s: NSAttributedString, source: String) {
+        text.setContent(s)
+        self.source = source
+        updateLabel()
+    }
+
+    /// The text as VoiceOver reads it: no attachment marks (a formula is a picture to it).
+    var spokenText: String { text.string.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// "You: ...", "Robo: ...", "Robo is typing", "Robo, failed: ...".
+    private func updateLabel() {
+        let who = look == .you ? "You" : look == .failed ? "Robo, failed" : "Robo"
+        setAccessibilityLabel(dots != nil ? "Robo is typing" : "\(who): \(spokenText)")
+    }
+
+    /// Turn the "typing" dots on or off (a Robo turn that has no text yet; what it is doing is in the chat's status line).
+    func setWorking(_ working: Bool) {
         if working && dots == nil {
             let d = TypingDotsView(theme: theme)
+            d.reduceMotion = reduceMotion
             addSubview(d)
             dots = d
+            updateLabel()
         } else if !working, let d = dots {
             d.removeFromSuperview()
             dots = nil
+            updateLabel()
         }
-        captionLabel.stringValue = caption
-        captionLabel.isHidden = !working || caption.isEmpty
+    }
+
+    // MARK: Copy
+
+    /// Robo's bubbles have Copy: the selection when there is one, else the whole answer as it was written (Markdown).
+    func contextMenu() -> NSMenu? {
+        guard look != .you, !source.isEmpty else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Copy", action: #selector(copyFromMenu), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu() }
+
+    @objc private func copyFromMenu() { copy(to: .general) }
+
+    func copy(to pasteboard: NSPasteboard) {
+        let selected = text.textView.selectedRange()
+        pasteboard.clearContents()
+        if selected.length > 0, let storage = text.textView.textStorage {
+            pasteboard.setString((storage.string as NSString).substring(with: selected).replacingOccurrences(of: "\u{FFFC}", with: ""), forType: .string)
+        } else {
+            pasteboard.setString(source, forType: .string)
+        }
     }
 
     func setFooter(_ lines: [String]) {
@@ -141,18 +186,13 @@ final class BubbleView: NSView {
         let working = dots != nil
         let innerMax = maxWidth - pad.left - pad.right
         var inner = CGSize(width: shrink ? min(innerMax, max(text.usedWidth, 0)) : innerMax, height: text.contentHeight)
-        if working {
-            inner = CGSize(width: max(32, captionLabel.isHidden ? 0 : captionLabel.intrinsicContentSize.width), height: 16 + (captionLabel.isHidden ? 0 : 16))
-        }
+        if working { inner = CGSize(width: 32, height: 16) }
         let size = CGSize(width: (inner.width + pad.left + pad.right).rounded(.up), height: (inner.height + pad.top + pad.bottom).rounded(.up))
         bubbleSize = size
         let inset = Self.tailSize  // room at both sides for the tail: the body is drawn this far in
         text.setFrameOrigin(NSPoint(x: inset + pad.left, y: Self.shadowTop + pad.top))
         text.isHidden = working
-        if let dots {
-            dots.frame = CGRect(x: inset + pad.left - 5, y: Self.shadowTop + pad.top - 1, width: 32, height: 16)
-            captionLabel.frame = CGRect(x: inset + pad.left, y: Self.shadowTop + pad.top + 18, width: max(0, inner.width), height: 14)
-        }
+        dots?.frame = CGRect(x: inset + pad.left - 5, y: Self.shadowTop + pad.top - 1, width: 32, height: 16)
         var total = CGSize(width: size.width, height: size.height + Self.shadowTop + Self.shadowBottom)
         if !footerLabel.isHidden {
             footerLabel.preferredMaxLayoutWidth = maxWidth
@@ -166,7 +206,7 @@ final class BubbleView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let body = CGRect(origin: CGPoint(x: Self.tailSize, y: Self.shadowTop), size: bubbleSize)
         guard body.width > 0 else { return }
-        let shape = NSBezierPath(roundedRect: body, xRadius: Self.radius, yRadius: Self.radius)
+        let shape = NSBezierPath(roundedRect: body, xRadius: Chrome.bubbleRadius, yRadius: Chrome.bubbleRadius)
         if tail {
             let t = Self.tailSize
             let right = look == .you
