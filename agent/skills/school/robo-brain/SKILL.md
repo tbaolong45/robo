@@ -4,9 +4,9 @@ description: "Save things to the user's second brain on request."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [Obsidian, SecondBrain, Notes, Learning]
-    requires_toolsets: [file, terminal]
+    requires_toolsets: [file, bash]
     related_skills: [robo-notes, study-quiz, school-posts]
 ---
 
@@ -31,15 +31,15 @@ The brain is `{{VAULT}}/Brain/`, and its layout is the user's: `ls` it first.
   that counts, Opportunities I am watching).
 
 When `Templates/<kind>.md` exists, read it and copy its shape: its date and title placeholders (in
-double curly braces) become today's date and the title. Make a missing folder with `terminal`
+double curly braces) become today's date and the title. Make a missing folder with `Bash`
 (`mkdir -p`).
 - Never overwrite. A new note: `ls` the folder first and add " 2" if the name exists. An existing
-  note: append only (a section at the end, or one line) with `patch`, after you have read it:
-  robo-guard records `write_file` and `patch` calls, so the card can show the filing is real (not
-  a terminal `>>`). Never rewrite, reorder or delete what is there, never move, rename or delete a
+  note: append only (a section at the end, or one line) with `Edit`, after you have read it:
+  robo-guard records `Write` and `Edit` calls, so the card can show the filing is real (not
+  a Bash `>>`). Never rewrite, reorder or delete what is there, never move, rename or delete a
   file in `Brain/`, and never touch the course files (slides, PDFs) beside the notes.
-- A name never contains `/ : # ^ [ ] | \`, and never the word `hermes` (robo-guard blocks any
-  path that contains it).
+- A name never contains `/ : # ^ [ ] | \`, and never `.hermes` or `robo-agent` (robo-guard blocks
+  any path that contains them).
 
 ## Format
 Obsidian Markdown, no HTML and no remote images. YAML properties first: `type` (`reading`,
@@ -56,7 +56,7 @@ Then a `> [!summary]` line, and no `# Title` line: the file name is the title.
 - `[[wikilinks]]` only to notes that exist (check with `ls`), never to dates.
 
 ## Reply
-After the write or the append, check the file (`read_file` or `ls`) before you claim it; if it
+After the write or the append, check the file (`Read` or `ls`) before you claim it; if it
 failed, say so. When it is done, reply after the feeling tag in one or two sentences: where it
 went (the folder and the title) and the ONE thing for the user to fill in or check. Robo opens
 the note in Obsidian by itself when your reply ends, so do NOT open Obsidian or the file.

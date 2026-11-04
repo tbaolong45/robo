@@ -4,7 +4,7 @@ description: "Read the Outlook inbox; draft or act when asked."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Outlook, Mail]
     requires_toolsets: [browser]
     related_skills: [school-digest, robo-notes]
@@ -17,8 +17,8 @@ The user asks about new or important mail, the digest needs it, or the user asks
 write or send an email.
 
 ## Procedure
-1. `browser_navigate(url="https://outlook.office.com/mail/inbox")`. Read the page snapshot it
-   returns.
+1. `browser_navigate(url="https://outlook.office.com/mail/inbox")`. Then `browser_snapshot()` to read
+   the page.
 2. Signing in passes through `login.microsoftonline.com` for a few seconds by itself. Only if
    a snapshot (take up to 3) shows "Pick an account" with the user's school address on it,
    navigate ONCE to `https://outlook.office.com/mail/inbox?login_hint=<that address>`; this
@@ -47,11 +47,11 @@ For "draft/write an email to X about Y":
    body; fix any wrong or empty field with `browser_type`.
 5. Leave it as a DRAFT. A form that was only prefilled is NOT saved by Outlook: click into the
    body, type one space (`browser_type` appending " "), wait ~5 s for "Draft saved", then
-   close the compose with `browser_press(key="Escape")`. Never click "Discard".
+   close the compose with `browser_press_key(key="Escape")`. Never click "Discard".
 6. Verify before you claim it: `browser_navigate(url="https://outlook.office.com/mail/drafts")`
    and find a row "[Draft] <recipient> <subject>". If it is not there, say so and try once
    more. Then tell the user the draft is saved in their university Outlook Drafts
-   (not Gmail), with the subject, and offer to send it. If you wrote a draft note, `patch` its
+   (not Gmail), with the subject, and offer to send it. If you wrote a draft note, `Edit` its
    line `status: unsent` to `status: saved in Outlook Drafts` only after the draft row is found
    (the "Not sent" callout stays); if the row never shows up, leave the status and say so.
 

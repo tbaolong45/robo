@@ -4,7 +4,7 @@ description: "Daily study digest: classes, mail, Teams, deadlines."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Digest, Daily]
     requires_toolsets: [browser]
     related_skills: [school-timetable, school-mail, school-teams, school-moodle, study-plan, study-ledger, robo-notes]
@@ -16,7 +16,7 @@ metadata:
 The first wake of the day, or whenever the user asks for the digest or "what's up today".
 
 ## Procedure
-Load and follow each skill with `skill_view`; the digest only reads and never acts for the
+Load and follow each skill with the `Skill` tool; the digest only reads and never acts for the
 user (it writes no file; a note only if the user asks, with `robo-notes`):
 1. `school-timetable`: today's classes only (with start and end, for the plan).
 2. `school-moodle`: everything due in the next 7 days, plus anything overdue.

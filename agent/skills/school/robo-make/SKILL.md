@@ -4,7 +4,7 @@ description: "Make diagrams, web pages, charts, slides, flashcards."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [Create, Diagram, HTML, Chart]
     requires_toolsets: [file]
     related_skills: [study-plan, study-quiz, robo-notes]

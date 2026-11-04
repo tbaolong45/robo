@@ -4,9 +4,9 @@ description: "Write drafts, plans and text as Obsidian notes."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [Obsidian, Notes, Draft, Plan]
-    requires_toolsets: [file, terminal]
+    requires_toolsets: [file, bash]
     related_skills: [robo-make, study-plan, school-mail]
 ---
 
@@ -20,12 +20,12 @@ file. Things that need a browser (diagram, chart, web page, slides, flashcards) 
 a quiz is `study-quiz`.
 
 ## Where
-One note per request, written with `write_file` into the vault `{{VAULT}}`:
+One note per request, written with `Write` into the vault `{{VAULT}}`:
 - `{{VAULT}}/Drafts/` for drafts, `{{VAULT}}/Plans/` for plans, `{{VAULT}}/Notes/` for
-  everything else. Make the folder if it is missing (`terminal`: `mkdir -p`).
+  everything else. Make the folder if it is missing (`Bash`: `mkdir -p`).
 - File name `YYYY-MM-DD <short title>.md` with today's date, e.g. `2026-10-12 Lab 3 extension.md`.
-  The title never contains `/ : # ^ [ ] | \`, and never the word `hermes` (robo-guard blocks any
-  path that contains it).
+  The title never contains `/ : # ^ [ ] | \`, and never `.hermes` or `robo-agent` (robo-guard blocks
+  any path that contains them).
 - Never overwrite: `ls` the folder first and add " 2" if the name exists. Change an older note
   only when the user asks.
 
@@ -44,7 +44,7 @@ body. No `# Title` line: the file name is the title. Callout lines each start wi
   they help, `$math$`, code fences with a language, `[[wikilinks]]` sparingly for course codes
   and people (never dates).
 - `status` changes later: mail draft `unsent` to `saved in Outlook Drafts` (or `sent` if the
-  user sent it), plan `proposed` to `in calendar` (`patch` that one line, only when the skill
+  user sent it), plan `proposed` to `in calendar` (`Edit` that one line, only when the skill
   that did it says so).
 
 Plan note (`{{VAULT}}/Plans/2026-10-12 Plan Mon 12 Oct.md`):
@@ -112,7 +112,7 @@ $f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}$
 ```
 
 ## Reply
-After `write_file`, check the file exists (`read_file` or `ls`) before you claim it; if the
+After `Write`, check the file exists (`Read` or `ls`) before you claim it; if the
 write failed, say so. When the request is done, reply after the feeling tag in one or two
 sentences: the note's title and the one thing to look at (the first block, the subject line,
 the key idea). If another skill gives the reply its own shape (digest, plan), follow that. Do NOT

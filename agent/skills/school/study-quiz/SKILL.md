@@ -4,7 +4,7 @@ description: "Quiz me from my notes; log scores, schedule reviews."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Quiz, Revision, Review]
     requires_toolsets: [file]
     related_skills: [study-ledger, study-plan, school-moodle, robo-notes]
@@ -19,8 +19,8 @@ student asks for. It is never a graded quiz or exam, and never a way into Moodle
 
 ## Material
 Ask only about text you read in this run:
-- The student's Obsidian notes in `{{VAULT}}`: find the topic (`search_files`, or `ls` in
-  `terminal`), then `read_file` the notes.
+- The student's Obsidian notes in `{{VAULT}}`: find the topic (`Grep`, or `ls` in
+  `Bash`), then `Read` the notes.
 - A Moodle course page, only when the student asks for it. Warn first ("Viewing a Moodle page
   can mark an item complete. OK?") and wait for the yes. Then follow `school-moodle` for the
   address and sign-in, and read the course page's sections. Never open a quiz or assignment.

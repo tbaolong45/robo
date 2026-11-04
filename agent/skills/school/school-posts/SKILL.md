@@ -4,7 +4,7 @@ description: "Scan LMS posts for deadlines, events and new materials."
 version: 1.1.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Moodle, Deadlines, Posts, Materials]
     requires_toolsets: [browser]
     related_skills: [school-moodle, school-digest, study-ledger]
@@ -43,19 +43,19 @@ Not signed in (the URL contains `/login/` or a "Log in" form shows)? Reply one s
 signed in to Moodle. Please run `robo signin`, then ask me again.", with no JSON block, and stop.
 Never try to sign in.
 
-**Moving around.** Robo's guard knows a page's elements only from the latest `browser_navigate` or
-`browser_snapshot`. After a click or `browser_back` it knows none, and a click on an element it does
-not know is refused (nobody can answer the question, so the run is stopped). So: take a
-`browser_snapshot` before a click that follows a click or `browser_back`; go back to a page with
-`browser_navigate` to its address, never with `browser_back`; never use `browser_console` (raw
-JavaScript on the LMS is blocked).
+**Moving around.** Robo's guard knows a page's elements only from the page snapshot of the latest
+browser result, and a click on an element it does not know is refused (nobody can answer the
+question, so the run is stopped). `browser_navigate` and `browser_click` save their snapshot to a
+file and only link it; read the page with `browser_snapshot()` (the file is the same text). Go back
+to a page with `browser_navigate` to its address, never with `browser_navigate_back`; never use
+`browser_evaluate` or `browser_run_code_unsafe` (raw JavaScript on the LMS is blocked).
 
 **list**
-1. `browser_navigate(url="<base>/my/courses.php")`.
+1. `browser_navigate(url="<base>/my/courses.php")`, then `browser_snapshot()`.
 2. Each course in progress is a link. A snapshot shows its name but not its address, so for each
-   one: `browser_click` its ref, then `browser_snapshot`: the address is the `url` under
-   `frame_tree` → `top` in the result (`<base>/course/view.php?id=...`). Return with
-   `browser_navigate(url="<base>/my/courses.php")`, whose result lists the refs again. Go through
+   one: `browser_click` its ref: the address is the `- Page URL:` line under `### Page` in
+   the result (`<base>/course/view.php?id=...`). Return with
+   `browser_navigate(url="<base>/my/courses.php")`, then `browser_snapshot()` for the refs again. Go through
    every page of the list. At most 40 courses.
 3. A course whose address you could not read, or a click that was refused, makes the list
    incomplete: see below.
@@ -65,7 +65,7 @@ JavaScript on the LMS is blocked).
    `browser_navigate(url=<COURSE>)` and read the course page: the Announcements forum, the other
    forums, and what teachers added to the topics.
 2. Recent activity lists what teachers added or changed in the course since a day, forum posts and
-   new materials together. Work out SINCE as Unix seconds with `terminal`
+   new materials together. Work out SINCE as Unix seconds with `Bash`
    (`date -j -f "%Y-%m-%d %H:%M:%S" "<SINCE> 00:00:00" +%s`), then
    `browser_navigate(url="<base>/course/recent.php?id=<course id>&date=<seconds>&modid=&user=0&logaction=0&filter=1")`.
 3. Read NEWEST FIRST: the announcements forum, then each other forum's discussion list (they are
@@ -73,8 +73,8 @@ JavaScript on the LMS is blocked).
    long lists page by page. Stop a forum when its remaining discussions have no post on or after
    SINCE.
 4. Be thrifty: every tool call sends your whole context again, so a quiet course must cost few
-   calls. Use `browser_navigate` and `browser_snapshot` only (no `browser_vision`, no
-   `browser_console`), never read a page twice, and once the Announcements forum and the
+   calls. Use `browser_navigate` and `browser_snapshot` only (no `browser_take_screenshot`, no
+   `browser_evaluate`), never read a page twice, and once the Announcements forum and the
    recent-activity page show nothing on or after SINCE, stop and answer `[]` without opening other
    forums (unless the course page itself names one for deadlines or assignments). At most 12 tool
    calls for a course; say so in the one sentence if you stopped at that limit. Also stop after 120

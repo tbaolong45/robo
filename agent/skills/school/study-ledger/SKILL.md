@@ -4,9 +4,9 @@ description: "Log goals, exams, results; answer how am I doing."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Goals, Grades, Progress]
-    requires_toolsets: [file, memory, terminal]
+    requires_toolsets: [file, memory, bash]
     related_skills: [study-plan, study-quiz, school-moodle]
 ---
 
@@ -20,7 +20,8 @@ metadata:
 - `study-quiz` finished a quiz: it writes the Results line and the review lines through this skill.
 
 ## The ledger
-`~/.local/share/robo/study.md`, one dated line per fact, newest first in its section:
+`~/.local/share/robo/study.md` (`Read`, `Write` and `Edit` take the full path: `~` is the
+home folder), one dated line per fact, newest first in its section:
 
 ```
 # Study ledger
@@ -40,30 +41,30 @@ metadata:
 
 The first date is the day it was logged (today); write dates as YYYY-MM-DD. An Exams line may end
 with `· topics: eigenvalues; SVD`, what the user said the exam covers (when they tell you later,
-`patch` it onto that line). `## Reviews` is not in a new ledger: see **Reviews**.
+`Edit` it onto that line). `## Reviews` is not in a new ledger: see **Reviews**.
 
 ## Recording a fact
-1. `read_file(path="~/.local/share/robo/study.md")`. If it does not exist, create it:
-   `write_file(path="~/.local/share/robo/study.md",
+1. `Read(file_path="~/.local/share/robo/study.md")`. If it does not exist, create it:
+   `Write(file_path="~/.local/share/robo/study.md",
    content="# Study ledger\n\n## Goals\n\n## Exams\n\n## Results\n\n## Notes\n")`.
 2. Add ONE line under the right heading:
-   `patch(path="~/.local/share/robo/study.md", old_string="## Exams\n",
+   `Edit(file_path="~/.local/share/robo/study.md", old_string="## Exams\n",
    new_string="## Exams\n- 2026-10-11 · MATH201 Linear Algebra midterm · 2026-10-20 09:00\n")`.
    Goals → `## Goals`, exams → `## Exams`, any score → `## Results`, preferences and
    everything else → `## Notes` (including `override · <item>`, a full solution shown early for
    practice work, and `snooze nudges until 2026-10-26`, when the user wants no readiness nudges).
    Results always carry the score as given ("7/10") and a percentage when you can compute it.
-3. Save a short fact: `memory(action="add", target="user", content="MATH201 midterm
-   2026-10-20 09:00")`. If it updates an older fact (moved exam, new goal), use
-   `action="replace"` with `old_text=` a unique part of the old entry instead of adding.
+3. Save a short fact: `memory_add(text="MATH201 midterm 2026-10-20 09:00", kind="event")`.
+   If it updates an older fact (moved exam, new goal), first `memory_search` for the old
+   entry and `memory_forget` its id, then add the new one.
 4. Confirm in one short line ("Noted: MATH201 midterm on Mon 20 Oct."). Record only what the
    user said; if the subject or date is unclear, ask one short question first.
 
 ## Reviews
 Spaced revision state: one line per topic under `## Reviews`. Add the heading yourself with the
 first line, above `## Notes`:
-`patch(path="~/.local/share/robo/study.md", old_string="## Notes\n",
-new_string="## Reviews\n<line>\n\n## Notes\n")`. Later, `patch` the topic's old line (all of it).
+`Edit(file_path="~/.local/share/robo/study.md", old_string="## Notes\n",
+new_string="## Reviews\n<line>\n\n## Notes\n")`. Later, `Edit` the topic's old line (all of it).
 
 ```
 - MATH201 · eigenvalues · box 2 · due 2026-10-22 · last 2026-10-19 ok c4 · src [[Eigenvalues]]
@@ -71,7 +72,7 @@ new_string="## Reviews\n<line>\n\n## Notes\n")`. Later, `patch` the topic's old 
 
 `last` is the date, `ok` or `wrong`, and `c` plus the student's confidence 1-5 (a confident miss,
 `wrong c5`, gets ` surprise` after it). `src` is the note or `Moodle: <course> › <section>`.
-One line per topic: `patch` it, never add a second. A topic with no line yet counts as box 0
+One line per topic: `Edit` it, never add a second. A topic with no line yet counts as box 0
 when its first result comes in.
 - Correct with confidence 3 or more: box + 1 (at most 5). Correct with confidence 1-2: same box.
   Wrong: box 0.
@@ -87,7 +88,7 @@ For each exam in the next 14 days, or the one the user asks about:
    about the course. Never invent them: none found, ask one short question and store the answer.
 2. Facts: the latest `quiz` Results line for the course; its review lines (lowest box, days since
    the newest `last`, anything overdue); and
-   `terminal(command="{{ROBO}} activity --days 7", timeout=60)`, adding up the minutes of windows
+   `Bash(command="{{ROBO}} activity --days 7", timeout=60000)`, adding up the minutes of windows
    and files whose title names the course code or name. Those minutes are approximate, so say so;
    if the command fails, leave them out.
 3. Colour:
@@ -101,8 +102,8 @@ For each exam in the next 14 days, or the one the user asks about:
    yet: say the topics are not measured and offer a quiz (`study-quiz`).
 
 ## Answering progress questions
-1. Read the ledger (`read_file`) and pick the lines for that subject.
-2. `session_search(query="linear algebra OR MATH201", limit=5)` (if available) for older
+1. Read the ledger (`Read`) and pick the lines for that subject.
+2. `memory_search(query="linear algebra MATH201")` for older
    mentions not in the ledger (results, struggles, topics).
 3. Moodle grades, read-only. The user's Moodle is `{{MOODLE_BASE_URL}}`; if that says "not
    set", skip Moodle and say so. Otherwise

@@ -4,9 +4,9 @@ description: "Plan today's study blocks; add them to Outlook."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Planning, Calendar]
-    requires_toolsets: [browser, terminal, file]
+    requires_toolsets: [browser, bash, file]
     related_skills: [school-timetable, school-moodle, study-ledger, study-quiz, school-digest, robo-notes]
 ---
 
@@ -18,20 +18,20 @@ metadata:
   **Adding to the calendar** with that one block.
 
 ## Gather
-Load skills with `skill_view(name=...)`. Reuse what this conversation already fetched (the
+Load skills with the `Skill` tool. Reuse what this conversation already fetched (the
 digest has the classes and deadlines) instead of fetching again.
 1. `school-timetable`: today's classes as busy times with exact start and end.
 2. `school-moodle`: everything due in the next 7 days, plus anything overdue.
-3. `study-ledger`: `read_file(path="~/.local/share/robo/study.md")` for exams, goals, weak
+3. `study-ledger`: `Read(file_path="~/.local/share/robo/study.md")` for exams, goals, weak
    results and preferences (block length, best time of day), and the `## Reviews` lines whose
    `due` is today or earlier.
 4. Yesterday's activity:
-   `terminal(command="{{ROBO}} activity --days 1", timeout=60)`.
+   `Bash(command="{{ROBO}} activity --days 1", timeout=60000)`.
    If it fails, skip it. Use it to continue unfinished work and not repeat what is done.
 
 ## Plan
 1. Write two NEW files (name them with the current time, e.g. `/tmp/robo-plan/1432-tasks.json`
-   and `/tmp/robo-plan/1432-busy.json`) with `write_file`:
+   and `/tmp/robo-plan/1432-busy.json`) with `Write`:
    - tasks: `[{"id": "ps4", "title": "MATH201 problem set 4", "minutes": 90,
      "deadline": "2026-10-14T23:59:00", "priority": 0.8}]`. Times are ISO local, no `Z`;
      `deadline` is the due time (for exam prep, the exam start). `priority` is 0..1: overdue
@@ -45,7 +45,7 @@ digest has the classes and deadlines) instead of fetching again.
      `study-quiz` on those topics, which is what moves their due dates.
    - busy: `[{"title": "Calculus", "start": "2026-10-11T09:00:00", "end": "2026-10-11T10:30:00"}]`,
      today's classes and any existing events (including `[Robo]` ones).
-2. `terminal(command="{{ROBO}} plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json", timeout=60)`.
+2. `Bash(command="{{ROBO}} plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json", timeout=60000)`.
    It prints `{"blocks": [{"title", "start", "end"}], "unscheduled": [...]}`, already packed
    with no overlaps, breaks, and deadlines respected. Use its times as they are; never
    re-pack by hand. If it errors, fix the JSON once and rerun.
@@ -88,7 +88,7 @@ block:
 5. At the end, `browser_navigate(url="https://outlook.office.com/calendar/view/day")` (or the
    block's day) and check that every `[Robo]` block is there. Report what was added and
    anything that failed.
-6. If you wrote the plan note for these blocks in this conversation, `patch` its line
+6. If you wrote the plan note for these blocks in this conversation, `Edit` its line
    `status: proposed` to `status: in calendar` only if every block was added. Skip it if that
    is not easy.
 

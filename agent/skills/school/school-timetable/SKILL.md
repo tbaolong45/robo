@@ -4,7 +4,7 @@ description: "Read this week's classes from the Outlook web calendar."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Outlook, Calendar]
     requires_toolsets: [browser]
     related_skills: [school-digest, study-plan]
@@ -17,8 +17,8 @@ The user asks about classes today or this week, or the digest or `study-plan` ne
 classes.
 
 ## Procedure
-1. `browser_navigate(url="https://outlook.office.com/calendar/view/week")`. Read the page
-   snapshot it returns.
+1. `browser_navigate(url="https://outlook.office.com/calendar/view/week")`. Then `browser_snapshot()` to
+   read the page.
 2. Signing in passes through `login.microsoftonline.com` for a few seconds by itself. Only if
    a snapshot (take up to 3) shows "Pick an account" with the user's school address on it,
    navigate ONCE to `https://outlook.office.com/calendar/view/week?login_hint=<that address>`; this
@@ -29,7 +29,7 @@ classes.
 3. Outlook can take up to a minute to load. If the snapshot shows no calendar yet, call
    `browser_snapshot()` again (at most 3 times).
 4. Read the events: title, day, start and end time, location. If they are missing from the
-   text, use `browser_vision(question="List every event with day, time, title and room")`.
+   text, `browser_take_screenshot()` and read every event (day, time, title, room) from the picture.
 5. To see another week, click the calendar's previous or next week button.
 
 ## Acting
@@ -43,4 +43,4 @@ Today first, then the remaining days, one bullet per class in time order:
 For `study-plan`, also return the day's busy times with exact start and end, ISO local, no
 `Z`, every event that is not cancelled (classes, meetings, `[Robo]` blocks):
 `[{"title": "Calculus", "start": "2026-10-13T09:00:00", "end": "2026-10-13T10:30:00"}]`.
-If an event's end time is not visible, read it with `browser_vision`; never guess it.
+If an event's end time is not visible, read it from a `browser_take_screenshot()`; never guess it.

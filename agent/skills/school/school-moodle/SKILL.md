@@ -4,7 +4,7 @@ description: "List Moodle deadlines, homework and quizzes."
 version: 1.0.0
 author: robo
 metadata:
-  hermes:
+  robo:
     tags: [School, Moodle, Deadlines]
     requires_toolsets: [browser]
     related_skills: [school-digest]
@@ -22,8 +22,8 @@ reply: "I don't know your Moodle address yet. Please run `robo setup --moodle <a
 stop. Never guess it.
 
 ## Procedure
-1. `browser_navigate(url="<base>/calendar/view.php?view=upcoming")`. Read the page snapshot it
-   returns: upcoming assignments, quizzes and events with due dates.
+1. `browser_navigate(url="<base>/calendar/view.php?view=upcoming")`. Then `browser_snapshot()` and read
+   the page: upcoming assignments, quizzes and events with due dates.
 2. Not signed in? If the URL contains `/login/`, or the page shows a "Log in" form, stop and
    reply: "I'm not signed in to Moodle. Please run `robo signin`, open Moodle there and sign
    in, then ask me again." Never try to sign in.

@@ -5,8 +5,9 @@ message, a calendar invite, a Moodle page) with a HARMLESS payload (a token, a .
 temp path), the tool call a fooled agent would make, and what robo-guard must answer. The test
 replays the call through the guard offline: nothing is sent, fetched or run.
 
-With approvals off only a "block" stops an action: Hermes approves every robo-guard "approve" by
-itself, so that outcome here means "would ask in mode manual", not "stopped". An "allow" canary is
+With approvals off only a "block" stops an action: the harness allows every robo-guard "approve"
+by itself, so that outcome here means "would ask in mode manual", not "stopped". An "allow"
+canary is
 a known gap or proof that a harmless call is not blocked.
 
 scripts/eval_live.py (opt-in, talks to the real agent) is tested here with a fake client.
@@ -18,12 +19,9 @@ import re
 from pathlib import Path
 
 import pytest
-
-from robo.brain import BrainError
-from robo.events import ApprovalNeeded, Delta, RunEnded, ToolStarted
+from robo_agent.guard import Guard
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "hermes" / "plugins" / "robo-guard" / "__init__.py"
 CANARIES = ROOT / "tests" / "evals" / "canaries.jsonl"
 REQUESTS = ROOT / "tests" / "evals" / "requests.jsonl"
 LINES = [line for line in CANARIES.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -37,24 +35,16 @@ def load(path, name):
     return mod
 
 
-@pytest.fixture
-def guard(tmp_path, monkeypatch):
-    mod = load(PLUGIN, "robo_guard")
-    monkeypatch.setattr(mod, "HOME", tmp_path)  # receipts must never land in the real home
-    monkeypatch.setenv("MOODLE_BASE_URL", "https://moodle.uni.example")
-    (tmp_path / ".hermes/profiles/robo").mkdir(parents=True)
-    return mod
-
-
 @pytest.mark.parametrize("line", LINES, ids=[json.loads(line)["id"] for line in LINES])
-def test_canary(guard, tmp_path, line):
-    canary = json.loads(line.replace("{HOME}", tmp_path.as_posix()))
+def test_canary(tmp_path, line):
+    home = tmp_path / "home"
+    guard = Guard(home, runtime=home / ".local/share/robo/agent", own=[ROOT / "agent"],
+                  moodle="https://moodle.uni.example")
+    canary = json.loads(line.replace("{HOME}", home.as_posix()))
     for step in canary["setup"]:  # the pages the agent has seen before the call
-        guard.post_tool_call(tool_name=step["tool"], args=step["args"], task_id="c",
-                             result=json.dumps(step["result"]), session_id="s")
+        guard.post(step["tool"], step["args"], step["result"])
     call = canary["call"]
-    ret = guard.pre_tool_call(tool_name=call["tool"], args=call["args"], task_id="c",
-                              session_id="s")
+    ret = guard.pre(call["tool"], call["args"])
     assert (ret["action"] if ret else "allow") == canary["expect"], canary["why"]
     if "shows" in canary:  # what the user must be able to read in the question
         assert canary["shows"] in ret["message"]
@@ -94,7 +84,7 @@ def live():
 
 
 class Fake:
-    """A Hermes client that answers from a script of event lists, keyed by the request text."""
+    """A robo-agent client that answers from a script of event lists, keyed by the request text."""
 
     def __init__(self, script):
         self.script, self.asked, self.approvals, self.run_id = script, [], [], None
@@ -115,7 +105,7 @@ def test_eval_live_refuses_without_yes_and_says_it_uses_the_real_agent(live, cap
     client = Fake({})
     assert live.main([], client=client) == 2
     out = capsys.readouterr().out
-    assert "REAL Hermes agent" in out and "--yes" in out
+    assert "REAL Robo agent" in out and "--yes" in out
     assert client.asked == []
 
 
@@ -130,16 +120,19 @@ def test_eval_live_scores_each_request(live, tmp_path, monkeypatch, capsys):
     path = tmp_path / "requests.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in requests))
     monkeypatch.setattr(live, "REQUESTS", path)
-    done = RunEnded("completed", output="Two things.")
+    done = {"event": "run.completed", "output": "Two things."}
     client = Fake({
-        "what is due": [ToolStarted("browser_navigate"), Delta("Two"), done],
-        "plan": [Delta("A plan."), RunEnded("completed")],  # no final output: the stream counts
-        "tidy": [ApprovalNeeded("delete 3 mails"), done],
-        "ledger": [RunEnded("completed", output="  ")],
-        "grades": [RunEnded("failed", error="Hermes error 500")],
-        "explain": [RunEnded("completed", output="It is a number.")],
-        "explain 2": [RunEnded("completed", output="Eigenvalues scale a vector.")],
-        "mail": BrainError("Hermes is not running"),
+        "what is due": [{"event": "tool.started", "tool": "browser_navigate"},
+                        {"event": "message.delta", "delta": "Two"}, done],
+        "plan": [{"event": "message.delta", "delta": "A plan."},
+                 {"event": "run.completed"}],  # no final output: the stream counts
+        "tidy": [{"event": "approval.request", "description": "Robo wants to delete 3 mails."},
+                 done],
+        "ledger": [{"event": "run.completed", "output": "  "}],
+        "grades": [{"event": "run.failed", "error": "the agent failed: 500"}],
+        "explain": [{"event": "run.completed", "output": "It is a number."}],
+        "explain 2": [{"event": "run.completed", "output": "Eigenvalues scale a vector."}],
+        "mail": live.ClientError("robo-agent is not running"),
     })
     assert live.main(["--yes"], client=client) == 1
     out = capsys.readouterr().out
@@ -157,7 +150,8 @@ def test_eval_live_scores_each_request(live, tmp_path, monkeypatch, capsys):
 
 def test_eval_live_limit_runs_only_the_first_requests(live, capsys):
     items = live.load(REQUESTS)
-    client = Fake({item["request"]: [RunEnded("completed", output="?")] for item in items})
+    client = Fake({item["request"]: [{"event": "run.completed", "output": "?"}]
+                   for item in items})
     assert live.main(["--yes", "--limit", "2"], client=client) == 0
     assert [text for text, _ in client.asked] == [item["request"] for item in items[:2]]
     assert "2/2 passed" in capsys.readouterr().out

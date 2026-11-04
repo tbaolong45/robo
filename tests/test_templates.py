@@ -1,19 +1,18 @@
-"""Hermes templates: SKILL.md frontmatter passes Hermes' skill_manage validator, SOUL.md emotions.
+"""The agent's templates (agent/SOUL.md, agent/skills): frontmatter, emotions, pinned rules.
 
-Rules mirrored from ~/.hermes/hermes-agent/tools/skill_manager_tool.py `_validate_frontmatter`
-(name + description required, VALID_NAME_RE, description <= SKILL_PROMPT_DESC_LIMIT = 60 for new
-skills) and the YAML error "mapping values not allowed here" (an unquoted value with ': ').
+The frontmatter rules are the old Hermes validator's, kept because the skills still meet them
+(name + description required, a short quoted description) and a value with an unquoted ': '
+breaks YAML ("mapping values not allowed here").
 """
 
-import json
 import re
 from pathlib import Path
 
 import pytest
 
-from robo.events import EMOTIONS
-
-HERMES = Path(__file__).resolve().parents[1] / "hermes"
+EMOTIONS = ("neutral", "happy", "curious", "proud", "concerned", "confused", "playful", "sad",
+            "calm")  # Mind.swift's faces
+HERMES = Path(__file__).resolve().parents[1] / "agent"
 SKILLS = sorted((HERMES / "skills").glob("*/*/SKILL.md"))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -44,13 +43,13 @@ def test_all_school_skills_exist():
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
 def test_related_skills_exist(path):
     related = re.search(r"related_skills: \[(.*)\]", path.read_text(encoding="utf-8"))
-    assert related, "metadata.hermes.related_skills is missing"
+    assert related, "metadata.robo.related_skills is missing"
     names = {p.parent.name for p in SKILLS}
     assert {n.strip() for n in related[1].split(",")} <= names - {path.parent.name}
 
 
 @pytest.mark.parametrize("path", SKILLS, ids=lambda p: p.parent.name)
-def test_skill_frontmatter_passes_hermes_validator(path):
+def test_skill_frontmatter_is_valid(path):
     fields, body = frontmatter(path)
     assert fields["name"] == path.parent.name
     assert NAME_RE.match(fields["name"]) and len(fields["name"]) <= 64
@@ -72,23 +71,6 @@ def test_soul_lists_exactly_the_app_emotions():
     line = next(ln for ln in soul.splitlines() if ln.startswith("neutral,"))
     assert tuple(e.strip(" .") for e in line.split(",")) == EMOTIONS
     assert set(re.findall(r"\[\[feel:(\w+)\]\]", soul)) <= set(EMOTIONS)
-
-
-def test_guard_plugin_is_enabled_in_setup_config():
-    # Toolsets and memory are robo.setup's policy (tests/test_setup.py); the guard must stay on.
-    from robo.setup import CONFIG
-
-    assert "robo-guard" in json.loads(CONFIG["plugins.enabled"])
-
-
-def test_robo_gets_the_whole_laptop_and_keeps_its_setup_safe():
-    from robo.setup import CONFIG, TOOLSETS
-
-    assert json.loads(CONFIG["platform_toolsets.api_server"]) == TOOLSETS
-    assert {"terminal", "file", "computer_use", "browser"} <= set(TOOLSETS)
-    # nothing asks (the user's choice); robo-guard's blocks and approvals.deny hold in every mode.
-    assert CONFIG["approvals.mode"] == "off" and CONFIG["approvals.timeout"] == "120"
-    assert json.loads(CONFIG["approvals.deny"]) == ["*hermes*"]
 
 
 @pytest.mark.parametrize("path", sorted(p for p in HERMES.rglob("*") if p.is_file()
@@ -147,13 +129,13 @@ def test_robo_notes_signs_with_the_users_name_not_a_hard_coded_one():
     assert "sign with the user's name from memory, never a placeholder" in flat
 
 
-def test_robo_notes_declares_the_terminal_it_tells_the_agent_to_use():
-    assert "terminal" in re.search(r"requires_toolsets: \[(.*)\]", skill_text("robo-notes"))[1]
+def test_robo_notes_declares_the_bash_it_tells_the_agent_to_use():
+    assert "bash" in re.search(r"requires_toolsets: \[(.*)\]", skill_text("robo-notes"))[1]
 
 
 @pytest.mark.parametrize(("name", "heading", "phrase"), [
     ("robo-notes", "Format", "a message or an essay has none of them"),  # only mail is unsent
-    ("robo-notes", "Where", "hermes"),  # robo-guard blocks any path that contains it
+    ("robo-notes", "Where", ".hermes"),  # robo-guard blocks any path that contains it
     ("school-mail", "Drafting", "only after the draft row is found"),
     ("study-plan", "Adding to the calendar", "only if every block was added"),
     ("school-digest", "Output", "after 20:00"),
@@ -205,7 +187,7 @@ def test_soul_asks_for_sources_and_names_the_scam_signs():
     ("school-posts", "Procedure", "never guess a year or a time"),
     # each tool call re-sends the whole context (a scan took 15 calls and ~630k tokens):
     # text only, an early stop, a cap
-    ("school-posts", "Procedure", "no `browser_vision`, no `browser_console`"),
+    ("school-posts", "Procedure", "no `browser_take_screenshot`, no `browser_evaluate`"),
     ("school-posts", "Procedure", "At most 12 tool calls for a course"),
     # the app reads a day as the end of it, and the daily scan has no backfill (SINCE is a day)
     ("school-posts", "Procedure", "`YYYY-MM-DD` when the post gives a day and no time"),
@@ -217,7 +199,7 @@ def test_soul_asks_for_sources_and_names_the_scam_signs():
     # the live scans of 2026-10-20 to 22: the guard refuses a click on an element it does not
     # know (after a click or a back), the scan denies every ask, and an empty list built on a
     # refused page was taken for "nothing new"
-    ("school-posts", "Procedure", "never with `browser_back`"),
+    ("school-posts", "Procedure", "never with `browser_navigate_back`"),
     ("school-posts", "Procedure", "ONE sentence starting `INCOMPLETE:`"),
     ("school-posts", "Procedure", "with NO JSON block"),
     ("school-posts", "Procedure", "&logaction=0&filter=1"),
@@ -230,10 +212,10 @@ def test_soul_asks_for_sources_and_names_the_scam_signs():
     ("robo-brain", "When to Use", "Never file anything on your own"),
     ("robo-brain", "Where", "Never overwrite"),
     ("robo-brain", "Where", "append only"),
-    # robo-guard records patch, not a terminal `>>`
-    ("robo-brain", "Where", "with `patch`, after you have read it"),
+    # robo-guard records Edit, not a Bash `>>`
+    ("robo-brain", "Where", "with `Edit`, after you have read it"),
     ("robo-brain", "Where", "never move, rename or delete a file in `Brain/`"),
-    ("robo-brain", "Where", "hermes"),  # robo-guard blocks any path that contains it
+    ("robo-brain", "Where", ".hermes"),  # robo-guard blocks any path that contains it
     ("robo-brain", "Format", "rewrite it in your own words"),
     ("robo-brain", "Format", "Never put the answers to graded work"),
     ("robo-brain", "Format", "Never invent a source, a date or a quotation"),
