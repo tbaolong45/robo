@@ -244,19 +244,23 @@ private let planHelp = """
       --day DAY      YYYY-MM-DD (default: today)
       --start START  HH:MM (default 08:00)
       --end END      HH:MM (default 22:00)
-      --tz TZ        time zone (default Asia/Dubai); also used for ISO times
+      --tz TZ        time zone (default: this Mac's); also used for ISO times
                      without an offset
 
     """
 
 /// `robo plan` with the arguments after "plan": what it would print and its exit status (0, or 2 for bad
 /// input with one line on stderr). `stdin` is read only for a `-` argument.
-public func planMain(_ argv: [String], now: Date = Date(),
+public func planMain(_ argv: [String], now: Date = Date(), zone local: TimeZone = .current,
                      stdin: @escaping () -> Data = { FileHandle.standardInput.readDataToEndOfFile() }) -> PlanOutput {
     do {
         guard let a = try PlanArgs(argv) else { return PlanOutput(status: 0, stdout: planHelp, stderr: "") }
         if a.tasks == "-" && a.busy == "-" { throw PlanError("only one of --tasks and --busy can read stdin ('-')") }
-        guard let zone = TimeZone(identifier: a.tz) else { throw PlanError("--tz: unknown time zone '\(a.tz)'") }
+        var zone = local
+        if let tz = a.tz {
+            guard let named = TimeZone(identifier: tz) else { throw PlanError("--tz: unknown time zone '\(tz)'") }
+            zone = named
+        }
         let cal = calendar(zone)
         var date = cal.dateComponents([.year, .month, .day], from: now)
         if let day = a.day {
@@ -297,7 +301,7 @@ public func planMain(_ argv: [String], now: Date = Date(),
 
 /// The flags of `robo plan`: `--flag value` or `--flag=value`; the last occurrence wins.
 private struct PlanArgs {
-    var tasks = "", busy: String?, day: String?, start = "08:00", end = "22:00", tz = "Asia/Dubai"
+    var tasks = "", busy: String?, day: String?, start = "08:00", end = "22:00", tz: String?
 
     /// nil for -h / --help.
     init?(_ argv: [String]) throws {

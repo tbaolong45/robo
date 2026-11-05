@@ -174,7 +174,7 @@ private func run(_ argv: [String], tasks: String? = nil, busy: String? = nil, st
         try! Data(busy.utf8).write(to: dir.appendingPathComponent("b.json"))
         args += ["--busy", dir.appendingPathComponent("b.json").path]
     }
-    let out = planMain(args, now: at ?? now, stdin: { Data(stdin.utf8) })
+    let out = planMain(args, now: at ?? now, zone: dxb, stdin: { Data(stdin.utf8) })
     return PlanOutput(status: out.status, stdout: out.stdout.replacingOccurrences(of: dir.path, with: "DIR"),
                       stderr: out.stderr.replacingOccurrences(of: dir.path, with: "DIR"))
 }
@@ -204,6 +204,15 @@ private func sameJSON(_ a: String, _ b: String) -> Bool {
     let out = planMain(["--tasks", "-", "--day", "2026-10-13", "--tz", "UTC"], now: now, stdin: { Data(good.utf8) })
     #expect(out.status == 0)
     #expect(sameJSON(out.stdout, #"{"blocks": [{"title": "A", "start": "2026-10-13T08:00+00:00", "end": "2026-10-13T08:30+00:00"}], "unscheduled": []}"#))
+}
+
+@Test func withoutTzThePlanUsesTheGivenLocalZoneAndTzOverridesIt() {
+    let kolkata = TimeZone(identifier: "Asia/Kolkata")!
+    func plan(_ flags: [String]) -> String {
+        planMain(["--tasks", "-", "--day", "2026-10-13"] + flags, now: now, zone: kolkata, stdin: { Data(good.utf8) }).stdout
+    }
+    #expect(plan([]).contains("2026-10-13T08:00+05:30"))
+    #expect(plan(["--tz", "UTC"]).contains("2026-10-13T08:00+00:00"))
 }
 
 private func expectOneLineError(_ out: PlanOutput, _ says: String, _ comment: Comment? = nil) {
