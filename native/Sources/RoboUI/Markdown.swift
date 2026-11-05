@@ -436,7 +436,9 @@ final class RoboLayoutManager: NSLayoutManager {
     private func drawRule(_ colour: NSColor, in line: NSRect, font: NSFont, at origin: NSPoint) {
         let m = Chrome.metrics(font)
         colour.setFill()
-        NSRect(x: origin.x + line.minX, y: origin.y + line.minY + (m.ascent + m.descent) / 2 - 0.5, width: line.width, height: 1).fill()
+        let rect = NSRect(x: origin.x + line.minX, y: origin.y + line.minY + (m.ascent + m.descent) / 2 - 0.5, width: line.width, height: 1)
+        // on whole device pixels: a line's y can be fractional, and a 1x screen would smear the rule across two rows
+        (NSView.focusView?.backingAlignedRect(rect, options: .alignAllEdgesNearest) ?? rect).fill()
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {

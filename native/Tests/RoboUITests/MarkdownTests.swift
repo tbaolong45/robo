@@ -84,9 +84,11 @@ private func glass(_ tokens: String) -> Theme {
 /// Runs `body` under the dark appearance, so dynamic system colours resolve the same way for the expectation and the drawing.
 @MainActor private func dark(_ body: () -> Void) {
     let old = NSApp.appearance
-    NSApp.appearance = NSAppearance(named: .darkAqua)
+    let appearance = NSAppearance(named: .darkAqua)!
+    NSApp.appearance = appearance
     defer { NSApp.appearance = old }
-    body()
+    // a dynamic colour read outside drawing follows the current appearance, not the app's: on a Mac in light mode it would be black
+    appearance.performAsCurrentDrawingAppearance(body)
 }
 
 /// The paragraphs of a styled text: the string without its separator, and the attributes of its first character.
