@@ -27,7 +27,7 @@ import Testing
 /// onnx-asr's NemoPreprocessorNumpy on a signal both sides can build exactly: the model flips a token
 /// on differences of 1e-5, so these must stay this close (the first and last frames are the edge cases).
 @Test func melFeaturesAreNumpys() {
-    let audio = (0..<8000).map { Float(($0 * 7919) % 2003 - 1001) / 20000 }
+    let audio: [Float] = (0..<8000).map { (i: Int) -> Float in Float((i * 7919) % 2003 - 1001) / 20000 }
     let f = MelFrontEnd().features(audio)
     #expect(f.columns == 51 && f.length == 50)
     let golden: [(mel: Int, frame: Int, want: Float)] = [
@@ -44,7 +44,9 @@ import Testing
     let bands = MelFrontEnd.bands
     #expect(bands.count == 128 && bands.allSatisfy { $0.first >= 1 && $0.first + $0.weights.count <= 257 })
     #expect(bands.reduce(0) { $0 + $1.weights.count } == 504)
-    #expect(abs(bands.flatMap { $0.weights }.reduce(0.0) { $0 + Double($1) } - 4.090487627036055) < 1e-9)  // fbanks.npz["nemo128"]
+    let weights: [Float] = bands.flatMap { $0.weights }
+    let total: Double = weights.reduce(0.0) { $0 + Double($1) }
+    #expect(abs(total - 4.090487627036055) < 1e-9)  // fbanks.npz["nemo128"]
 }
 
 @Test(arguments: [

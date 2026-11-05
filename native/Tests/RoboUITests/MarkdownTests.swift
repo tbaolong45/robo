@@ -389,7 +389,9 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
             if widths.count <= b.startingColumn { widths.append(b.value(for: .width)) }
         }
         let word = NSAttributedString(string: "Thermodynamics", attributes: [.font: NSFont.systemFont(ofSize: CGFloat(Themes.glass.textPx))]).size().width
-        #expect(widths.count == 2 && widths[0] >= word && widths[0] < 150 && widths.reduce(0, +) + 2 * 9 + 1 <= 300, "\(widths)")
+        let total: CGFloat = widths.reduce(0, +) + 2 * 9 + 1
+        #expect(widths.count == 2 && widths[0] >= word && widths[0] < 150, "\(widths)")
+        #expect(total <= 300, "\(widths)")
     }
 
     @Test func aTaskIsABoxNotABulletWithBrackets() {

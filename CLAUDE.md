@@ -45,6 +45,11 @@ The owner designs the harness and the self-improvement loop themself: don't add 
   clicked, so tests and live checks of a card closing fail on a clean checkout until the pointer is warped to a corner
   (`CGWarpMouseCursorPosition`).
 
+- **CI's compiler can reject what this Mac compiles (2026-11-05)**: `macos-26` failed with "unable to type-check this expression
+  in reasonable time" on test lines unchanged since a green run on 2026-10-27; the runner's compiler probably changed (not proved).
+  The whole Swift job stops at compiling, so no test runs. Check before pushing: `swift build --build-tests --scratch-path <dir>
+  -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=100` (plus test.sh's plugin path), and spell out the types of what it names.
+
 ## The live setup
 - `~/Applications/Robo.app` runs at login through the `ai.robo` LaunchAgent. At launch the app starts
   `uv run --project <checkout> robo-agent serve` (`AgentHome.service`), where `<checkout>` is the source

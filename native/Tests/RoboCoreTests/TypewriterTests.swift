@@ -442,7 +442,7 @@ func anEmojiClusterIsOneStepAndIsNeverCut(name: String) {
     }
 }
 
-private let dts = [1.0 / 30, 1.0 / 30, 1.0 / 20, 1.0 / 60, 1.0 / 30, 0.1, 1.0 / 45]  // a jittery 30 Hz timer
+private let dts: [Double] = [1.0 / 30, 1.0 / 30, 1.0 / 20, 1.0 / 60, 1.0 / 30, 0.1, 1.0 / 45]  // a jittery 30 Hz timer
 
 private struct Step: Equatable, CustomStringConvertible {
     let tick, k, pending, hidden: Int
