@@ -288,7 +288,11 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
         for a in all {
             for e in emotions {
                 let px = paint(FaceParams.target(a, e))
-                let distinct = Set(stride(from: 0, to: px.count, by: 4).map { Int(px[$0]) << 16 | Int(px[$0 + 1]) << 8 | Int(px[$0 + 2]) })
+                let colours: [Int] = stride(from: 0, to: px.count, by: 4).map { (i: Int) -> Int in
+                    let r: Int = Int(px[i]), g: Int = Int(px[i + 1]), b: Int = Int(px[i + 2])
+                    return (r << 16) | (g << 8) | b
+                }
+                let distinct = Set(colours)
                 #expect(distinct.count > 20, "\(a) \(e)")
             }
         }

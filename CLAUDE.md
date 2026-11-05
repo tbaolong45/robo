@@ -45,10 +45,10 @@ The owner designs the harness and the self-improvement loop themself: don't add 
   clicked, so tests and live checks of a card closing fail on a clean checkout until the pointer is warped to a corner
   (`CGWarpMouseCursorPosition`).
 
-- **CI's compiler can reject what this Mac compiles (2026-11-05)**: `macos-26` failed with "unable to type-check this expression
-  in reasonable time" on test lines unchanged since a green run on 2026-10-27; the runner's compiler probably changed (not proved).
-  The whole Swift job stops at compiling, so no test runs. Check before pushing: `swift build --build-tests --scratch-path <dir>
-  -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=100` (plus test.sh's plugin path), and spell out the types of what it names.
+- **CI's compiler can reject what this Mac compiles (2026-11-05)**: `macos-26` defaults to Xcode 26.6; this Mac builds with the
+  Command Line Tools 27 (Swift 6.4). CI failed with "unable to type-check this expression in reasonable time" on test lines that
+  type-check here in under 15 ms, so local timing (`-warn-long-expression-type-checking`) does not predict it; only a CI run does. The
+  job then stops at compiling and runs no test. Fix by spelling out the closure's types and splitting the arithmetic.
 
 ## The live setup
 - `~/Applications/Robo.app` runs at login through the `ai.robo` LaunchAgent. At launch the app starts

@@ -13,7 +13,8 @@ jobs:
       # Every suite runs, KeyboardTests.swift (EditKeyTests, KeyboardHandoffTests) included: they need a
       # key window, and a hosted macOS runner has a logged-in, unlocked GUI session. They fail on a locked
       # screen; if the runner turns out to be one, skip them: native/test.sh --skip 'EditKeyTests|KeyboardHandoffTests'
-      - run: native/test.sh
+      # Report every compile error at once: this Xcode can reject expressions the newer local compiler accepts.
+      - run: native/test.sh -Xswiftc -continue-building-after-errors
   python:
     runs-on: ubuntu-latest
     steps:
