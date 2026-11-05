@@ -87,7 +87,7 @@ to do, without saying how. Code that depends on the protocol can be handed the r
 fake.
 
 **In Robo.** `RoboUI/Machine.swift` defines what the window needs from the outside world: the
-agent (`HermesAPI`, named after the first agent), the microphone, the activity watcher, the health poll, and a `Machine` (displays, pointer,
+agent (`AgentAPI`), the microphone, the activity watcher, the health poll, and a `Machine` (displays, pointer,
 clock, files). The app passes the real ones; the tests pass fakes through a "rig" (`Rig(...)` in
 the UI tests).
 
@@ -99,22 +99,14 @@ card, can be tested without a microphone, a network or a screen.
 outputs saved from the old version that the new version must reproduce exactly.
 
 **In Robo.** The Swift app began as a port of an earlier Python/Qt app (deleted from the repo in
-the 2026-11-04 revamp; the golden values stay in the Swift tests). Some decisions
-keep Python's behaviour on purpose:
-- `RoboCore/PyJSON.swift` re-implements JSON the way Python reads it (where `30` and `30.0`
-  differ).
-- The face animator re-implements Python's random number generator (the Mersenne Twister) so a
-  seed gives identical blinks.
-- Text is handled as *Unicode scalars* (see 5.5) because Python counts characters that way.
+the 2026-11-04 revamp; many golden values stay in the Swift tests as regression pins). Python's
+quirks are no longer copied: `robo plan`, `theme.json` and Obsidian's config use Foundation's JSON
+and dates since 2026-11-05. Two choices from that time stay because the pins depend on them:
+- The face animator's random numbers come from a Mersenne Twister, so a seed gives identical blinks.
+- Text is handled as *Unicode scalars* (see 5.5) in the typewriter and the emotion filter.
 
-**Why it matters.** The behaviour was already tuned in Python. Bit-for-bit equality turns "did
-the port break anything?" into a yes/no test.
-
----
-
-## 2. Voice: from sound waves to text
-
-The voice code is `RoboVoice/` (`AudioInput.swift`, `Listen.swift`, `Parakeet.swift`).
+**Why it matters.** The behaviour was already tuned. Equality with a saved run turns "did this
+change break anything?" into a yes/no test.
 
 ### 2.1 Digital audio
 **The idea.** A microphone measures air pressure. A computer stores it as numbers called
@@ -196,7 +188,7 @@ The pipeline is in `Parakeet.swift`:
 - *int8 quantisation:* the weights are stored as 8-bit integers instead of 32-bit floats. The
   file is ~4× smaller and faster on a CPU, with a small loss of accuracy.
 - *Precision is fragile.* The model can flip a word on feature differences of 1e-5, so the
-  Swift FFT is computed in double precision exactly as Python's numpy does. The bundled
+  Swift FFT is computed in double precision, as the tuned transcripts were. The bundled
   float32 version changed 8 of 200 test transcripts.
 - *CPU only.* Apple's CoreML backend loaded 3× slower, ran 2× slower and transcribed
   differently.
@@ -225,7 +217,7 @@ for "Robo": `robo`, `roboh`, `robot`, "hey robo", "ok robo"... (`startName` and 
 `Listen.swift`). `RoboCore/Intent.swift` reads a sentence's words to decide whether it
 **changes things**. It is an *allow-list*: only a sentence that is clearly read-only (a question,
 "show / read / find / explain...", thanks, "close the chat") counts as harmless; any write verb
-("send", "delete", "pay", Vietnamese "gửi"), any other order, a bare "yes" and anything it can't
+("send", "delete", "pay"), any other order, a bare "yes" and anything it can't
 read count as changing things.
 
 **Why it matters.** For 15 s after an answer you may reply without the key. That window can also
@@ -239,7 +231,7 @@ being read.
 
 ## 3. Talking to the agent: HTTP and streaming
 
-Code: the app's client is `RoboCore/Brain.swift` (`HermesClient`, named after the first agent);
+Code: the app's client is `RoboCore/Brain.swift` (`AgentClient`);
 the server is `agent/robo_agent/server.py` (aiohttp).
 
 ### 3.1 HTTP and REST
@@ -521,15 +513,15 @@ mouth movement while letters are typed.
 **The idea.** A *pseudo-random number generator* (PRNG) produces numbers that look random but
 are fixed by a starting *seed*.
 
-**In Robo.** Blinks and glances use a Swift copy of Python's Mersenne Twister, so a seed gives
-the same blinks as the Python original, and tests can compare whole animation traces.
+**In Robo.** Blinks and glances use a Mersenne Twister, so a seed gives the same blinks every
+time and tests can compare whole animation traces.
 
 ### 6.4 Drawing and its cost
 **In Robo.** `RoboUI/FaceRender.swift` paints with **Core Graphics** (Apple's 2D drawing API): a
 white disc of 112 points inside a 128×128 view (the rest is room for its shadow), lit from the top
-left, with the eyes and mouth as ellipses and arcs in "ink" of the mood's hue. The ink is kept dark
-enough (relative luminance at most 0.13) to reach the 4.5:1 contrast of 7.4 against the disc's
-edge at every hue. The repaint interval follows the activity (`FaceView.frameMS`: 33 ms when busy,
+left, with the eyes and mouth as ellipses and arcs in soft graphite "ink". Only a strong mood gives
+the ink a colour, kept dark enough (relative luminance at most 0.13) to reach at least 4.5:1 against
+the disc's edge. The repaint interval follows the activity (`FaceView.frameMS`: 33 ms when busy,
 40 idle, 66 sleepy, 100 asleep). VoiceOver sees the face as a button named "Robo".
 
 **Why it matters.** A pet that's always on screen must be cheap, so it repaints slowly when
@@ -715,7 +707,7 @@ Results hop to the main thread before touching the UI.
   stream`).
 - A `TaskGroup` runs several tasks in parallel and collects their results.
 
-**In Robo.** `HermesClient.events(...)` is an `AsyncThrowingStream<Event, Error>`. The radar
+**In Robo.** `AgentClient.events(...)` is an `AsyncThrowingStream<Event, Error>`. The radar
 downloads its sources in parallel with task groups. The agent is Python `asyncio`, the same idea
 in another language: each run is a task, and learning after a run is a background task that
 outlives it.

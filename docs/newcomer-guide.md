@@ -235,8 +235,7 @@ test to the code that makes it pass.
    slower and gave different text.
 4. **The window** (`RoboUI/Window.swift`, `App.swift`) shows your words and calls `ask(text)`.
    The face turns to "thinking".
-5. **The agent client** (`RoboCore/Brain.swift`, still called `HermesClient` after the agent it
-   was first written for) sends `POST /v1/runs` to `127.0.0.1:8765` with the server key and opens
+5. **The agent client** (`RoboCore/Brain.swift`, `AgentClient`) sends `POST /v1/runs` to `127.0.0.1:8765` with the server key and opens
    the event stream. If the agent has died, the app starts it again first (`AgentKeeper` in
    `RoboUI/Launch.swift`).
 6. **robo-agent** (`agent/robo_agent/harness.py`) runs the request through the Claude Agent SDK

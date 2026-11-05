@@ -14,10 +14,12 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
 ## Verify
 - Swift: `native/test.sh` (not `swift test`), and `native/test.sh -c release -Xswiftc -enable-testing` for
   concurrency code. Agent: `uv run pytest -q && uv run ruff check agent tests scripts`. CI runs the Swift suite on
-  `macos-26` and pytest + `ruff check agent tests` on Ubuntu, on pushes to and PRs into `master`.
+  `macos-26` and pytest + `ruff check agent tests scripts` on Ubuntu, on pushes to and PRs into `master`.
 - UI: capture only Robo's window (`screencapture -l<id>`, id from Quartz `kCGWindowName == "Robo"`); a full-screen
   capture shows whatever else the user has open. The face: `ROBO_FACE_SHEET=<dir> native/test.sh --filter FaceSheet`
-  writes `face_sheet.png` (every expression and effect, over white and dark grey).
+  writes `face_sheet.png` (every expression and effect, over white and dark grey). For glass over a backdrop: an
+  `SCContentFilter` naming exact windows (your own opaque window plus Robo's), never a region capture: it caught a private
+  notification on 2026-11-04.
 - Voice: `robo voice-eval` (macOS voices → real Parakeet → name matcher). Compare a change with the score before it.
   The "Rubble was…" false positive is deliberate (`startName` in `Listen.swift`). `--record DIR` / `--wavs DIR` score
   the user's own voice (the only way to calibrate `Listen.minGate`); don't record while a call is live, the mic would
@@ -37,6 +39,10 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   The first run also fetches `@playwright/mcp` with `npx`. **Slow failure, known**: with Anthropic unreachable the
   SDK's CLI retries for several minutes before the run fails with a clear "Connection refused"; the app shows only
   "thinking" until then. Don't mistake that for a hang.
+- `tests/test_e2e.py` runs the real SDK and bundled CLI against a fake API with a fake `npx`: no key, no network (it skips
+  if the CLI is absent; the sandbox tests are macOS only). Use it for anything about what the CLI really does with the
+  options; `test_server.py` fakes the client and cannot see that. The CLI adds `system`-role and reminder messages of its
+  own around the user's text.
 - Agent features (digest, study plan, `robo-make`, the LMS scan) can only be checked against the live agent:
   `printf '<prompt>\n' | ~/Applications/Robo.app/Contents/MacOS/robo chat` prints the tools it used. The digest takes
   about 2 min, reads mail, Teams, Moodle and the calendar, and changes nothing there until a "yes"; `robo-make` writes
@@ -52,10 +58,11 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   `agent/skills/` are that checkout's files: the persona and skills are re-read and filled from `config.json` on every
   run (`config.render_skills` into `R/runs/<run id>`, deleted after), with no install step. Build the installed app
   from the checkout you mean it to run. The chat's session id is `robo-<day>-<personaStamp>`, a hash of SOUL.md and the
-  skills taken once at app launch (`Launch.swift`): after editing them, a restarted app starts a new session (under
-  Hermes a session's system prompt was built once; whether the SDK's `resume` keeps the old one is not checked).
+  skills taken once at app launch (`Launch.swift`): after editing them, a restarted app starts a new session. **On
+  `resume` the CLI keeps the session's first system prompt and ignores a new one** (seen in the requests, 2026-11-04), so
+  anything that must reach every turn goes in the query text (`execute`: the memory block); the skill listing does update.
 - `R` = `~/.local/share/robo/agent` holds `config.json`, the keys, `sessions.json` (robo session → SDK session,
-  resumed), `memory/`, `skills-learned/`, `learning.jsonl`, `consolidated` (the day of the last profile rewrite) and
+  resumed; a lost transcript drops the mapping and the run retries once as a new session), `activity.jsonl`, `memory/`, `skills-learned/`, `learning.jsonl`, `consolidated` (the day of the last profile rewrite) and
   `claude/` (the SDK CLI's `CLAUDE_CONFIG_DIR`). The service logs to `~/Library/Logs/Robo/agent.log`.
 - `config.json` is read ONCE when the service starts (`cli.main`); the keys are read again on every run or request
   (an env var `ANTHROPIC_API_KEY` / `SUPERMEMORY_API_KEY` / `ROBO_SERVER_KEY` wins over the file). After editing the
@@ -72,15 +79,33 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   harmless prompt if a live check is needed.
 
 ## The agent (`agent/robo_agent`)
-- **Tools** (`harness.TOOLS`): Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, plus the MCP servers
+- **Tools** (a new tool is a CLI plus a skill unless it needs what Bash's sandbox refuses: loopback, as the browser does, or R,
+  as memory does; Playwright's 25 tools are about 5.3k tokens of schema per turn, measured 2026-11-05) (`harness.TOOLS`): Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, plus the MCP servers
   `playwright` (`npx -y @playwright/mcp@0.0.83 --cdp-endpoint http://127.0.0.1:9333`, snapshots in
   `~/.local/share/robo/browser`) and `robo` (in-process: `memory_add`, `memory_search`, `memory_forget`). There is no
   `computer_use`: SOUL.md's `{{DESKTOP_APPS}}` tells it to open GUI apps with `open -a`. Every approval shows the card
   (Hermes' auto-approved "Allow computer_use" branch was removed 2026-11-04). `setting_sources=[]` and
   `strict_mcp_config`: the user's own Claude settings, CLAUDE.md files and MCP servers never reach the agent.
   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` keeps the API key out of Bash's environment, which is why no permission mode is
-  set: the tools are allowed by name and the guard's explicit "allow" answers the rest.
-- **robo-guard** (`guard.py`, the PreToolUse decision of every call; its docstring is the full rule list). A hook that
+  set: the tools are allowed by name and the guard's explicit "allow" answers the rest. The skills are an explicit
+  `robo:<name>` list: `skills="all"` also offered the CLI's bundled ones (update-config, plugin-authoring...).
+- **The boundary** (`harness.boundary`; tried against the real CLI 2026-11-04, kept in `tests/test_e2e.py`). The deny rules
+  (`Read(//abs/**)`) hold even against the hook's "allow" and hide R from Grep and Glob. Alone they do not stop Bash:
+  `python3 -c open(...)` and `cat ~/.he*/...` read the key; the macOS sandbox (Linux: none) stops those, `ps eww` (which
+  shows the key in the CLI's environment) and writes to `AGENT`. `allowUnsandboxedCommands: false` also refuses
+  `dangerouslyDisableSandbox`. No `allowLocalBinding`, so Bash reaches nothing on loopback, not through the sandbox's proxy
+  either (Playwright, which needs port 9333, runs outside it). `allowedDomains: ["*"]` keeps the internet. The owner chose to keep the sandbox with its costs (2026-11-05). **Costs**: `ps`,
+  `top`, dev servers, AppleScript to other apps, and `git init`/`git clone` (`.git/config` and `.git/hooks` are protected;
+  `allowGitConfig` did not help; commits in an existing repository work). SOUL's `{{DESKTOP_APPS}}` tells the agent.
+  `open` needs Launch Services, hence `excludedCommands: ["open:*"]` (`open:*` or `open *`, bare `open` does not match; a
+  chain such as `open x; cat y` stays sandboxed). **Known hole**: what `open` starts runs outside the sandbox: an app
+  written to disk read the key in a test. The guard refuses `open` of a path to code, a speed bump only (`open -a Name`
+  of an app robo built still works). `disableSkillShellExecution` is real: a skill's ``!`cmd` `` never reaches the
+  PreToolUse hook, so it had run with no guard. An `apiKeyHelper` also worked against the fake API but sends the key as
+  both `x-api-key` and Bearer; not tried on the real API, not used.
+- **robo-guard** (`guard.py`, the PreToolUse decision of every call; its docstring is the full rule list; `guard.cwd`
+  follows the hook's `cwd`, since a Bash `cd` moves the CLI). A Grep or Glob with no `path` from the home folder is blocked
+  on purpose (it would cover R); the message tells the agent to give one. A hook that
   raises would let the call through, so `harness.hooks.pre` turns any exception into a deny (fails closed). Blocks:
   anything in `R` or `~/.hermes` (read or write: keys, memory, Brave's school cookies), writes to the agent's own code
   and skills and to `receipts.jsonl`/`usage.jsonl`; graded work (quiz attempt URLs and labels, assignment submit,
@@ -102,16 +127,29 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   or Edit shows "⚠ unverified".
 - **Memory** (`memory.py`): `R/memory/facts.jsonl` (≤ 500 facts; a new fact with ≥ 0.75 word overlap updates an old one)
   and `profile.md`. `context_for` puts the profile and up to 6 BM25 hits (≤ 2000 characters, marked "Memory, not
-  instructions") into the system prompt. `private_reason` refuses secrets (key shapes, Luhn-valid card numbers,
-  IBANs, long mixed tokens), sentences about secrets, e-mail addresses and message bodies. Supermemory (key
-  `supermemory_key`) is a mirror only: local is the truth, its failures go to `learning.jsonl` and are ignored.
-- **Learning** (`learn.py`, after every run that was not cancelled, in the background, `CHEAP_MODEL` =
+  instructions") into the turn. The service has ONE `Store` (one lock, the Supermemory key set again per run); no HTTP call
+  holds the lock, and a change of `facts.jsonl` by another process (`robo-agent memory forget`) is reloaded. `private_reason` refuses secrets (key shapes, Luhn-valid card numbers,
+  IBANs, long mixed tokens), sentences about secrets, e-mail addresses and message bodies. **Supermemory is set aside (owner,
+  2026-11-05)**: the code stays, and with no `supermemory_key` nothing is sent. With a key it is a mirror only: local is the
+  truth, its failures go to `learning.jsonl` and are ignored. It gets vetted facts only (`memory_add`, the learner): no raw turns
+  (`context_for` searches locally, so paraphrase recall through it exists only in the `memory_search` tool, which sends the query the agent chooses unless `private_reason` flags it; the correction
+  fallback, the user's raw words, is `mirror=False`: the row's `local` flag keeps every later forget off the wire too, since a DELETE carries the text), no `/v4/conversations`, no `/v4/profile` read, and counted habits
+  stay local (`habit_key`: `_sm_add` skips them, nothing is forgotten there for them, and `add` never merges into them).
+- **Learning** (`learn.py`, after every run that was not cancelled and not automated, in one background job, `CHEAP_MODEL` =
   `claude-haiku-5-5`, 60 s, unless `"learn": false`): up to 3 facts per run; a skill is considered only after ≥ 5 tool
   calls, a failed run or a correction ("no, I meant..."). The model's reply must be strict JSON; `vet_skill` refuses
   reserved names (`school-`, `study-`, `robo-`, any built-in), graded-work words, anything that weakens safety
   (guard/approvals/SOUL.md/sudo...), HTML/images/remote scripts, secrets, > 4096 bytes, > 30 skills. An updated skill
   keeps `SKILL.md.prev`. A learned skill never replaces a built-in one. The profile is rewritten once a day; a profile
-  with a number no fact holds is rejected for the plain summary.
+  with a number no fact holds is rejected for the plain summary. **Page text must not teach**: facts come from the user's
+  words only, the skill step reads `harness.trace_line` (allow-listed arguments, clipped, private text `[redacted]`), not
+  the reply; automated runs are skipped by session (`robo-posts-`, `robo-eval-`) or by the exact `DIGEST_PROMPT` (pinned to
+  `Window.swift`). Rewriting an existing skill takes a second call that shows its body; a rename is refused. There is
+  deliberately no in-run `skill_save` or `session_search` as in Hermes: with approvals off, a tool that writes
+  skills during a run is an injection path. **Habits**: `R/activity.jsonl` (0600, last 2000, no text; the facts call also
+  names a coarse `type`), and `learn.daily` turns 28 days of it into counted `habit` facts (`habit_key`, source
+  `activity`): a time of day on ≥ 5 distinct days, a weekday and time on ≥ 3, each ≥ half of the active days. A pattern
+  that stops loses its fact; one the user forgets is muted (`memory/habits-muted.json`).
 
 ## Constraints (checked 2026-10-12; recheck if ONNX Runtime or Parakeet change)
 - **Speech model on the CPU only** (`Parakeet`, `CPUExecutionProvider`). On a Mac the CoreML provider loaded 3× slower,
@@ -119,9 +157,11 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
 - **The app does not download the speech model**: it reads the Hugging Face cache
   (`~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx`, `refs/main` → snapshot with
   `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, `vocab.txt`), fetched once by the retired Python app.
-  `Parakeet.cachedModel`'s error still says "start the Python robo once to fetch it".
+  `Parakeet.cachedModel`'s error gives the `uvx` command that fetches it.
 - **Audio is levelled before Parakeet** (`leveled`, peak 0.5, boost capped at 20×): the model reads soft speech worse
   (synthetic voice at 0.15× volume: 44 → 48 of 50 names caught).
+- **English only (owner, 2026-11-05)**: Parakeet v2 hears only English, and `Intent` reads only English, so spoken text in another
+  language is refused without the key. The guard's and the learner's Vietnamese words stay: they read pages and typed text.
 - **Don't end a request on a "?".** Parakeet punctuates a clause cut off mid-question as a question (36 of 40 probes,
   4 TTS voices), so an early send would pass half a request to an agent that has every permission. The README promises
   that a pause to think does not end the request.
@@ -133,7 +173,7 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   `RegisterEventHotKey` (no Accessibility or Input Monitoring permission; one down and one up event, no auto-repeat; a
   system hotkey should keep Ctrl+Q from the app in front, not checked). `Listener.hold()/release()` record from down to
   up regardless of the gate, +4 frames of tail; a press under `Listen.tapS` = 0.4 s is a click (`listenNow`).
-  `Listener(nameWake:)` is `!hotkeyRegistered`: with the key, loud sound outside a window is not even transcribed; if the
+  `Listener(nameWake:)` is `!byKey`: with the key, loud sound outside a window is not even transcribed; if the
   system refuses the key, the name wake is back. Registration is exclusive only inside a process: a second process
   registering the same combo was accepted in a probe, so a clash with another app is not detected (and which app gets
   the key then is untested). Test the real key with the user's own press (checked live 2026-10-16: hold and tap both
@@ -144,7 +184,7 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   mic notes and a new question never arm or keep it). The MIC light pulses LISTENING while it is open. In `Listener` a
   window with `asked == false` delivers only a transcript of two words or more (`heard`): the first version woke robo
   after `minSpeechFrames` loud frames, and a noise in the room cleared the reply being read within seconds of a live
-  reply (found 2026-10-19 on the live app). The listener never wakes robo for such text (`handsFree`): `onHeard`
+  reply (found 2026-10-19 on the live app). The listener never wakes robo for such text; `handsFree` travels with it (`onText(text, handsFree)`) and `onHeard`
   decides. **`Intent.changesThings` is an allow-list**: only a clearly read-only sentence (a question, "show/read/
   find/explain...", thanks, "close the chat") is false; any write verb, any other order, a bare "yes"/"ok"/"go ahead"
   (the digest proposes and waits for a yes) and whatever it cannot read are true. A true one is refused WITHOUT waking:
@@ -166,15 +206,18 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   explicit format aborts with that message, exit 134; nil installs cleanly), the device change itself is not testable
   here. Other uncatchable AVAudioEngine exceptions could remain (a catch needs an Objective-C shim).
 - **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model loads on its thread.
-  Use `Listener.running`/`ready`, not the return value, to know voice input is alive. Listener callbacks reach the UI
+  Use `Listener.running`/`ready` to know voice input is alive. Listener callbacks reach the UI
   only through the window's `bridge` (main-queue hops).
 - **The reply is typed, not printed** (`RoboCore/Typewriter.swift`, no clock of its own: the window calls `advance(dt)`
   every `RoboWindow.typeS` = 0.033 s while letters are pending). Each tick re-renders the Markdown *prefix* with its open
   marks closed and the last word hidden, so a half-typed `**` or `-` never flashes. The pace follows the agent (it never
   lags more than ~2-6 s), so don't slow it down for looks. `cps: 0` in `~/.config/robo/theme.json` shows replies at once.
 - **Face (2026-11-04)**: a white disc of 112 pt (`FaceRender.disc` = 112/128) inside a 128×128 `FaceView`, lit from the
-  top left, the rest of the view is room for its shadow; the features are ink in the mood's hue, at relative luminance ≤
-  `FaceRender.inkL` = 0.13, which keeps ≥ 4.5:1 against the disc's edge at every hue. The dark screen and neon glow of the
+  top left, the rest of the view is room for its shadow; the features are soft graphite (`FaceParams` hue 215, sat 0.08; luminance
+  `FaceRender.graphiteL` = 0.045) and take a colour only for a strong mood: proud 44, concerned 34, playful 318, sad 258
+  (dusk, it was royal blue), error 356; `inkL` = 0.13 is the ceiling for those, ≥ 4.5:1 on the disc. The disc is `#ffffff`
+  to `#f6f7f9`; on a white backdrop its shadow (alpha 0.3) and rim (alpha 0.16) show where it ends. hue and sat left the
+  Python goldens (`colourFields` in ExpressionsTests). The dark screen and neon glow of the
   Python design are gone. A face-only window is 136×136 (the face + `RoboWindow.margin` 4 on each side); the roamer is
   given that size. Accessibility: a button labelled "Robo". The repaint interval follows the activity
   (`FaceView.frameMS`: 33 ms busy, 40 idle, 66 sleepy, 100 asleep); 66 ms is the slowest that still shows a blink (2 shut
@@ -186,15 +229,16 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   backdrops, so `.regular`; the panel's transparent margin passes clicks through (WindowServer hit test); a 30 Hz resize
   costs ~0.5 ms per tick. Text, lights and buttons are the system colours (`Chrome.text/textDim/hairline/wash`), fonts
   the system font (mono only for code), so look at it over a bright and a dark backdrop (put your own striped window
-  under a test copy and capture only that region, never a region of the user's desktop). The hue (accent) tints the
-  glass at `CardView.tint` = 0.10, per 2-degree step (0.04 ms a step; the old holo card's frame bitmap cost 2.09 ms, and
-  the face's mood sweep makes these steps all the time). Increase Contrast raises the veil and the text alpha
-  (`Chrome.increaseContrast`). Only `Themes.glass` exists; `theme.json` keeps `hue, acc_s, acc_v, face_bg, cps, text_px,
-  line_h, caret, caret_ms, follow_emotion, bot_name, model_chip` and ignores the rest. The card fades in over 0.18 s
+  under a test copy and capture only that region, never a region of the user's desktop). No accent and no tint:
+  everything is neutral ink. Only a warning (orange, the approval's well and the amber light) or a failure (red) has a
+  colour. Links are the text's ink, underlined. Increase Contrast raises the veil and the text alpha
+  (`Chrome.increaseContrast`). Only `Themes.glass` exists; `theme.json` keeps `face_bg, cps, text_px, line_h, caret,
+  caret_ms, bot_name` and ignores the rest. The card fades in over 0.18 s
   (`RoboWindow.fadeIn`, not with Reduce Motion); closing is instant on purpose. The typing tick (`CardView.setReply`, 1000
   characters) is 0.7 ms on average; caching fonts or the Markdown look was tried and dropped. Typing is ~2 % of a core at
-  30 Hz; don't optimise it further without a new measurement. The header lights are AGENT (`Health.swift` polls
-  `<agent>/health`, no key: one miss amber, two red) and MIC (`Listener.ready`).
+  30 Hz; don't optimise it further without a new measurement. The header lights show only when something is wrong
+  (`Led.shows`: warn, bad) or while listening in the follow-up window: "Agent …", "Agent problem", "Mic problem", "Listening"
+  (`Health.swift` polls `<agent>/health`, no key: one miss amber, two red; the mic is `Listener.ready`). There is no model chip.
 - **Backdrop-adaptive card (2026-10-19, user request: "black area -> white chat, white area -> dark chat, smooth", and "the
   colour of the words has to contrast with the area it is in")**: `Backdrop` (ScreenCaptureKit `SCScreenshotManager`,
   display minus Robo's own app, 16 px picture of the glass rectangle, `Shade.meanLuma`) is asked about every 0.25 s while
@@ -203,12 +247,14 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   through a grey. `Chrome.text/textDim/faint/hairline/wash` read `Chrome.ink` (nil = the system colours, used until a look
   succeeded and after 3 failed ones). **Spike: an NSGlassEffectView's `appearance` decides light or dark; `tintColor`
   hardly matters; two stacked glasses (`.aqua` below, `.darkAqua` above at alpha 1 - level) crossfade smoothly**
-  (`GlassSurface`; only one renders at rest). `veilStrength` 0.22 (a white/black wash over the glass) was set after
-  measuring text contrast on real captures (WCAG, region of the body text): 8.8:1 light card over black, 4.48:1 dark card
-  over white at 0 veil (hence the veil). Needs **Screen Recording for Robo** (the user's one click;
+  (`GlassSurface`; only one renders at rest). `GlassSurface.lightVeil` 0.70, `darkVeil` 0.72 (Increase Contrast 0.85
+  each). `Chrome.textDim` is our own 0.68 alpha, not `secondaryLabelColor` (3.5:1 on the light glass). Measured from pixels
+  2026-11-04 over black and white: lowest 4.66:1, light look; 4.99:1, dark look. **Known, cause not found (2026-11-04):**
+  while the card listens or works the glass renders nearly clear: a light pane 184 instead of 230 over black, dark 69
+  instead of 28 over white, with the same view tree and shade level. A forced redraw, a resize and a layer-coloured veil
+  did not change it. The veils are set so the text holds 4.5:1 either way. Needs **Screen Recording for Robo** (the user's one click;
   `CGRequestScreenCaptureAccess` once per launch); without it the look is the system one. A copy built *before* the grant
-  did not see it until rebuilt, so after a grant check with a fresh build. Final measurement (robo pinned with the
-  menu's Stay over my own backdrop): black 10.7:1, grey 0.25 12.2:1, grey 0.5 13.5:1, grey 0.75 8.0:1, white 6.3:1.
+  did not see it until rebuilt, so after a grant check with a fresh build.
   **Bug found on the live app 2026-10-19 (the user's "black words on a black card")**: over a black backdrop the card
   stayed dark although the shade said light, 4 of 4 trials, while fresh test copies passed. Cause: changing an
   `NSGlassEffectView`'s `appearance` after it has rendered can leave it showing the old one. Both glasses now get `.aqua`
@@ -221,16 +267,18 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore `Transcript`
   (memory only, one per agent session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a
   window of its own, **fixed 520x640 (`ChatPanel.contentSize`), centred on the main display** each time it opens, opens
-  on `ask()` (typed, spoken, digest, the automatic digest too), **closes only by `Intent.closesChat`** ("close the chat",
-  whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent) **or Esc while its text box has the
-  keyboard** (`ChatPanel.onEscape`; the panel is non-activating, so Esc in another app never reaches it); no timer, no
-  close button, a face click does not close it, English only. **All typing goes to the chat** (the separate Type panel
-  was removed 2026-11-04): the menu's 💬 Type, or a face click while voice input is off, calls `typeText()` =
+  on `ask()` (typed, spoken, the menu's digest). The automatic digest goes on the pet's card and into the conversation
+  (`chatBegin(show:)`), with no Screen Recording dialog; if the chat is already open it stays there. It closes by its close
+  button (`ChatView.close`, answers the first click), `Intent.closesChat` ("close the chat", whole sentence, spoken or
+  typed; "close the Moodle tab" still goes to the agent), or Esc while its text box has the keyboard (`ChatPanel.onEscape`;
+  the panel is non-activating, so Esc in another app never reaches it). No timer; a face click does not close it; English only. **All typing goes to the chat** (the separate Type panel
+  was removed 2026-11-04): the menu's Type, or a face click while voice input is off, calls `typeText()` =
   `openChat(focusInput: true)`. The text box grows to `ChatPanel.inputLines` = 5 lines, Return sends, Shift+Return is a
   new line, Send is disabled while the box is empty; there is an empty state, a "jump to latest" button while scrolled
-  up, Copy on robo's bubbles (the Markdown as written), no bubble tails, and `setLive` is throttled like the card's
+  up, Copy on robo's bubbles (the Markdown as written), no bubble tails, a bubble as wide as its text (`BubbleText.spansBox`: code, rules, tables and centred formulas keep the
+  column), and `setLive` is throttled like the card's
   reply. A finished reply is announced to VoiceOver (`Chat.swift`, `.announcementRequested`). The pet's card keeps what
-  is quick (menu, "listening", Allow/Deny, nudges); `say()` notices become robo bubbles while the chat is open
+  is quick (menu, "Listening", Allow/Deny, nudges, the automatic digest); `say()` notices become robo bubbles while the chat is open
   (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` -> `chatBegin` (your turn +
   an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to
   `ChatView.setLive`, `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask ->
@@ -251,7 +299,8 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   pinned in both template suites (`answersStayInTheChatAndAFileIsWrittenOnlyOnRequest`).
 - **Chat polish, called-to-side, blur, LaTeX (2026-10-23)**. **Called = middle of the nearest side**: `Roamer.callToSide`
   (vertically centred; `nearestSide()` measures from the window's top-left like `Roamer.step`), `RoboWindow.roam()`
-  counts `chatOpen` as called, so the pet parks at the left or right edge while the chat is up. **Blur**: `BlurVeil`
+  counts `chatOpen` as called, so the pet parks at the left or right edge while the chat is up. **Blur**: only while Robo
+  listens or the chat's text box has the keyboard (`machine.chatTyping`), no longer while the chat is merely up. `BlurVeil`
   (panel at `.floating - 1`, ignores the mouse) shows a blurred half-size capture of the screen WITHOUT Robo's windows
   (`Backdrop.blurredPicture`, `blurSigma` = 1.3, dim 0.10, refreshed every 1 s); none under Reduce Transparency or
   without Screen Recording. The system `NSVisualEffectView` blur was rejected: at partial alpha it only ghosts the sharp
@@ -273,6 +322,13 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Verified live
   under Hermes (2026-10-23)**: a long math answer typeset in the chat, a typed follow-up through the real text box, the
   typed "close the chat". **Not verified**: a formula in a table cell; any of it with robo-agent.
+- **Tables, scroller, VoiceOver menu**. `Markdown.tableLayouts`: a column is never narrower than its longest word, the prose
+  columns give up the room, and if the longest words alone do not fit, cells go down to `tableMinPx` = 11; the grid is
+  `Chrome.hairline`. `TextBox` uses the system's scroller at `.small`, and the text is `TextBox.scrollerRoom` narrower while
+  it shows: an overlay scroller's track otherwise hides the end of each line (overlay knobs were still visible in captures
+  6 s after opening, in this non-activating panel). The face answers VoiceOver's "show menu"
+  (`accessibilityPerformShowMenu` = right click). Chips and buttons have plain labels; the chips use SF Symbols, not emoji.
+  There is deliberately no global key for the menu: it would take a shortcut from every other app.
 - **Downloads through robo's Brave (2026-10-24, user: "I will tell it which folder")**. `Browser.allowDownloads` writes
   `download.default_directory` = `~/Robo/Downloads`, `prompt_for_download` false and
   `plugins.always_open_pdf_externally` into the profile's `Default/Preferences` before every start robo makes (Brave
@@ -301,9 +357,7 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   post_url, posted, title, due, kind, quote}`; `due` is `YYYY-MM-DDTHH:MM`, `YYYY-MM-DD` (read as 23:59 that day) or
   `null` (dropped: no place in an agenda); `kind` deadline/exam/event/material). Pure half `RoboCore/LMSPosts.swift`
   (prompts, the strict decoder, `next` = the day's plan), `RoboSystem`: `LMSState` / `lms.json` in `NudgeFiles`, window
-  half `RoboUI/Scout.swift`. **OFF until `config.json` has `moodle_url`** (`Setup.postsMoodle`; `robo setup --moodle URL`,
-  or the `MOODLE_BASE_URL` of the old Hermes profile's `.env`, which setup copies when the config has none) and while the 🔔 Nudges chip is
-  off. **Daily, no backfill (the user's choice)**: from the first tick after 07:00 local, one step at a time: the course
+  half `RoboUI/Scout.swift`. **OFF until `config.json` has `moodle_url`** (`Setup.postsMoodle`; `robo setup --moodle URL`) and while the Nudges chip is off. **Daily, no backfill (the user's choice)**: from the first tick after 07:00 local, one step at a time: the course
   list (again after 7 days), then one run per course since its last good scan (a never-scanned course reads back
   `firstLookbackDays` = 1). Each run has its own session `robo-posts-<id>` (post text of one course must not reach the
   next run's context), every `approval.request` is denied by id (none come under approvals `off`: the guard's blocks
@@ -362,21 +416,23 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   other languages, and a company name taken from the feed (it never vouches; a match is only a note) pass; the
   micro-sign homograph `µtorrent.com` is hidden as a look-alike. The main safeguards were mutation-checked on 2026-10-21
   (about 30 mutants; each failed a test). **Not verified**: a live radar run and the alert on the installed app, a real
-  scam link in a reply, whether the agent follows the SOUL rules. The `KeyboardTests`/`EditKeyTests` suites fail at
-  `makeKeyOffscreen()` while the screen is locked; unlock the Mac before running them.
+  scam link in a reply, whether the agent follows the SOUL rules. The 8 tests needing a key window
+  (`EditKeyTests`, `KeyboardHandoffTests`, `theTextBoxTakesFocusAcceptsTypingAndSendsIt`) fail while the screen is locked;
+  unlock the Mac before trusting them.
 - **Reminder ladder (`Reminders`, 2026-10-21)**: deadline T-5 d (`days5`, added at the user's request), T-1 d, T-3 h; exam
   T-7 d, T-1 d, T-3 h; meeting T-30 min; opportunity T-3 d, T-1 d. The tightest due rung stands for the looser ones, so a
   deadline first seen with 4 days left gets ONE `days5` card; the card still says "new"/"moved" then, because
   `Nudges.candidate` asks whether the reminder `covered` the `newEvent` key (not whether its rung is `newEvent`), except
   in the last hours (`urgent`).
-- **Nudges (2026-10-20)**: robo shows what is coming up on its card. Pure parts in RoboCore (`ICS`, `Agenda`, `Reminders`,
+- **Nudges (2026-10-20)**: robo shows what is coming up on its card, labelled "Heads-up" or "Worth a look"; the note is
+  neutral with a bold first line (`WrapLabelView.Kind.note`). Pure parts in RoboCore (`ICS`, `Agenda`, `Reminders`,
   `NudgeBudget`), `RoboSystem/CalendarLinks.swift` + `NudgeFiles.swift`, the window's side in `RoboUI/Nudges.swift`,
   `NudgeView` in `Card.swift`. Sources: calendar links (Outlook "publish", Moodle export) fetched off the main thread
   every 45 min, at launch and after a wake, and the Exams of `study.md`. Rules: normal nudges only at the 09:00 / 13:00 /
   19:00 slots, 3 a day, nothing 22:00-08:00, everything due at that moment is ONE card; the last 3 h of a deadline and the
   30 min before a meeting show at once (4 a day); Later = next slot but never past 15 min before the thing itself (min 5
   min from the press; found live: a 10:42 meeting snoozed to 13:00 was lost), Not for me = 30 days (3 in a row mutes the
-  category); a `snooze nudges until D` line in the ledger's Notes holds all of it until D; the menu's `🔔 Nudges` chip
+  category); a `snooze nudges until D` line in the ledger's Notes holds all of it until D; the menu's Nudges chip
   turns it off. **State is `agenda.json`, `nudges.json`, `reminders.json` in `~/.local/share/robo` (0600, atomic
   writes)**, not in `<checkout>/data/robo_state.json` (the digest date). Time is `machine.wall` (the monotonic `clock`
   stops while the Mac sleeps, a deadline does not). A nudge waits for a free card: it never breaks in on a reply or its
@@ -460,13 +516,13 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
 - **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse pressed: freeze) >
   Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) > `called` (request or card up: walks to the
-  nearest corner, or the nearest side while the chat is open, at `CALL_SPEED` = 240 px/s, and stays; it clears a
+  nearest corner, or the nearest side while the chat is open, at `Roam.callSpeed` = 240 px/s, and stays; it clears a
   *drop's* hold) > `held` (a drop: 600 s) > `asleep` (walks to the *nearest* corner) > wander. Until 2026-10-19 a drop
   outranked a call and a nap always went to the bottom-right bed, so a dragged robo "went to the same corner, not the
   nearest" (the user's report); `bed()` is now only the initial placement. The right-click menu opens the card but does
   not call (`card.chips.isHidden`), or dragging then right-clicking for Stay would send it away. The branch draws no
   random numbers, so seeded wander paths did not change. Nearest is measured by the window's top-left; with a tall card
-  the face parks a card-height under a *top* corner. The resting tick is 500 ms: a call can lag 0.5 s.
+  the face parks a card-height under a *top* corner. The resting tick is 500 ms: a call with no event, such as opening the chat box, can lag 0.5 s.
 - **The main display only (2026-10-21, user request: "just work in the main screen and bounce (slightly) when it hits the
   edge")**. `ScreenSpace.roamArea` hands the `Roamer` the usable area of `displays.first` (the one with the menu bar) and
   no other, so a drift never leaves it and a drag onto a second monitor stops at the main display's edge (`roamer.hold`
@@ -499,9 +555,11 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   published on 2026-10-13).
 - **ORT 1.30+ sends usage telemetry to Microsoft by default** (sockets to MSFT addresses 9-13 s after a session is
   created; none with `ORT_DISABLE_TELEMETRY=1`). `Parakeet.init` sets it before ORT starts.
-- Swift traps to remember: `String ==` treats `e`+U+0301 and U+00E9 as equal (Python does not) and indexes grapheme
-  clusters, so code-point logic uses `unicodeScalars`; `round()` is half-to-even in Python, which the golden values in
-  the tests came from; `@MainActor` tests only run main-queue hops they `await`.
+- Swift traps to remember: `String ==` treats `e`+U+0301 and U+00E9 as equal and indexes grapheme clusters, so
+  code-point logic uses `unicodeScalars`; many golden values came from Python, whose `round()` is half-to-even;
+  `@MainActor` tests only run main-queue hops they `await`. **`JSONSerialization.data` raises an NSException no Swift can
+  catch on what its own parser accepts (`1e999` reads as infinity): check `isValidJSONObject` first** (`Vault.register`).
+  Foundation's JSON parsers also accept a trailing comma. `robo plan` works on instants, so a clock change counts real time.
 - **Skills call `{{ROBO}} plan|activity`** (`study-plan`, `study-ledger`): `{{ROBO}}` is `config.json`'s
   `robo_cmd`, the app executable `robo setup` was run from. `Setup.checkout` and `RoboApp.dataDir` come from `#filePath`
   of the build, so build from this checkout.

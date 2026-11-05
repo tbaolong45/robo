@@ -42,7 +42,7 @@ flowchart LR
 
 - **The app starts the agent.** At launch, and again before a request if it has died, the app runs `uv run --project <checkout> robo-agent serve` and waits for `/health`. The service logs to `~/Library/Logs/Robo/agent.log`. The app also starts Robo's own headless Brave on `127.0.0.1:9333`, and the agent drives it through Playwright MCP over CDP.
 - **Agent protocol.** A request is `POST /v1/runs` with `Authorization: Bearer <server key>`. Robo follows the run's Server-Sent Events: text deltas, tool calls, approval requests, usage and the end of the run. `/approval` answers an ask, `/stop` cancels a run, and `/health` needs no key.
-- **Everything the agent keeps** is in `~/.local/share/robo/agent/` (folder 0700, key files 0600): `config.json` (written by `robo setup`), `api_key`, `supermemory_key`, `server_key`, `sessions.json`, `memory/`, `skills-learned/`, `learning.jsonl`.
+- **Everything the agent keeps** is in `~/.local/share/robo/agent/` (folder 0700, key files 0600): `config.json` (written by `robo setup`), `api_key`, `supermemory_key`, `server_key`, `sessions.json`, `memory/`, `skills-learned/`, `learning.jsonl`, `activity.jsonl`.
 - **Pure core, thin shell.** Every decision in the app is a plain function given the current time that returns what to do: the face's mood, where the pet walks, which reminder fires, whether a card may interrupt you. Windows, audio and the network are a thin layer around them, so almost all behaviour is tested without a screen, a clock or a microphone.
 
 ## Setup for a new user
@@ -61,7 +61,7 @@ uv sync
 
 # 3. Your Anthropic key: pasted at a hidden prompt (or piped on stdin), saved 0600.
 ~/Applications/Robo.app/Contents/MacOS/robo key set anthropic
-~/Applications/Robo.app/Contents/MacOS/robo key set supermemory   # optional
+~/Applications/Robo.app/Contents/MacOS/robo key set supermemory   # optional, set aside for now: without a key nothing is sent
 ~/Applications/Robo.app/Contents/MacOS/robo key status            # says only "set" / "not set"
 
 # 4. Agent settings, server key, login item and Obsidian vault.
@@ -85,8 +85,8 @@ open ~/Applications/Robo.app
 - **Follow-up window.** For 15 s after a reply has finished typing you can answer without the key. Only a sentence that is clearly read-only (a question, or "show / read / explain ...") is taken there, and it needs two words or more. Anything else is refused with "Hold Ctrl+Q and say that again: without the key I only answer questions.", and the reply you were reading stays.
 
 ### Chat and card
-- **Chat window.** Typed, spoken and digest requests open a Liquid Glass chat (about 520×640, centred on the main display) with bubbles, an empty state, "jump to latest" and Copy on Robo's bubbles. The text box grows to 5 lines: Return sends, Shift+Return adds a line, and Send is disabled while the box is empty. It closes on "close the chat" or Esc in its text box. The right-click menu's 💬 Type opens it for typing (so does a click on the face when voice input is off).
-- **The pet's card** keeps the quick things: the menu, "listening", Allow/Deny and nudges. Its header shows an AGENT light (the agent's `/health`: one miss amber, two red), a MIC light and the model.
+- **Chat window.** Typed, spoken and menu-digest requests open a Liquid Glass chat (about 520×640, centred on the main display) with bubbles, an empty state, "jump to latest" and Copy on Robo's bubbles. The text box grows to 5 lines: Return sends, Shift+Return adds a line, and Send is disabled while the box is empty. It closes with its close button, on "close the chat", or Esc in its text box. The menu's Type opens it for typing (so does a click on the face when voice input is off).
+- **The pet's card** keeps the quick things: the menu, "Listening", Allow/Deny, nudges and the automatic digest. Its header shows the name, and an Agent or Mic light only when something is wrong (or Listening during the follow-up window).
 - **Typing.** Replies are typed at about 55 characters a second and never fall more than a few seconds behind the stream. Each tick renders the shown prefix as Markdown with open marks closed, so a half-typed `**` never flashes.
 - **Mood tags.** A hidden `[[feel:x]]` at the start of a reply sets the face's expression before the first word appears, even when the tag arrives split across chunks.
 - **LaTeX** (`$..$`, `$$..$$`, `\(..\)`, `\[..\]`) is taken out before the Markdown parse and typeset with SwiftMath, in two inks so it stays legible when the glass flips.
@@ -94,16 +94,17 @@ open ~/Applications/Robo.app
 - **Accessibility.** VoiceOver labels and announcements, Allow/Deny reachable by keyboard (Tab between them), and Reduce Motion, Reduce Transparency and Increase Contrast honoured.
 
 ### The pet
-- **Face.** A white disc (112 pt inside a 128×128 view) with ink features in the mood's hue, at 4.5:1 contrast or more at every hue. Features move on springs; blinks and glances come from a seeded random generator, so motion is reproducible in tests.
+- **Face.** A white disc (112 pt inside a 128×128 view) with soft graphite features; colour appears only for a strong mood (proud, concerned, playful, sad, error), at 4.5:1 or more. Features move on springs; blinks and glances come from a seeded random generator, so motion is reproducible in tests.
 - **Roaming.** It rests, drifts to a wall of the main display and bounces a little there. When called it walks to the middle of the nearest side or to a corner and waits. A mouse press beats Stay, Stay beats a call, a call beats a drop, a drop beats sleep, and sleep beats wandering.
 - **Window.** The panel never takes the keyboard, and its transparent margin passes clicks through.
 
 ### The agent (`robo-agent`)
 - **Loop.** The Claude Agent SDK with `claude-sonnet-5-5`, the persona `agent/SOUL.md` and the 12 skills in `agent/skills/school/` (digest, mail, Teams, Moodle, posts, timetable, plan, quiz, ledger, notes, make, brain). Tools: Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, the browser (Playwright MCP) and Robo's memory.
 - **robo-guard** (`agent/robo_agent/guard.py`) is a PreToolUse hook on every tool call. It **blocks** the agent's own setup and keys, graded work (Moodle quiz attempts, assignment submissions, forum posts, raw JavaScript on school sites) and remote images or active HTML in notes. It **asks** before irreversible steps (`rm`, `sudo`, `git push`, Send/Reply/Delete clicks, Enter on a mail page, uploads). An error inside the hook denies the call. After each state-changing step it writes a receipt to `~/.local/share/robo/receipts.jsonl`, so the app can show "✓ sent · host" or "⚠ unverified" under a claim.
+- **Boundary.** The guard's patterns are a speed bump; the wall is the CLI's own: deny rules keep Read, Edit, Grep and Glob out of the runtime folder and `~/.hermes`, and on macOS Bash runs in a sandbox that cannot read them, write to the agent's code or reach anything on localhost (Brave's debugging port). Bash keeps the rest of the laptop and the internet. It costs `ps`, `top`, local dev servers, AppleScript to other apps, `git init` and `git clone`; `open` alone runs outside so that apps can start.
 - **Approvals.** `approvals` in `config.json` is `"off"` for a new setup: the guard's asks are allowed and only its blocks stop the agent. With `"manual"` each ask reaches the card as Allow/Deny (no answer in 120 s is Deny).
-- **Memory** (`memory.py`). Local facts in `memory/facts.jsonl`, ranked with BM25, plus a short profile; the most relevant ones go into each run's system prompt. A privacy filter refuses secrets, e-mail addresses and message bodies. Supermemory is an optional mirror. `robo-agent memory list | forget ID` shows and removes facts.
-- **Learning** (`learn.py`). After a run a cheaper model may extract up to 3 facts, and after a long, failed or corrected run it may write a reusable skill. A learned skill is vetted (no graded work, nothing that weakens safety, no HTML or remote content, no secrets, at most 30) and kept in `skills-learned/`; every decision is logged to `learning.jsonl`, and the profile is rewritten once a day. `robo-agent skills list | remove NAME` manages them. Set `"learn": false` in `config.json` to turn it off.
+- **Memory** (`memory.py`). Local facts in `memory/facts.jsonl`, ranked with BM25, plus a short profile; the most relevant ones go into each request's turn, marked as memory, not instructions (a resumed session keeps its first system prompt). A privacy filter refuses secrets, e-mail addresses and message bodies. Supermemory is an optional mirror: it gets vetted facts and the search words the agent chooses for `memory_search`; a request is not sent as such, and the counted habits stay on this Mac. `robo-agent memory list | forget ID` shows and removes facts.
+- **Learning** (`learn.py`). After a request of yours a cheaper model may extract up to 3 facts from your own words, and after a long, failed or corrected run it may write a reusable skill from the tool calls (arguments trimmed, secrets redacted). Automated runs (the digest, the LMS scan) teach nothing. `activity.jsonl` keeps when and what kind of thing you asked, never the words; once a day what repeats on enough distinct days becomes a counted `habit` fact, and goes when the pattern stops. A learned skill is vetted (no graded work, nothing that weakens safety, no HTML, remote content or inline shell, no secrets, at most 30) and kept in `skills-learned/`; every decision is logged to `learning.jsonl`, and the profile is rewritten once a day. `robo-agent skills list | remove NAME` manages them. Set `"learn": false` in `config.json` to turn it off.
 
 ### Active mode
 - **Deadline nudges.** Calendar links (`robo calendar add URL`, kept in a 0600 file and never printed) and the study ledger feed a reminder ladder (T-5 d, T-1 d, T-3 h for a deadline). A nudge budget allows three cards a day at fixed slots, with quiet hours at night, and a card never interrupts a reply, a run or an idle Mac.
@@ -123,7 +124,7 @@ open ~/Applications/Robo.app
 | `native/Vendor` | Microsoft's ONNX Runtime Swift bindings, pinned to the 1.30.0 pod |
 | `agent/robo_agent` | The agent service: `server.py` (HTTP API), `harness.py` (SDK run), `guard.py`, `memory.py`, `learn.py`, `config.py`, `cli.py` |
 | `agent/SOUL.md`, `agent/skills/` | The persona and the skills, filled from `config.json` at load time |
-| `tests/` | pytest for the agent: server, guard, memory, learning, template pins, offline canaries (`tests/evals/`) |
+| `tests/` | pytest for the agent: server, guard, memory, learning, template pins, offline canaries (`tests/evals/`), the real SDK and CLI against a fake API (`test_e2e.py`) |
 | `scripts/eval_live.py` | Sends the read-only eval requests to your real agent (by hand only, never in CI) |
 | `docs/` | A newcomer's guide, a technical deep dive and backend recommendations |
 

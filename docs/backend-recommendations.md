@@ -1,289 +1,188 @@
-# Backend recommendations: voice, interaction, motion, agent
+# Backend recommendations: voice, interaction, motion
 
-Written 2026-11-04 for the revamp; the `file:line` references were checked again after the revamp was merged
-(robo-agent, macOS 26 minimum). Every claim cites `file:line` (paths under `native/Sources/` unless they say
-otherwise). Item 1 is done; nothing else here is built yet. Each item says how to measure it, so a change can be
-compared with the code before it (the rule in `CLAUDE.md` "Verify").
+For the owner. Checked against the code on 2026-11-04, after the revamp (robo-agent, macOS 26 minimum). Paths are under
+`native/Sources/` unless they say otherwise. Nothing here was tried with your voice, the real key or the live app.
 
-**Terms used once and then freely**
-- **ASR** (automatic speech recognition): audio in, text out. Robo's is NVIDIA Parakeet TDT 0.6B v2, English only,
-  run on the CPU through ONNX Runtime (`RoboVoice/Parakeet.swift:1`, `:247`).
-- **Frame**: 80 ms of audio (1280 samples at 16 kHz, `RoboVoice/Listen.swift:12-14`). **RMS** is its loudness.
-- **Gate**: the loudness above which a frame counts as speech (`speechGate`, `Listen.swift:126-128`).
-- **Noise floor**: what the gate is computed from, the room's quiet level.
-- **Endpointer**: the code that decides an utterance is over (`Listen.swift:143-158`).
-- **VAD** (voice activity detection): a small model that says "speech / not speech" per frame, better than loudness.
-- **RTF** (real-time factor): seconds of compute per second of audio. 0.05 = a 4 s clip takes 0.2 s.
-- **WER** (word error rate): wrong, missing and extra words divided by the words of a reference text.
-- **Follow-up window**: the 15 s after a reply when you can talk without Ctrl+Q (`RoboUI/Window.swift:20`).
-- **Main thread**: the one thread AppKit draws on; work there competes with every animation.
+**How to read the claims**
+- **[M]** measured for this document. Rig: M5 Pro, 24 GB, with other builds running (load about 9), so timings are
+  pessimistic. All audio is macOS synthetic voices, which is good for comparing two options and not for tuning.
+- **[C]** read from the code, or shown by a test with fakes, not seen in the running app.
+- **[E]** an estimate.
 
-## Ranked summary
+**Terms**
+- **ASR** (automatic speech recognition): audio in, text out. Robo uses NVIDIA Parakeet TDT 0.6B v2, English only, on the
+  CPU through ONNX Runtime.
+- **WER** (word error rate): wrong, missing and extra words divided by the words of the reference text. Lower is better.
+- **RTF** (real-time factor): seconds of compute per second of audio. 0.05 means a 4 s clip takes 0.2 s.
+- **Frame**: 80 ms of audio. **Gate**: the loudness above which a frame counts as speech.
+- **VAD** (voice activity detection): a small model that says "speech / not speech", better than loudness alone.
+- **Follow-up window**: the 15 s after a reply when you can talk without Ctrl+Q.
+- **MCP server**: a helper process that gives the agent tools (here, Playwright for the browser).
 
-Rank = value for the user divided by effort and risk. S = under a day, M = a few days, L = a week or more.
+## The short version
 
-| # | Item | Area | Effort | Why first |
-|---|------|------|--------|-----------|
-| 1 | ~~A refused hands-free sentence wipes the reply being read~~ **done** | interaction | S | fixed in the revamp |
-| 2 | A follow-up utterance can run 120 s past a 15 s window | interaction / safety | S | TV speech delivered "hands-free" after the MIC light is off |
-| 3 | Voice eval measures name matching only: add timing, WER, a replay-through-`Listener` mode | voice | M | everything below needs a number first |
-| 4 | Push-to-talk feel: a "transcribing" state, a second press = "send now", shorter tail | voice / interaction | S | perceived latency, cheap |
-| 5 | Noise floor can freeze in a steadily louder room | voice | M | needs recalibration on the user's voice |
-| 6 | Speech model resident forever (~0.8-1.4 GB): unload after idle | voice | M | memory on a laptop |
-| 7 | A VAD model as a second stage after the gate | voice | M | fewer noise transcriptions |
-| 8 | ASR engine choice: measure Parakeet, then try SpeechAnalyzer / WhisperKit | voice | L | only if 3 shows a problem |
-| 9 | Agent service: evals on every prompt/skill change, caching, cost per run, cheap model for background | agent | M | the team is building it now |
-| 10 | Listener's 11 lock-guarded fields into one explicit state | interaction | M | makes 1, 2 and 4 safe to change |
-| 11 | One frame clock instead of 7 repeating timers; skip redraws that change nothing | motion | M | CPU, smoother frames |
-| 12 | Roam: a retarget restarts from zero speed | motion | S | a visible hitch |
-| 13 | Animator builds dictionaries every frame | motion | S | small; measure first |
-| 14 | Nudges: one budget counted twice; prefer natural breaks | interaction | S | cleanup |
+1. **Speech recognition is not the bottleneck.** It is about 6% of the local wait. The largest local cost is starting
+   the agent's command-line process and its tool servers for every single request: about 1 s, every time. The earlier
+   version of this document never measured this.
+2. **Keep Parakeet.** Apple's built-in recogniser ran at the same speed with about 3× the errors on Robo's own requests.
+3. **Don't add streaming ASR, a wake word or a VAD model now.** With push to talk they fix problems Robo doesn't have.
+4. **Decided (2026-11-05):** you speak English to Robo, so Parakeet v2 stays and no second engine is needed.
 
----
+## Where the time goes: key release to first letter
 
-## 1. A refused hands-free sentence wiped the reply being read (S) — DONE
+| Step | Time | Mark |
+|---|---|---|
+| Audio recorded after the key comes up (`RoboVoice/Listen.swift:29`) | 0.32 s | constant |
+| Parakeet transcribes (mean clip 2.6 s) | about 0.09 s | [M] |
+| The app starts the run over HTTP | under 0.01 s | [M] |
+| Agent process and MCP servers start, up to the first text, with a fake API that answers at once | 0.93-1.41 s warm, 5.5 s on a fresh install | [M] |
+| The model's own time to first token | about 1-2 s | [E], needs the network |
+| Text reaches the screen (tag filter, 33 ms typing tick) | under 0.1 s | [E] |
 
-**Was.** In a follow-up window the listener called `onWake()` as soon as it had two words, then delivered the text;
-`onWake` became `.listening(true)`, which stopped the run and cleared the reply, and only then did `onHeard` check
-`Intent.changesThings` and refuse. With the allow-list `Intent` rule (only clearly read-only requests pass hands-free)
-a stray "okay so..." from the room cost the user the answer they were reading.
+**Total: about 1.4 s of local time, plus the model.** What you see meanwhile: the face says "listening" from key-down, and
+nothing changes between key-up and the transcript, about 0.4 s.
 
-**Fixed in the revamp, close to the recommendation.** In the `handsFree` branch, `heard` no longer wakes robo
-(`RoboVoice/Listen.swift:456-461`); the app decides. `onHeard` refuses a sentence that changes things before anything
-is woken (`RoboUI/App.swift:158-173`), and only an accepted sentence sends `.listening(true)` itself.
-`refuseHandsFree` (`App.swift:177-181`) leaves the reply, puts the note beside it (a chat line or the card's "heard"
-line) and reopens the follow-up window for the time it had left. The message is now
-"Hold Ctrl+Q and say that again: without the key I only answer questions." (`App.swift:156`). The measurement asked
-for exists: `aRefusedHandsFreeSentenceLeavesTheReplyAndTheFollowUpWindowAsTheyWere`
-(`native/Tests/RoboUITests/AppTests.swift:833`), for the card and the chat.
+Also measured, one new session with empty memory [M]: each request to the API is about 49 KB, and 34.7 KB of that is the tool
+list, including 25 Playwright tools sent even for "what's due". Prompt caching is already on: the requests carry 3
+`cache_control` markers, and the system prompt and tools were byte-identical across runs.
 
-## 2. A follow-up utterance can outlive its window by 105 s (S)
+## Speech engines on Robo's real requests
 
-**Problem.** Two clocks own the window. The app sets `followUntil = typedAt + 15 s` (`App.swift:466-471`) and drives
-the MIC light and `nudgeHeld` from it (`App.swift:351`, `Nudges.swift:229`); the listener keeps its own `openUntil`
-(`Listen.swift:216`, `:342-345`). When sound crosses the gate inside the window, `woke` is true (`Listen.swift:396-398`),
-so `record` switches to the patient settings: 3 s of silence or up to `patientMaxS` = 120 s (`Listen.swift:24`, `:504`).
-`inWindow` was captured at the start, so whatever is said during those 120 s is delivered with `handsFree: true`
-(`Listen.swift:412`). A TV that never pauses keeps one recording going long after the light went off, and the sentence
-it ends with is then taken. CLAUDE.md already names the cost "a room that never goes quiet keeps the request open up to
-`PATIENT_MAX_S`"; for a key-less window it is worse than a cost.
+46 English requests from `tests/evals/requests.jsonl`, 4 voices, 184 clips, 1,396 words [M]:
 
-**Recommendation.** For an utterance that started in a follow-up window (not a click, not the key), cap its length at
-the time the window had left plus a small margin (say 20 s total), keeping the 3 s patient silence (the README's "a
-pause to think does not end the request"). Then make one side own the window: the listener reports "window opened /
-closed" and the app only displays it, instead of both computing `now + 15`.
+| Engine | WER | Clips with an error | Worst voice | Time per clip |
+|---|---|---|---|---|
+| Parakeet TDT v2 (release build) | **2.29%** | 22 | 4.87% | 87 ms mean, about 6.7 cores busy |
+| Apple SpeechTranscriber (`.transcription`) | 6.73% | 52 | 18.62% | 85 ms median, RTF 0.035 |
 
-**Tradeoff.** A very long hands-free request is cut; the key has no cap change. **Measure.** A `ListenTests` case with
-`FakeMic` (`native/Tests/RoboVoiceTests/ListenTests.swift:162`) feeding constant loud frames into an open window:
-today it records 120 s; after, it ends by the cap and `handsFree` text never arrives after the window.
+`robo voice-eval` (the name matcher, not the words of a request): **178/200** [M]: 12 misses, and 10 false positives that are
+all the deliberate "Rubble" sentence. Model load 0.8 s; footprint 806 MB, peak 951 MB [M]. SpeechTranscriber on this Mac: 30
+locales, en_US already installed [M].
 
-## 3. Measure first: the voice eval checks only the name matcher (M)
+A direction check from elsewhere, vendor-run: Argmax's table has SpeechTranscriber at 14.0 error rate and parakeet-v2 at 11.7 on an
+M4 Mac mini.
 
-**Problem.** `robo voice-eval` transcribes clips and scores `addressed(heard)` (`RoboVoice/VoiceEval.swift:122`,
-`:147`): did a sentence with "robo" get taken. The live app wakes by Ctrl+Q, and with the key registered name wake is
-off (`RoboUI/Launch.swift:132`, `nameWake: !byKey`). So the eval tests the fallback mode, not the words of the request,
-and it times nothing except the model load (`VoiceEval.swift:103-106`). The gate, the endpointer, the windows and
-the pre-roll are never exercised on real audio.
+## Already done
 
-**Recommendation.**
-1. Per clip: wall time and RTF of `stt(audio)`, and WER against the prompt text (the prompts are known in all three
-   modes). Print median and worst.
-2. A `--replay DIR` mode that pushes each WAV through a real `Listener` frame by frame. The listener already takes an
-   injected mic, transcriber and clock (`Listen.swift:230-236`); a WAV-backed `AudioSource` (`AudioInput.swift:6-10`) is
-   ~20 lines. Score: did the request arrive whole, how long after the speech ended, was anything delivered for
-   noise-only clips.
-3. Mix room noise (fan, TV, keyboard) at a few levels into the clips, and add a "pause to think" clip (2.5 s of
-   silence mid-sentence) that must arrive as one request.
+Each of these was first reproduced by a test that failed on the old code. They are uncommitted, and not yet seen on the live app.
 
-**Tradeoff.** None for the app; it is a tool. **Measure.** It is the measurement. Keep CLAUDE.md's rule: calibrate on
-the user's own voice (`robo voice-eval --record`), TTS only compares a change with the one before it.
+- **A held key could be refused as hands-free.** If a sound had started a recording in the follow-up window, the recording
+  ignored the key. Your sentence then came back as "Hold Ctrl+Q and say that again" while you were holding it, and your reply
+  was already gone. A click had the same problem. Now the key or the click ends that recording and drops what it held, since
+  that may be the room and must not get the key's authority. After a click or the name, the sentence continues under the key
+  instead, and ends at the release (`RoboVoice/Listen.swift:508`,
+  `aKeyPressedDuringAFollowUpRecordingIsNotHandsFree`, `aClickDuringAFollowUpRecordingIsNotHandsFree`,
+  `aKeyPressedDuringAClickRecordingKeepsTheWordsAndEndsAtTheRelease`).
+- **A race in the safety filter.** "Was this said hands-free" was a property the app read after a hop to the main thread, by
+  which time a later delivery could have changed it, so a sentence from the TV could pass unfiltered. The flag now travels
+  with the text (`aLaterDeliveryDoesNotChangeWhetherATextWasHandsFree`).
+- **"Listening" and the blur could stick.** A long press that ended while the model loaded or a transcription ran got no
+  answer, and nothing times that state out. Now it gets "Sorry, I didn't catch that." That speech is lost; a press still held
+  when the model is ready records as usual (`aLongPressWhileTheModelLoadsStillGetsAnAnswer`,
+  `aPressThatCameAndWentDuringATranscriptionStillGetsAnAnswer`).
+- **The pet no longer stops dead when its walk gets a new aim.** The usual trigger: the card grows a line, which moves the
+  corner it is walking to. `come` and `sleep` walks keep their speed; drift paths are unchanged (`RoboCore/Roam.swift`,
+  `aReAimedWalkKeepsItsSpeed`).
+- **A call moves the pet at once**, instead of at the next resting tick up to 0.5 s later
+  (`aCallMovesThePetAtOnceNotAtTheNextRestingTick`).
+- **A refused hands-free sentence no longer wipes the reply** (done in the revamp).
 
-## 4. Push-to-talk feel (S)
+Being fixed in a separate piece of work, not finished as this was written: memory hits go into the system prompt
+(`agent/robo_agent/harness.py:247`, `:339`), and they change per question. So once memory has content, each request misses the
+cached conversation behind them [C]. The fix moves memory into the user turn.
 
-**Problem a: no "transcribing" state.** Key down shows "listening" (`Window.swift:331-335`); key up only calls
-`ear.release()` (`Window.swift:176`). The transcription runs on the inference queue (`Listen.swift:489-494`) and the UI
-hears nothing until `onHeard` (`App.swift:156`). The face keeps "listening" while robo is in fact busy.
-**Fix:** a callback at release (and at the end of a windowed utterance, before `infer.async`) that switches the face to
-a "thinking/transcribing" look. **Measure:** the time from key-up to `ask()` in a log line; the look should change
-within one frame of key-up.
+## What I'd do next, in order
 
-**Problem b: a press during a click window is ignored.** In a click window `record` runs the endpointer and never reads
-`held` (`Listen.swift:498-524`); the run loop checks `held` only between utterances (`Listen.swift:382`). Pressing
-Ctrl+Q mid-sentence does nothing until 3 s of silence. **Fix:** in `record`, a key press ends the endpointer wait and
-hands over to `recordHeld` with the frames so far (the request continues under the key). **Measure:** a `ListenTests`
-case: click window, speech, `hold()`, `release()`; one request containing both parts.
+The rest are recommendations. Most need your voice to tune or a decision from you.
 
-**Problem c: the tail.** `releaseTailFrames` = 4 frames, 0.32 s recorded after key-up (`Listen.swift:29`, `:476-481`).
-Try 2 (0.16 s saved on every request). **Measure:** with item 3's WER on the user's own clips released "early"; keep 4
-if the last word gets lost.
+### 1. Cap a key-less follow-up recording (S: under a day)
+A follow-up recording uses the patient settings, up to 120 s (`RoboVoice/Listen.swift:24`, `:514`), so a TV that never pauses can
+keep one open long after the MIC light went off, and its last sentence is then taken as hands-free [C]. The overrun can reach the
+full 120 s. Cap it at the window's remaining time plus a small margin (about 20 s in total), keeping the 3 s pause rule, and let
+one side own the window instead of both the app and the listener computing `now + 15`.
+- **Gain:** a real safety gap closes. **Risk:** a very long key-less request is cut; the key is unaffected.
+- **Measure:** `ListenTests` with constant loud frames in an open window. **Touches:** the follow-up window constraint.
 
-## 5. The noise floor can freeze (M)
+### 2. Stop paying about 1 s to start the agent on every request (M: a few days)
+Measure Playwright's share first. If it is large, start it only when a browser tool is needed, which also shrinks every
+request. Then consider one warm agent process per session.
+- **Gain:** up to about 1 s on every request [E]. **Risk: high.** The guard and hooks are bound to each run and must keep
+  failing closed; don't trade safety for this. A warm process also needs the memory fix above, since its system prompt can't
+  change per question.
+- **Measure:** the fake-API timing above, then real first-token time. **Touches:** the robo-guard notes in `CLAUDE.md`.
 
-**Problem.** The floor learns only from frames at or under the gate (`Listen.swift:388-392`): `quiet.append(level)`
-runs for quiet frames only. Frames above the gate either start a recording or, with name wake off and no window, are
-dropped without being learned (`Listen.swift:400-402`). If the room gets steadily louder (a fan, air conditioning, TV)
-to above 2.5 times the old floor (`gateFactor`, `Listen.swift:18`), the gate never rises: every frame is "speech", every
-click or follow-up window records until the 120 s cap, and the minimum-speech check (`Listen.swift:407`) passes on noise.
+### 3. Show "transcribing" at key-up, and end the tail early (S)
+Key-up only calls `ear.release()` (`RoboUI/Window.swift:176`), so the face still says "listening" while robo is busy. Change
+the look at key-up. Also stop the 0.32 s tail as soon as its frames are quiet, rather than always waiting.
+- **Gain:** up to 0.3 s, and it feels more responsive. **Risk:** a clipped last word.
+- **Measure:** WER on your own clips, released "early". **Needs your voice.**
 
-**Recommendation.** Learn the floor from all frames not inside a recording: the 20th percentile of the last ~5 s
-(`noiseFrames` = 62, `noisePercentile` = 20 already exist, `Listen.swift:16-17`). A percentile of everything still
-ignores short speech, and a sustained level becomes the new floor. Optional: a 100 Hz high-pass before the RMS (Accelerate
-`vDSP` biquad) so hum and desk thumps weigh less.
+### 4. Don't clip or discard speech on the key path (S)
+A press has no pre-roll: the audio just before it is thrown away (`RoboVoice/Listen.swift:381`), so a word started with the press can
+lose its first sound. And "the key decides" isn't quite true: under 4 loud frames, the speech is never transcribed
+(`RoboVoice/Listen.swift:496`), so soft speech in a louder room gets "Sorry". Prepend 2-3 frames, and stop gating a held key on loudness.
+- **Risk:** noise gets transcribed more often. **Measure:** WER on clips with clipped starts, and on soft speech.
+- **Touches:** the speech gate floor. **Needs your voice.**
 
-**Tradeoff.** Someone talking without pause for 5 s raises the floor under their own voice; with Ctrl+Q that does not
-matter (`recordHeld` ignores the gate except for its loud-frame count, `Listen.swift:476-487`). `minGate` = 0.008 was set
-on the user's voice (CLAUDE.md "Speech gate floor"): recalibrate with `robo voice-eval --record` and item 3's replay mode,
-never on TTS. **Measure:** replay mode with a fan clip whose level steps up 4x after 10 s: today the gate stays; after,
-it follows within ~5 s, and noise-only windows deliver nothing.
+### 5. Make `robo voice-eval` score requests, not just the name (S; replay is M)
+Today it scores whether the name was caught, while the live app wakes by key (`RoboUI/Launch.swift:132`). The numbers above came
+from a throwaway script over `--wavs`. Add WER against `tests/evals/requests.jsonl` and per-clip timing. Later, a replay mode
+that pushes WAVs through a real `Listener`, with noise-only clips and a "pause to think" clip.
+- **Gain:** every voice change gets a number. **Risk:** none, it is a tool.
 
-## 6. The speech model stays loaded forever (M)
+### 6. Live words while the key is held (M)
+Re-run Parakeet on the growing recording about once a second and show the text on the card. For display only: the final pass
+on key-up stays as it is, and nothing ever acts on a partial, so no transcript changes and "don't end a request on a ?" holds.
+At 87 ms per clip this looks feasible [E]. It is the most visible interactivity gain here: you can see "Robert" before you
+release.
+- **Risk:** CPU and heat; a run uses about 6.7 cores in batch [M]. Cap the rate.
+- **Measure:** CPU while held, and final transcripts unchanged.
 
-**Problem.** The model loads once at start (`Listen.swift:305-318`) and stays. CLAUDE.md measured ~1.4 GB footprint with
-ONNX Runtime 1.30 and ~0.8 GB with `session.disable_prepacking` (set at `Parakeet.swift:275-278`). Robo is idle most of
-the day.
+### 7. Let the noise floor follow a louder room (S)
+With the key on, loud frames outside a window aren't learned (`RoboVoice/Listen.swift:402`), so a lasting jump can freeze the gate
+below the room, and click and follow-up windows then record to the cap [C]. This is rarer than it sounds: in a quiet room `minGate`
+sets the gate (`RoboVoice/Listen.swift:126`), so the level must rise about 6.7× from the measured 0.0012 floor to cross 0.008, not
+2.5×. Learning from those frames too is about one line, and `minGate` doesn't change.
+- **Measure:** replay a step **above** 0.008; a smaller step doesn't reproduce it. **Touches:** the speech gate floor.
 
-**Recommendation.** Unload after N minutes without a press, click or window (say 30), and reload on key-down while
-recording (the listener already keeps audio spoken during a load, `Listen.swift:257-261`). Optionally prewarm on
-key-down only, never at a timer.
+### 8. Smaller items
+- **ONNX Runtime threads and spinning (S):** try fewer threads. Benefit is battery, not latency [E]. Transcripts must match
+  exactly, since the name matcher was tuned on this output.
+- **Unload the model on memory pressure (M):** reload is 0.8 s from a warm disk [M], and starting it at key-down would hide most
+  of that. But only on pressure, not on a timer, at 806 MB of 24 GB. The listener keeps its transcriber for the whole run
+  (`RoboVoice/Listen.swift:312`), so this needs restructuring, and the existing "audio kept during a load" covers startup only.
+- **Agent evals and cost (M):** `tests/evals/` and `scripts/eval_live.py` exist. Add write requests that must ask or be blocked,
+  gate learned skills on the offline suite, add model and price to `usage.jsonl`, and try the cheap model for the LMS scan.
+- **Nudge counters (S):** `sentToday` and `slotsUsed` only change together (`RoboCore/NudgeBudget.swift:200-207`). Drop one, unless
+  `normalPerDay` may later be lower than the slot count. Cleanup only.
 
-**Tradeoff.** The first request after idle waits for the load; how long is unknown (the eval prints it,
-`VoiceEval.swift:103-106`). If it is over ~1 s, unload only on memory pressure (`DispatchSource.makeMemoryPressureSource`)
-instead. **Measure:** `footprint <pid>` (not `ps`, per CLAUDE.md) idle before/after; load time from the eval line.
+## Ideas I'd reject for now
 
-## 7. A VAD model after the gate (M)
+| Idea | Why not |
+|---|---|
+| Switch to Apple SpeechAnalyzer | Same speed, about 3× the WER on these clips [M]. Its one real win is about 0.9 GB back. Recheck on your own voice before closing this for good. |
+| Streaming ASR (Nemotron 3.5, Parakeet EOU) | With push to talk the whole clip is ready at key-up, in about 90 ms. Item 6 gives the visible part without a new engine. Moves every tuned number. |
+| FluidAudio or CoreML Parakeet on the Neural Engine | Saves at most about 60 ms of 1.4 s [E]; adds a dependency and model downloads. Revisit if battery becomes a measured problem. The `CLAUDE.md` CPU-only rule measured ONNX Runtime's CoreML provider, not these conversions, so it doesn't rule them out. |
+| WhisperKit for English | whisper-small.en is behind parakeet-v2 in Argmax's own table. |
+| A wake word (openWakeWord, Porcupine) | You chose Ctrl+Q on 2026-10-16. Another always-on listener would bring back the false wakes that decision removed. |
+| A VAD model (Silero v6, Apple `SpeechDetector`) | With the key on it only helps the click and follow-up windows, which are already filtered by two words and `Intent`. If it comes back: Silero's maintainers now recommend v6, and one forum report describes a compile error passing `SpeechDetector` to `SpeechAnalyzer`. |
+| Listener state as one enum | The three bugs above were fixed in place. A refactor of thread-sensitive code needs a reason it doesn't yet have. |
+| One display-synced clock for animation; arrays instead of dictionaries in `Animator` | No CPU number exists for the Swift app. Measure idle, typing and roaming first. |
+| "Skip redraws when the face didn't change" | Nearly a no-op: the breathing changes `bob` every frame (`RoboCore/Animator.swift:161`, drawn at `RoboUI/FaceRender.swift:293`). A lower idle frame rate between blinks is the idea to test instead, once a CPU number exists. |
+| A spring for the pet's walk | Keeping the speed on a new aim fixed the hitch in a few lines. |
 
-**Problem.** Speech is loudness only: `rms(frame) > gate` (`Listen.swift:381`, `:388`, `Endpointer.feed` at `:151`). A
-door, music or a cough above the gate starts a recording and a transcription.
+## Not measured
 
-**Recommendation.** Silero VAD v5 (an ~2 MB ONNX model) run through the ONNX Runtime already linked for Parakeet, as a
-second stage: the gate stays the cheap first test, the VAD confirms speech before a recording starts and before the
-endpointer counts a frame as "still talking". Silero reads 512-sample windows, so an 80 ms frame is 2.5 windows (keep the
-remainder). Keep it on the CPU provider like Parakeet (CLAUDE.md "Speech model on the CPU only").
+- Anything on your own voice, the real Ctrl+Q, or the live app.
+- CPU of the Swift app. It wasn't running; the only number on record, about 5% of a core idle, is from the retired Python build.
+- The model's real first-token time, and how much of the 1 s startup is Playwright.
+- Memory's effect on the cache: the request bodies above were captured with empty memory.
 
-**Tradeoff.** ~1 ms of CPU per frame, a second model to ship, one more threshold to calibrate. With Ctrl+Q as the main
-path the gain is mostly in click and follow-up windows. **Measure:** replay mode with noise-only clips (count of
-transcriptions) and the user's speech clips (misses must not go up).
+## Sources
 
-## 8. ASR engine choice (L, only if item 3 shows a need)
-
-**Facts.** Parakeet TDT 0.6B v2 is English only (`Parakeet.swift:1`), so Vietnamese speech is not recognised at all
-(the Vietnamese words in `Intent` matter for typed or future input). The bit-exact numpy-matching mel code
-(`Parakeet.swift:7-19`) and the CPU-only rule were tuned for the name matcher, which the Ctrl+Q mode does not use
-(`Launch.swift:132`). The package targets macOS 26 (`native/Package.swift:7`).
-
-**Candidates, after measuring Parakeet's RTF and WER on the user's clips:**
-- **Apple SpeechAnalyzer / SpeechTranscriber** (macOS 26, on device, streaming partial results, many languages). The
-  package's macOS 26 minimum means no `#available` check is needed. Partial results are for display only: never end a
-  request on a "?" and no spoken end word (CLAUDE.md constraints); the request still ends on the key or 3 s of silence.
-- **WhisperKit** (Swift package, CoreML, multilingual): a new dependency; CoreML transcribes differently from the CPU
-  (CLAUDE.md), which now matters only for the fallback name wake.
-- **Parakeet on chunks while the key is held**: lower latency on long requests, but chunking changes transcripts.
-
-**Tradeoff.** Switching moves every tuned number. **Measure:** the same clips through each candidate: WER, RTF,
-key-up-to-text time, memory. Change only for a clear win.
-
-## 9. The agent service (M)
-
-Built in the revamp: `robo-agent` (`agent/robo_agent/`) replaced Hermes behind the same HTTP contract the app already
-spoke: `POST /v1/runs`, `GET /v1/runs/{id}/events` (server-sent events), `/stop`, `/approval`
-(`RoboCore/Brain.swift:85-103`, `:156`; served by `agent/robo_agent/server.py`) and `/health`
-(`RoboCore/Health.swift:31`). The harness (`harness.py`) is the SDK's tool loop plus the guard as a PreToolUse hook
-(`guard.py`), approvals and receipts; memory (`memory.py`) is local facts with BM25 (a classic keyword-ranking formula)
-plus the profile, Supermemory optional; self-improvement (`learn.py`) is a review after each run that may write a vetted
-"learned skill". The post-run review and the daily profile already use a cheaper model (`harness.CHEAP_MODEL`); the LMS
-scan runs on the main model (`config.json` `model`).
-
-**Recommendations.**
-- **Evals on every prompt or skill change.** They exist: `tests/evals/requests.jsonl` (49 read-only student requests),
-  `tests/evals/canaries.jsonl` (30 hostile texts replayed through the guard offline by `tests/test_canaries.py`) and the
-  opt-in live runner `scripts/eval_live.py`. Extend them rather than start over: add write requests that must ask or be
-  blocked, and gate every learned skill on the offline suite passing.
-- **Prompt caching** for the fixed persona and skill text, so each run pays for it once. `Usage` already records
-  `cacheRead`/`cacheWrite` per run (`RoboCore/Usage.swift:9-12`, `:41`): the hit rate can be watched from day one.
-- **Cost per run.** Tokens per run are logged to `usage.jsonl`; add the model and price so a day's spend is visible.
-  CLAUDE.md's numbers (a chat turn ~95k tokens, one course scan ~340k, measured with Hermes) are the baseline to beat.
-- **A cheap model for the LMS scan too** (the post-run review has one already), the strong one for the user's own
-  requests.
-
-**Tradeoff.** A learned skill is code-like text the agent will obey: it must pass the same guard and evals as a
-hand-written one. **Measure:** eval pass rate, tokens and cost per request kind, cache hit rate.
-
-## 10. The listener's state as one explicit mode (M)
-
-**Problem.** `Listener` holds 11 fields under one lock: `loaded`, `alive`, `opening`, `generation`, `openUntil`, `asked`,
-`handsFreeText`, `held`, `heldAt`, `tapped`, `failure` (`Listen.swift:212-223`). Which combinations are legal is spread
-over `hold`, `release`, `followUp`, `open`, `heard` and the run loop (`Listen.swift:325-350`, `:365-372`, `:453-471`).
-Items 1, 2 and 4 all change these transitions.
-
-**Recommendation.** One enum for the listening mode (idle, click window, follow-up window, held, transcribing), with
-`openUntil`/`heldAt` as associated values, and one `transition` function. Keep the lifecycle fields (`loaded`, `alive`,
-`opening`, `generation`, `failure`) as they are.
-
-**Tradeoff.** A refactor of thread-sensitive code; do it behind the existing `ListenTests` (which use fakes and pass
-today) and add cases for 1, 2 and 4 first. **Measure:** the suite stays green; no behaviour change.
-
-## 11. One frame clock for motion (M)
-
-**Problem.** Seven repeating main-thread timers animate the app: the face (25-30 Hz, `RoboUI/FaceView.swift:16-23`,
-`:64-68`), roaming (30 Hz moving, 2 Hz resting, `Window.swift:25`, `:260-268`), the window tick (10 Hz,
-`Window.swift:159`), typing (30 Hz while letters are due, `App.swift:423`), the card's shade ease (`App.swift:572`), the
-chat's shade ease (`RoboUI/Chat.swift:215`) and the typing dots (`RoboUI/CardChrome.swift:478`). Most run only while
-needed, which is good, but during a reply four or five tick at slightly different rates and phases, not in step with
-the display. The face also repaints on every tick whether or not anything changed (`FaceView.swift:105-110`).
-
-**Recommendation.** First the cheap part: skip `needsDisplay` when the face parameters are unchanged (an idle face
-between blinks and glances). Then, if the measurement says it is worth it, one display-synchronised clock
-(`NSView.displayLink(target:selector:)`, available since macOS 14, so well within the macOS 26 minimum) that calls each active animation with the same `dt`
-and stops when none is active, with `preferredFrameRateRange` capped at 30 so a 120 Hz screen does not quadruple the cost.
-
-**Tradeoff.** A display link that is left running costs more than the timers it replaces; the on-demand behaviour
-must survive. **Measure:** CPU of the running app idle, while typing, while roaming (`top -pid` over a minute, or
-Instruments' Time Profiler), before and after. The retired Python build measured ~5 % of a core idle; the Swift build
-has no recorded number yet.
-
-## 12. Roaming: a retarget starts again from zero speed (S)
-
-**Problem.** `go()` resets `origin`, `elapsed` and the trip time (`RoboCore/Roam.swift:247-252`), and `travel` eases with
-smoothstep from that origin (`Roam.swift:255-262`), which starts at speed zero. When the target changes mid-walk (asleep
-then called, a call target that moves, `Roam.swift:165-172`) the pet stops dead and accelerates again.
-
-**Recommendation.** Keep the walk's velocity across a retarget: follow the goal with a critically damped spring (a
-spring tuned to arrive as fast as possible without overshooting; `Animator` already uses one, `Animator.swift:134-140`),
-capped at the walk speed. The wall bounce (`Roam.swift:24-30`) can stay as it is.
-
-**Tradeoff.** The pure `Roamer` tests pin exact paths with golden values that came from the retired Python build; new
-golden values must be generated from the Swift code. **Measure:** the speed limit test (`neverFasterThanTheSpeedLimit`) and a new test that speed is
-continuous across a retarget.
-
-## 13. Animator dictionaries every frame (S, measure first)
-
-**Problem.** `Animator.step` builds two to three `[KeyPath: Double]` dictionaries per frame (`RoboCore/Animator.swift:86-87`,
-`:105-108`), hashing key paths for every parameter on every tick.
-
-**Recommendation.** An array indexed by a small enum of face parameters. Only worth it if item 11's profile shows
-`Animator.step` near the top; it is a few hundred lookups per frame.
-
-## 14. Nudges (S)
-
-**Problem.** The normal budget is counted twice: `sentToday < normalPerDay` and "this slot is unused"
-(`RoboCore/NudgeBudget.swift:200`), with `normalPerDay` = 3 and three slots (`NudgeBudget.swift:131-133`), so one implies
-the other. Slots already wait for a free moment (a slot stays open until the next, `NudgeBudget.swift:7`; `nudgeHeld` waits
-for idle, `Nudges.swift:228-230`).
-
-**Recommendation.** Drop one counter (or document that `normalPerDay` may later be lower than the slot count). If nudges
-should feel less like alarms, prefer the moment right after a run ends or the Mac is unlocked within an open slot,
-instead of the first free tick.
-
-**Measure.** The existing NudgeBudget tests stay green.
-
----
-
-## Checked and dropped or corrected
-
-- "macOS 26 is the new minimum": it was macOS 14 when this was written; the revamp made it so
-  (`native/Package.swift:7`, `bundle.sh` `LSMinimumSystemVersion` 26.0), so macOS 26 APIs need no `#available`.
-- "Add an eval set of real requests": one exists (`tests/evals/`, `scripts/eval_live.py`); item 9 extends it.
-- "About 6 timers": there are 7 repeating ones plus one-shots in `Card.swift:364` and `ChatPanel.swift:301` (the
-  throttled reply renders) and the 1 Hz blur refresh
-  (`BlurVeil.swift:55`), and most are already on demand, so the gain is smaller than "6 always-on timers" suggests.
-- "Nudges at natural breaks instead of fixed slots": partly true already (item 14).
+- Argmax, vendor-run benchmark: https://www.argmaxinc.com/blog/apple-and-argmax
+- FluidAudio (Apache-2.0; about 190× on M4 Pro, by its own figures): https://github.com/FluidInference/FluidAudio
+- Apple SpeechDetector: https://developer.apple.com/documentation/speech/speechdetector, and the forum report:
+  https://developer.apple.com/forums/thread/797544
+- Silero VAD models: https://docs.vad.ricky0123.com/user-guide/models/
+- Nemotron 3.5 ASR: https://letsdatascience.com/news/nvidia-releases-open-nemotron-35-audio-transcription-and-tra-e4112b2f
