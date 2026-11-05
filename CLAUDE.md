@@ -49,6 +49,10 @@ The owner designs the harness and the self-improvement loop themself: don't add 
   Command Line Tools 27 (Swift 6.4). CI failed with "unable to type-check this expression in reasonable time" on test lines that
   type-check here in under 15 ms, so local timing (`-warn-long-expression-type-checking`) does not predict it; only a CI run does. The
   job then stops at compiling and runs no test. Fix by spelling out the closure's types and splitting the arithmetic.
+- **The CI Mac is not this Mac (seen 2026-11-05)**: it runs in light mode with Reduce Motion on, on a 1x screen; this Mac is in dark mode
+  with a 1x main screen and a 2x MacBook screen. A test must pin what it depends on (`reduceMotion`, the appearance). A dynamic colour read
+  outside drawing follows the current appearance, not `NSApp.appearance`: use `performAsCurrentDrawingAppearance`. A view with no window
+  reports this Mac's largest scale (2) while `bitmapImageRepForCachingDisplay` gives the main screen's (1): probe pixel alignment in a window.
 
 ## The live setup
 - `~/Applications/Robo.app` runs at login through the `ai.robo` LaunchAgent. At launch the app starts
