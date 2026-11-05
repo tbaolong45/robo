@@ -44,6 +44,3 @@
 {"id": "digest-catch-up", "kind": "digest", "request": "Catch me up on everything I missed today."}
 {"id": "notes-eigen", "kind": "notes", "request": "Find my notes about eigenvalues."}
 {"id": "notes-last-lab", "kind": "notes", "request": "What did I write in my last lab note?"}
-{"id": "vi-due-week", "kind": "due", "request": "Tuần này tôi có bài nộp nào?"}
-{"id": "vi-explain-derivative", "kind": "explain", "request": "Giải thích ngắn gọn đạo hàm là gì.", "match": "đạo hàm|derivative"}
-{"id": "vi-plan-tomorrow", "kind": "plan", "request": "Lên kế hoạch học cho ngày mai giúp tôi."}

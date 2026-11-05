@@ -1,6 +1,7 @@
 import io
 import json
 import stat
+import threading
 import urllib.error
 import urllib.request
 
@@ -221,3 +222,165 @@ def test_no_key_no_network(tmp_path):
     s = Store(tmp_path)  # the autouse fixture fails any real call
     s.add("The user likes tea")
     assert s.search("tea")
+
+
+# --- one shared store ---------------------------------------------------------------------------
+
+def test_goals_and_events_are_kept_and_summarised(tmp_path):
+    s = Store(tmp_path)
+    assert s.add("Pass linear algebra", kind="goal")
+    assert s.add("MATH201 midterm 2026-10-20", kind="event")
+    text = memory.summary(s.all())
+    assert "Goals:\n- Pass linear algebra" in text and "Events:\n- MATH201" in text
+
+
+def test_another_process_forgetting_is_not_undone(tmp_path):
+    served = Store(tmp_path)
+    a = served.add("The user likes tea")
+    Store(tmp_path).forget(a)  # `robo-agent memory forget`
+    served.add("The user owns a bicycle")
+    assert [f["text"] for f in served.all()] == ["The user owns a bicycle"]
+    assert [f["text"] for f in Store(tmp_path).all()] == ["The user owns a bicycle"]
+
+
+def test_no_http_call_holds_the_lock(tmp_path):
+    s = Store(tmp_path, supermemory_key="k")
+    free = []
+    http = FakeHTTP({("POST", "/v4/search"): {"results": []}})
+
+    def urlopen(req, timeout=None):
+        t = threading.Thread(target=lambda: free.append(s._lock.acquire(timeout=1)
+                                                        and (s._lock.release() or True)))
+        t.start()
+        t.join()
+        return http(req, timeout)
+
+    s.urlopen = urlopen
+    a = s.add("The user lifts weights")
+    s.add("The user lifts heavy weights")  # near duplicate: forget + add
+    s.search("gym")
+    s.forget(a)
+    assert len(free) >= 4 and all(free)
+
+
+def test_a_search_while_a_reload_replaces_the_rows_still_counts_the_hit(tmp_path):
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = FakeHTTP()
+    a = s.add("The user lifts weights")
+    other = Store(tmp_path)
+    real = s._sm_search
+
+    def racing(query, limit):
+        other.add("The user owns a bicycle")  # the file changes while the call is out
+        s.all()
+        return real(query, limit)
+
+    s._sm_search = racing
+    s.search("weights", limit=5)
+    assert next(f for f in Store(tmp_path).all() if f["id"] == a)["hits"] == 1
+
+
+# --- what Supermemory gets ------------------------------------------------------------------------
+
+def test_the_raw_request_never_goes_to_supermemory(tmp_path):
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    s.add("The user likes tea")
+    s.context_for("write to my landlord Bob about the rent")
+    assert "landlord" not in json.dumps([c[2] for c in http.calls])
+    assert [c[1] for c in http.calls] == ["/v4/memories"]  # the fact itself, nothing else
+
+
+def test_a_search_with_something_private_stays_here(tmp_path):
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    s.search("what did bob@example.com say")
+    assert http.calls == []
+
+
+def test_mirror_false_keeps_a_fact_here(tmp_path):
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    assert s.add("The user corrected Robo: Bob, not Rob", kind="correction", mirror=False)
+    assert http.calls == []
+
+
+def test_counted_habits_never_reach_supermemory(tmp_path, monkeypatch):
+    monkeypatch.setattr(memory, "MAX_FACTS", 1)  # a full store: no eviction call either
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    s.set_habits({"a:b": "The user studies at night (5 of 5)."})
+    s.set_habits({"a:b": "The user studies at night (6 of 6)."})
+    habit = next(f for f in s.all() if f.get("habit_key"))
+    s._sm_add(habit)  # the mark holds wherever a row comes from
+    assert s.forget(habit["id"])
+    s.set_habits({"c:d": "The user reads mail in the morning (7 of 7)."})
+    s.set_habits({})
+    assert http.calls == []
+
+
+RAW = "The user corrected Robo: my landlord Bob, not Rob"
+
+
+def keyed(tmp_path):
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    return s, http
+
+
+def test_forgetting_an_unmirrored_fact_sends_nothing_even_after_a_restart(tmp_path):
+    s, http = keyed(tmp_path)
+    a = s.add(RAW, kind="correction", mirror=False)
+    assert s.forget(a) and http.calls == []
+    b = s.add(RAW, kind="correction", mirror=False)
+    again, http2 = keyed(tmp_path)
+    assert again.forget(b) and http.calls == [] and http2.calls == []
+
+
+def test_evicting_an_unmirrored_fact_sends_nothing(tmp_path, monkeypatch):
+    s, http = keyed(tmp_path)
+    s.add(RAW, kind="correction", mirror=False)
+    monkeypatch.setattr(memory, "MAX_FACTS", 1)
+    s.add("The user owns a bicycle")
+    assert [f["text"] for f in s.all()] == ["The user owns a bicycle"]
+    assert [c[:2] for c in http.calls] == [("POST", "/v4/memories")]
+    assert "landlord" not in json.dumps(http.calls)
+
+
+def test_replacing_an_unmirrored_fact_never_sends_its_words(tmp_path):
+    s, http = keyed(tmp_path)
+    s.add(RAW, kind="correction", mirror=False)
+    a = s.add(RAW + " please", kind="correction", mirror=False)
+    assert len(s.all()) == 1 and http.calls == []  # still unmirrored
+    assert s.add(RAW + " now", kind="correction") == a  # vetted: only the new text goes
+    assert [c[:2] for c in http.calls] == [("POST", "/v4/memories")]
+    assert http.calls[0][2]["memories"][0]["content"] == RAW + " now"
+    assert s.forget(a)  # and now it was sent, so it is taken back
+    assert http.calls[-1][:2] == ("DELETE", "/v4/memories")
+
+
+def test_raw_words_replacing_a_mirrored_fact_take_it_back_and_stay_here(tmp_path):
+    s, http = keyed(tmp_path)
+    a = s.add(RAW)
+    http.calls.clear()
+    assert s.add(RAW + " please", kind="correction", mirror=False) == a
+    assert [c[:2] for c in http.calls] == [("DELETE", "/v4/memories")]
+    assert http.calls[0][2]["content"] == RAW
+    http.calls.clear()
+    assert s.forget(a) and http.calls == []
+
+
+def test_a_vetted_fact_is_not_merged_into_a_counted_habit(tmp_path):
+    http = FakeHTTP()
+    s = Store(tmp_path, supermemory_key="k")
+    s.urlopen = http
+    s.set_habits({"a:b": "The user studies at night."})
+    a = s.add("The user studies at night always")
+    assert [c[:2] for c in http.calls] == [("POST", "/v4/memories")]
+    assert http.calls[0][2]["memories"][0]["content"] == "The user studies at night always"
+    assert {f["id"]: bool(f.get("habit_key")) for f in s.all()}[a] is False and len(s.all()) == 2

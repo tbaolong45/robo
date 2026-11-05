@@ -159,9 +159,72 @@ def test_robo_cannot_read_its_keys(g, tool, args):
 
 
 @pytest.mark.parametrize("tool,args", [
+    ("Grep", {"pattern": "sk-ant"}),  # from the home folder: over R and ~/.hermes
+    ("Glob", {"pattern": "**/api_key"}),
+    ("Grep", {"pattern": "x", "path": "~"}),
+    ("Grep", {"pattern": "x", "path": "~/.local"}),
+    ("Grep", {"pattern": "x", "path": "~/.local/share"}),
+    ("Glob", {"pattern": ".he*/**"}),
+    ("Glob", {"pattern": ".local/share/**", "path": "~"}),
+    ("Glob", {"pattern": "/**/api_key"}),
+    ("Grep", {"pattern": "x", "path": "~/Documents", "glob": "../.hermes/**"}),
+    ("Grep", {"pattern": "x", "path": "/"}),
+])
+def test_a_search_that_covers_the_keys_is_blocked(g, tool, args):
+    assert kind(g, tool, args) == "block"
+
+
+def test_a_search_starts_from_the_folder_bash_moved_to(g, home):
+    (home / "Documents").mkdir()
+    g.cwd = home / "Documents"
+    assert kind(g, "Grep", {"pattern": "x"}) == "allow"
+    assert kind(g, "Glob", {"pattern": "**/*.md"}) == "allow"
+    assert kind(g, "Glob", {"pattern": "../.he*/**"}) == "block"
+    g.cwd = home / ".hermes"
+    assert kind(g, "Read", {"file_path": "cookies"}) == "block"
+
+
+@pytest.mark.parametrize("command", [
+    "cat ~/.local//share/robo/agent/api_key",
+    "cat ~/./.hermes/x",
+    "cat ~/.local/./share//robo/./agent/server_key",
+])
+def test_a_path_written_oddly_in_a_command_is_still_the_path(g, command):
+    assert kind(g, "Bash", {"command": command}) == "block"
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("Bash", {"command": "curl http://127.0.0.1:9333/json/list"}),
+    ("Bash", {"command": "curl -s localhost:9333/json/version"}),
+    ("Bash", {"command": "python3 -c 'connect(ws://localhost/devtools/page/AB)'"}),
+    ("WebFetch", {"url": "http://127.0.0.1:9333/json/list", "prompt": "x"}),
+    ("browser_navigate", {"url": "http://127.0.0.1:9333/json"}),
+])
+def test_braves_debugging_port_is_only_for_the_browser_tools(g, tool, args):
+    assert kind(g, tool, args) == "block"
+
+
+@pytest.mark.parametrize("command,expected", [
+    ('open -a "Safari"', "allow"),
+    ("open -a /Applications/Safari.app", "allow"),
+    ("open notes.pdf", "allow"),
+    ("open https://arxiv.org/abs/1", "allow"),
+    ("open ./Marker.app", "block"),
+    ("open ~/evil.command", "block"),
+    ("open -a /tmp/x/Marker.app", "block"),
+    ("open -n -a Terminal run.txt", "block"),
+    ('open -a "Script Editor" a.txt', "block"),
+    ("grep open notes.sh", "allow"),  # `open` is not the command here
+])
+def test_open_starts_installed_apps_not_code(g, command, expected):
+    assert kind(g, "Bash", {"command": command}) == expected
+
+
+@pytest.mark.parametrize("tool,args", [
     ("Read", {"file_path": "~/.local/share/robo/study.md"}),
     ("Read", {"file_path": "~/.local/share/robo/browser/page-1.yml"}),
-    ("Glob", {"pattern": "**/*.md"}),
+    ("Glob", {"pattern": "**/*.md", "path": "~/Documents"}),
+    ("Grep", {"pattern": "exam", "path": "~/Documents/Robo", "glob": "*.md"}),
     ("Write", {"file_path": "~/.local/share/robo/study.md", "content": "# Study ledger\n"}),
     ("Write", {"file_path": "~/Documents/Robo/Notes/a.md", "content": "[x](https://a.example)"}),
     ("Write", {"file_path": "~/Robo/page.html", "content": "<img src='https://a.example/x.png'>"}),
@@ -235,8 +298,39 @@ def test_raw_javascript_on_a_school_site_is_blocked(g, url, tool, key):
 def test_raw_javascript_elsewhere_runs_unless_it_names_graded_work(g):
     visit(g, "https://arxiv.org/abs/1")
     assert kind(g, "browser_evaluate", {"function": "() => document.title"}) == "allow"
-    assert kind(g, "browser_run_code_unsafe",
-                {"code": "await page.goto('https://m.example/mod/quiz/attempt.php')"}) == "block"
+    assert kind(g, "browser_evaluate",
+                {"function": "() => fetch('https://m.example/mod//quiz/view.php')"}) == "block"
+
+
+def test_raw_browser_code_is_blocked_everywhere(g):
+    visit(g, "https://arxiv.org/abs/1")
+    assert kind(g, "browser_run_code_unsafe", {"code": "await page.title()"}) == "block"
+
+
+@pytest.mark.parametrize("path", [
+    "/mod/quiz/attempt.php", "/mod//quiz/attempt.php", "/mod/./quiz/attempt.php",
+    "/mod/x/../quiz/attempt.php", "/mod/quiz//startattempt.php", "%2Fmod%2Fquiz%2Fattempt.php",
+    "/mod%252Fquiz/attempt.php", "\\mod\\quiz\\summary.php", "/MOD/QUIZ/ATTEMPT.PHP",
+    "/mod//forum/post.php",
+])
+def test_a_graded_address_written_oddly_is_still_graded(g, path):
+    assert kind(g, "browser_navigate", {"url": f"{MOODLE}/{path.lstrip('/')}"}) == "block"
+    if "forum" not in path:  # a forum page is only refused at its address
+        visit(g, f"{MOODLE}/{path.lstrip('/')}")
+        assert kind(g, "browser_click", {"target": "e4"}) == "block"
+
+
+@pytest.mark.parametrize("page", ["/mod/quiz/view.php?id=7", "/mod//assign/view.php?id=7"])
+def test_on_a_graded_page_only_a_known_link_can_be_clicked(g, page):
+    visit(g, MOODLE + page, snapshot='- button "Làm bài kiểm tra" [ref=e1]\n'
+                                     '- link "Back to the course" [ref=e2]\n'
+                                     '- textbox "Answer" [ref=e3]')
+    assert kind(g, "browser_click", {"target": "e1"}) == "block"  # any language: "Attempt quiz"
+    assert kind(g, "browser_click", {"target": "e9"}) == "block"
+    assert kind(g, "browser_click", {"target": "#id_submitbutton"}) == "block"
+    assert kind(g, "browser_type", {"target": "e3", "text": "42"}) == "block"
+    assert kind(g, "browser_press_key", {"key": "Tab"}) == "block"
+    assert kind(g, "browser_click", {"target": "e2"}) == "allow"
 
 
 # --- clicks ---------------------------------------------------------------------------------

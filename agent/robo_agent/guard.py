@@ -4,7 +4,8 @@ The PreToolUse decision of every tool call: block, ask or allow. With approvals 
 allowed by the harness itself, and only in "manual" does the user see it. The blocks always hold:
 they keep robo from reading its keys or rewriting its own setup and skills, from doing graded work,
 and from planting remote content in a note. A regex guard is a speed bump (raw JS or Bash can get
-around it); SOUL.md's graded-work rule is the main control.
+around it). For the keys the wall is harness.boundary (the CLI's deny rules and Bash's sandbox);
+for graded work SOUL.md's rule is the main control.
 
 Tool shapes (Claude Agent SDK built-ins, Playwright MCP 0.0.83 with the `mcp__playwright__`
 prefix stripped): Bash{command}, Write{file_path, content}, Edit{file_path, old_string,
@@ -25,9 +26,12 @@ with the page inline (```yaml) or as a link to a .yml file.
   unknown" when none).
 - block: robo's own setup: anything in its runtime folder R (keys, config, memory, sessions, the
   rendered and learned skills; read or write) or in ~/.hermes (robo's Brave profile with the
-  school sign-in cookies lives there), writes to its code and built-in skills, its receipt
-  and usage logs; graded work: Moodle quiz attempts, assignment submissions and forum posts (URL,
-  button label, or any click, type or key on a quiz-attempt page), raw JavaScript on a school site,
+  school sign-in cookies lives there), a Grep or Glob whose search would cover either of them,
+  writes to its code and built-in skills, its receipt and usage logs; Brave's debugging port in
+  Bash or a URL; an app or script started with `open` (the one command outside the sandbox); graded
+  work: Moodle quiz attempts, assignment submissions and forum posts (URL, button label, or any
+  click, type or key on a quiz-attempt page; on any other /mod/quiz/ or /mod/assign/ page everything
+  but a click on a known link), browser_run_code_unsafe anywhere, raw JavaScript on a school site,
   Bash or browser code that names /mod/quiz/ or /mod/assign/; a Markdown note that holds a remote
   image or active HTML (Obsidian loads it when the note opens: a leak without a click).
 - allow: everything else.
@@ -64,6 +68,13 @@ DANGER = re.compile(  # a command plus its irreversible flag or subcommand
     r"|\b(npm|pnpm|yarn|cargo|poetry|uv)\b.*\bpublish\b|\btwine\b.*\bupload\b"
     r"|\bgh\b.*\b(create|comment|merge|close|delete|edit|review|reopen|transfer|archive)\b"
     r"|\bgh\s+api\b.*\s(-[a-zA-Z]*[XfF]|--(method|field|raw-field|input))", re.DOTALL)
+DEBUG_PORT = re.compile(
+    r":9333\b|/json/(?:list|version|new|protocol)\b|/devtools/(?:page|browser)/", re.IGNORECASE)
+# `open` alone runs outside Bash's sandbox (harness.boundary), and whatever it starts does too.
+OPENS_CODE = re.compile(
+    r"^\s*open\b(?:[^;&|\n]*\.(?:app|command|tool|terminal|workflow|scpt|sh|py|pl|rb)\b"
+    r"|[^;&|\n]*\s-a\s*(?:terminal|iterm|script editor|automator))", re.IGNORECASE)
+INSTALLED = re.compile(r"^\s*open\s+-a\s+(?:/System)?/Applications/[^/]+\.app/?\s*$")
 # Robo's own setup named in a command or path: the runtime folder, its keys, its code, its logs.
 OWN_WORDS = re.compile(
     r"\.local/share/robo/agent|robo[-_]agent|server_key|supermemory_key|ANTHROPIC_API_KEY"
@@ -109,6 +120,7 @@ GRADED_LABEL = re.compile(
     r"submit assignment|(?:add|edit) submission|finish attempt|submit all and finish"
     r"|attempt quiz|start attempt|re-?attempt|continue (?:your|the last) attempt", re.IGNORECASE)
 SAVE_CHANGES = re.compile(r"save changes", re.IGNORECASE)  # the submission form's button
+LINK = re.compile(r"[-\s]*link\b")  # a snapshot line that only goes somewhere
 ON_PAGE = {"browser_click", "browser_type", "browser_press_key", "browser_fill_form",
            "browser_select_option", "browser_file_upload", "browser_drop", "browser_drag",
            "browser_handle_dialog", "browser_evaluate", "browser_run_code_unsafe"}
@@ -137,6 +149,16 @@ MAX_SNAPSHOT = 4_000_000
 def short(text: object, limit: int = 60) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _plain_path(text: str) -> str:
+    """For matching only: /mod//quiz/, /mod/./quiz/, /mod/x/../quiz/ and %2Fmod%252Fquiz all read
+    /mod/quiz (the server would read them so)."""
+    text = unquote(unquote(re.sub(r"[\t\r\n]", "", text))).replace("\\", "/")
+    text = re.sub(r"/(?:\.?/)+", "/", text)
+    while (shorter := re.sub(r"/[^/?#]+/\.\.(?=/)", "", text, count=1)) != text:
+        text = shorter
+    return text
 
 
 def _label(line: str) -> str:
@@ -207,6 +229,21 @@ class Guard:
         full = self._resolve(path)
         return any(place == full or place in full.parents for place in places)
 
+    def _covers(self, tool: str, args: dict) -> bool:
+        """A Grep or Glob that would search R or ~/.hermes: its folder (the current one when none is
+        given) plus the literal start of its file pattern is in one of them or above one."""
+        given = str(args.get("path") or "")
+        files = str(args.get("pattern" if tool == "Glob" else "glob") or "")
+        if OWN_WORDS.search(given) or OWN_WORDS.search(files):
+            return True
+        literal = []
+        for part in files.split("/"):
+            if re.search(r"[*?\[{]", part):
+                break
+            literal.append(part)
+        root = self._resolve(os.path.join(given or ".", "/".join(literal)))
+        return any(s == root or s in root.parents or root in s.parents for s in self.secret)
+
     def _host(self) -> str:
         return urlsplit(self.page).hostname or ""
 
@@ -231,10 +268,15 @@ class Guard:
 
     def _command(self, command: str) -> tuple[str, str] | None:
         plain = re.sub(r"[\\'\"]", "", command)  # r\m, 'rm', robo''_agent
+        plain = re.sub(r"/(?:\.?/)+", "/", plain)  # a//b, a/./b
         if OWN_WORDS.search(plain) or any(str(p) in plain for p in self.own):
             return "block", "robo may not touch its own setup, keys or logs"
-        if GRADED_PATH.search(unquote(plain)):
+        if GRADED_PATH.search(_plain_path(plain)):
             return "block", GRADED
+        if DEBUG_PORT.search(plain):
+            return "block", "Brave's debugging port is only for the browser tools"
+        if OPENS_CODE.search(plain) and not INSTALLED.search(plain):
+            return "block", "`open` runs outside the sandbox: it may start installed apps, not code"
         words = {word.rsplit("/", 1)[-1] for word in WORDS.split(plain)}
         if words & DANGER_WORDS or DANGER.search(plain):
             return "approve", f"run: {command}"
@@ -256,30 +298,43 @@ class Guard:
         if tool in ("Write", "Edit"):
             text = " ".join(str(args.get(k, "")) for k in ("content", "new_string"))
             return self._write(str(args.get("file_path", "")), text)
-        if tool in ("Read", "Glob", "Grep"):
-            path = str(args.get("file_path") or args.get("path") or "")
+        if tool == "Read":
+            path = str(args.get("file_path") or "")
             if path and self._inside(path, self.secret):
                 return "block", "robo may not read its own keys and setup"
             return None
+        if tool in ("Glob", "Grep"):
+            if self._covers(tool, args):
+                return "block", ("this search would cover robo's keys: give it a `path` that holds "
+                                 "neither ~/.local/share/robo/agent nor ~/.hermes")
+            return None
+        if DEBUG_PORT.search(str(args.get("url", ""))):
+            return "block", "Brave's debugging port is only for the browser tools"
         if not tool.startswith("browser_"):
             return None
         url = unquote(re.sub(r"[\t\r\n]", "", str(args.get("url", ""))))
-        host, page = self._host(), unquote(self.page).lower()
+        host, page = self._host(), _plain_path(self.page).lower()
         if tool == "browser_navigate" or (tool == "browser_tabs" and url):
             scheme = urlsplit(url).scheme.lower()
-            if GRADED_URL.search(url):
+            if GRADED_URL.search(_plain_path(url)):
                 return "block", GRADED
             if scheme == "javascript" and self._school(host):
                 return "block", f"no raw JavaScript on {host}: {GRADED}"
             if scheme in ("http", "https") and not BAD_URL.search(url):
                 return None
             return "approve", f"open {short(url, 120)}"
-        if tool in RAW_JS and (self._school(host)
-                               or GRADED_PATH.search(unquote(str(args.get(RAW_JS[tool], ""))))):
+        if tool == "browser_run_code_unsafe":  # no skill needs it, and it can drive any page
+            return "block", f"no raw browser code: {GRADED}"
+        if tool in RAW_JS and (self._school(host) or GRADED_PATH.search(
+                _plain_path(str(args.get(RAW_JS[tool], ""))))):
             return "block", f"no raw JavaScript on {host or 'this page'}: {GRADED}"
         if tool in ON_PAGE and QUIZ_ATTEMPT.search(page):
             return "block", f"this page is a quiz attempt: {GRADED}"
         target, line = self._target(args)
+        if tool in ON_PAGE and GRADED_PATH.search(page) and not (
+                tool == "browser_click" and line and LINK.match(line)):
+            # a button's label may be in any language: only links lead off these pages
+            return "block", f"this page holds graded work: {GRADED}"
         known = f'"{_label(line)}"' if line else f"an unknown element ({short(target, 30)})"
         on = f" on {host}" if host else ""
         mail = _on(host, *MAIL_HOSTS)

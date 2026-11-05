@@ -11,12 +11,12 @@ The contract, quoted from native/Sources/RoboCore/Brain.swift:
     case "message.delta": return .delta(d["delta"] as? String ?? "")
     .toolStarted(d["tool"] ...), .toolCompleted(tool: d["tool"] ..., error: d["error"] as? Bool)
     case "approval.request": let what = d["description"] ...; var command = d["command"] ...
-        ... desktop: what.hasPrefix("Allow computer_use"), id: d["request_id"] as? String ?? ""
+        ... id: d["request_id"] as? String ?? ""
     return .runEnded(status: String(name.dropFirst("run.".count)), output: d["output"] ...,
                      error: d["error"] as? String ?? "")
     (`usage`: input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens;
      `runtime`: provider, model)
-    if r.statusCode == 401 { throw BrainError("Hermes rejected the API key (401) ...") }
+    if r.statusCode == 401 { throw BrainError("Robo's agent rejected the app's key (401) ...") }
     let detail = ((object?["error"] as? [String: Any])?["message"] as? String)
     var body = ["choice": choice.rawValue]  (+ "request_id" when known)
 """
@@ -77,15 +77,14 @@ def learned(monkeypatch, tmp_path):
     async def after_run(record, store, llm, skills_dir, names):
         calls.append(("after_run", record, names))
 
-    async def consolidate(store, llm):
-        calls.append(("consolidate",))
+    async def daily(store, llm):
+        calls.append(("daily",))
 
     class RunRecord:
         def __init__(self, **kw):
             self.__dict__.update(kw)
 
-    fake.learned_skills_dir, fake.after_run, fake.consolidate = (learned_skills_dir, after_run,
-                                                                consolidate)
+    fake.learned_skills_dir, fake.after_run, fake.daily = learned_skills_dir, after_run, daily
     fake.RunRecord = RunRecord
     monkeypatch.setitem(sys.modules, "robo_agent.learn", fake)
     monkeypatch.setattr(robo_agent, "learn", fake, raising=False)
@@ -484,9 +483,10 @@ def test_the_run_gets_the_persona_memory_skills_and_tools(cfg):
             await client.close()
     run(go())
     o = fake.options
-    assert fake.prompt == "plan my day"
+    assert fake.prompt == "- prefers morning study blocks\n---\nplan my day"  # memory in the turn
     assert o.system_prompt.startswith("# Robo") and "{{" not in o.system_prompt
-    assert o.system_prompt.endswith("- prefers morning study blocks")
+    assert "morning study" not in o.system_prompt  # a resume would keep the first one for ever
+    assert "robo:school-mail" in o.skills and all(s.startswith("robo:") for s in o.skills)
     assert o.model == cfg.model and o.cwd == str(cfg.home) and o.setting_sources == []
     assert o.tools == harness.TOOLS and "mcp__playwright" in o.allowed_tools
     pw = o.mcp_servers["playwright"]
@@ -555,7 +555,8 @@ def test_each_run_is_learned_from_and_the_profile_consolidated_once_a_day(cfg, l
             await client.close()
     run(go())
     runs = [c for c in learned if c[0] == "after_run"]
-    assert len(runs) == 2 and [c[0] for c in learned].count("consolidate") == 1
+    assert len(runs) == 2 and [c[0] for c in learned].count("daily") == 1
+    assert [c[0] for c in learned][:2] == ["after_run", "daily"]  # the profile sees the facts
     record, names = runs[1][1], runs[1][2]
     assert (record.user_text, record.reply, record.ok, record.previous_reply) == (
         "no, I meant tomorrow", "Sure.", True, "Sure.")
@@ -574,6 +575,71 @@ def test_learning_is_off_when_the_config_says_so(cfg, learned):
             await client.close()
     run(go())
     assert learned == []
+
+
+@pytest.mark.parametrize("session,text", [
+    ("robo-posts-ab12", "MODE: list"),  # Scout.swift
+    ("robo-eval-1", "what is due"),  # scripts/eval_live.py
+    ("robo-2026-11-04-abc", harness.DIGEST_PROMPT),  # the digest runs in the chat's session
+])
+def test_an_automated_run_teaches_nothing(cfg, learned, session, text):
+    async def go():
+        client = await started(cfg, Fake([result()]))
+        try:
+            await events(client, await ask(client, text, session))
+        finally:
+            await client.close()
+    run(go())
+    assert learned == []
+
+
+def test_the_digest_prompt_is_the_one_the_app_sends():
+    window = (config.CHECKOUT / "native/Sources/RoboUI/Window.swift").read_text()
+    assert f'digestPrompt = "{harness.DIGEST_PROMPT}"' in window
+
+
+def test_the_boundary_holds_the_keys_and_the_browser_cookies(cfg):
+    out = harness.boundary(cfg)
+    home = cfg.home.resolve()
+    settings = json.loads(out["settings"])
+    assert settings["disableSkillShellExecution"] is True
+    deny = settings["permissions"]["deny"]
+    for place in (cfg.root.resolve(), home / ".hermes"):
+        assert f"Read(/{place}/**)" in deny and f"Edit(/{place}/**)" in deny
+    assert f"Edit(/{config.AGENT.resolve()}/**)" in deny
+    if sys.platform == "darwin":
+        box = out["sandbox"]
+        assert box["enabled"] and box["failIfUnavailable"] and not box["allowUnsandboxedCommands"]
+        assert box["excludedCommands"] == ["open:*"]
+        assert str(cfg.root.resolve()) in box["filesystem"]["denyRead"]
+        assert "allowLocalBinding" not in box["network"]  # loopback stays closed to Bash
+    else:
+        assert "sandbox" not in out
+
+
+def test_the_service_keeps_one_store_and_reads_its_key_again(cfg, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(server, "make_app", lambda c, store: seen.update(store=store))
+    monkeypatch.setattr(server.web, "run_app", lambda *a, **k: None)
+    server.serve(cfg)
+    first = seen["store"]()
+    assert first.key is None
+    (cfg.root / "supermemory_key").write_text("sm_new\n")
+    assert seen["store"]() is first and first.key == "sm_new"
+
+
+def test_a_trace_line_says_what_was_done_but_not_what_was_typed():
+    assert harness.trace_line("Bash", {"command": "ls  ~/x", "description": "d"}, True) == (
+        "Bash command=ls ~/x -> ok")
+    line = harness.trace_line("browser_type", {"element": "Box", "text": "my essay"}, True)
+    assert "Box" in line and "essay" not in line
+    assert "secret" not in harness.trace_line("Write", {"file_path": "a", "content": "secret"}, 1)
+    assert "token=1" not in harness.trace_line(
+        "browser_navigate", {"url": "https://x.example/a?token=1"}, True)
+    secret = "sk-ant-api03-abcdefghijklmnopqrstuv"
+    line = harness.trace_line("Bash", {"command": f"echo {secret}"}, False, f"bad key {secret}")
+    assert secret not in line and line.count("[redacted]") == 2 and "FAILED" in line
+    assert len(harness.trace_line("Bash", {"command": "x " * 900}, True)) < 300
 
 
 def test_the_memory_server_is_an_in_process_sdk_server():

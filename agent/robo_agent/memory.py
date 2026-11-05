@@ -20,7 +20,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-KINDS = ("habit", "preference", "fact", "correction")
+KINDS = ("habit", "preference", "fact", "correction", "goal", "event")
 MAX_TEXT = 500
 MAX_FACTS = 500
 CONTEXT_CHARS = 2000
@@ -34,6 +34,8 @@ LOG_BYTES = 1_000_000
 # containerTag} stores text as-is (no extraction); POST /v4/search {q, containerTag, limit,
 # searchMode: "memories"} -> {results: [{id, memory | chunk, metadata, similarity}]};
 # DELETE /v4/memories {content, containerTag} forgets by exact content.
+# Only vetted facts (memory_add, the learner) are sent. A request's text and the counted habits stay
+# here: the owner has not approved any wider flow (2026-11-04).
 SM_URL = "https://api.supermemory.ai"
 SM_TAG = "robo"
 SM_TIMEOUT = 5
@@ -117,6 +119,12 @@ def private_reason(text: str) -> str | None:
     return None
 
 
+def _mirrored(fact: dict) -> bool:
+    """Whether Supermemory holds this row. A row it never got must cost no call: even a forget
+    carries the row's text."""
+    return not (fact.get("local") or fact.get("habit_key"))
+
+
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text).casefold()
     return " ".join(re.findall(r"\w+", text))
@@ -195,8 +203,22 @@ class Store:
         self.dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.dir, 0o700)
         self._facts = self._load()
+        self._seen = self._stamp()
 
     # ---- local file ----
+    def _stamp(self) -> tuple[int, int] | None:
+        try:
+            st = os.stat(self.facts_path)
+            return st.st_mtime_ns, st.st_size
+        except OSError:
+            return None
+
+    def _refresh(self) -> None:
+        """Lock held. `robo-agent memory forget` is another process: don't undo its change."""
+        stamp = self._stamp()
+        if stamp != self._seen:
+            self._facts, self._seen = self._load(), stamp
+
     def _load(self) -> list[dict]:
         facts = []
         try:
@@ -223,11 +245,23 @@ class Store:
             self.facts_path,
             "".join(json.dumps(f, ensure_ascii=False) + "\n" for f in self._facts),
         )
+        self._seen = self._stamp()
+
+    def _evict(self) -> list[dict]:
+        """Lock held: drop the least used facts over the cap."""
+        evicted = []
+        while len(self._facts) > MAX_FACTS:
+            worst = min(self._facts[:-1], key=lambda f: (f["hits"], f["last_used"]))
+            self._facts.remove(worst)
+            evicted.append(worst)
+        return evicted
 
     # ---- interface ----
-    def add(self, text: str, kind: str = "fact", source: str = "agent") -> str | None:
+    def add(self, text: str, kind: str = "fact", source: str = "agent",
+            mirror: bool = True) -> str | None:
         """Store a fact. Returns its id; None when rejected or an exact duplicate. A near
-        duplicate (high word overlap) updates the old fact in place and returns its id."""
+        duplicate (high word overlap) updates the old fact in place and returns its id.
+        `mirror` False keeps it from Supermemory (the user's own words, unvetted)."""
         text = " ".join(str(text).split()) if isinstance(text, str) else ""
         reason = private_reason(text) if text else "empty"
         if reason is None and kind not in KINDS:
@@ -237,82 +271,126 @@ class Store:
             return None
         now = time.time()
         norm = normalize(text)
+        gone: list[str] = []
         with self._lock:
+            self._refresh()
             for f in self._facts:
                 if normalize(f["text"]) == norm:
                     return None
-            best = max(self._facts, key=lambda f: overlap(f["text"], text), default=None)
+            # a counted habit is rewritten by its count and stays local: never merged into
+            mergeable = [f for f in self._facts if not f.get("habit_key")]
+            best = max(mergeable, key=lambda f: overlap(f["text"], text), default=None)
             if best is not None and overlap(best["text"], text) >= OVERLAP:
-                old = best["text"]
-                best.update(text=text, kind=kind, source=source, last_used=now)
-                self._save()
-                self._sm_forget(old)
-                self._sm_add(best)
-                return best["id"]
-            fact = {
-                "id": uuid.uuid4().hex[:12],
-                "text": text,
-                "kind": kind,
-                "source": source,
-                "created": now,
-                "last_used": now,
-                "hits": 0,
-            }
-            self._facts.append(fact)
-            evicted = []
-            while len(self._facts) > MAX_FACTS:
-                worst = min(self._facts[:-1], key=lambda f: (f["hits"], f["last_used"]))
-                self._facts.remove(worst)
-                evicted.append(worst)
+                if _mirrored(best):
+                    gone.append(best["text"])
+                best.update(text=text, kind=kind, source=source, last_used=now, local=not mirror)
+                fact = dict(best)
+            else:
+                fact = {
+                    "id": uuid.uuid4().hex[:12],
+                    "text": text,
+                    "kind": kind,
+                    "source": source,
+                    "created": now,
+                    "last_used": now,
+                    "hits": 0,
+                    "local": not mirror,
+                }
+                self._facts.append(fact)
+                for f in self._evict():
+                    log(self.root, "memory_evicted", id=f["id"])
+                    if _mirrored(f):
+                        gone.append(f["text"])
             self._save()
-        for f in evicted:
-            log(self.root, "memory_evicted", id=f["id"])
-            self._sm_forget(f["text"])
+        for old in gone:  # HTTP, up to 5 s each: never under the lock
+            self._sm_forget(old)
         self._sm_add(fact)
         return fact["id"]
 
-    def search(self, query: str, limit: int = 5) -> list[dict]:
+    def search(self, query: str, limit: int = 5, remote: bool = True) -> list[dict]:
         with self._lock:
+            self._refresh()
             facts = list(self._facts)
             scores = bm25(tokens(query), [tokens(f["text"]) for f in facts])
             ranked = sorted(
                 (p for p in zip(scores, facts, strict=True) if p[0] > 0),
                 key=lambda p: (-p[0], -p[1]["hits"], -p[1]["last_used"]),
             )
-            picked = [f for _, f in ranked[:limit]]
-            if self.key and len(picked) < limit:
-                for f in self._sm_search(query, limit):
-                    if len(picked) >= limit:
-                        break
-                    if all(f["id"] != p["id"] and overlap(f["text"], p["text"]) < OVERLAP
-                           for p in picked):
-                        picked.append(f)
-            now = time.time()
-            mine = [f for f in picked if not f["id"].startswith("sm:")]
-            for f in mine:  # a Supermemory-only hit has no local row to bump
+            picked = [dict(f) for _, f in ranked[:limit]]
+        if remote and self.key and len(picked) < limit and not private_reason(query):
+            for f in self._sm_search(query, limit):
+                if len(picked) >= limit:
+                    break
+                if all(f["id"] != p["id"] and overlap(f["text"], p["text"]) < OVERLAP
+                       for p in picked):
+                    picked.append(f)
+        ids = {f["id"] for f in picked}
+        now = time.time()
+        with self._lock:  # by id: a reload may have replaced the rows meanwhile
+            mine = [f for f in self._facts if f["id"] in ids]
+            for f in mine:
                 f["hits"] += 1
                 f["last_used"] = now
             if mine:
                 self._save()
-            return [{"id": f["id"], "text": f["text"], "kind": f["kind"]} for f in picked]
+        return [{"id": f["id"], "text": f["text"], "kind": f["kind"]} for f in picked]
+
+    def set_habits(self, patterns: dict[str, str]) -> None:
+        """Make the counted habit facts match `patterns` (key -> sentence): a pattern that stopped
+        loses its fact; a habit the user forgot stays forgotten. They stay local (see `_sm_add`)."""
+        now = time.time()
+        with self._lock:
+            self._refresh()
+            wanted = {k: t for k, t in patterns.items() if k not in self._muted()}
+            for f in list(self._facts):
+                key = f.get("habit_key")
+                if key is None:
+                    continue
+                text = wanted.pop(key, None)
+                if text is None:
+                    self._facts.remove(f)
+                    continue
+                f["last_used"] = now
+                f["text"] = text
+            for key, text in wanted.items():
+                self._facts.append({"id": uuid.uuid4().hex[:12], "text": text, "kind": "habit",
+                                    "source": "activity", "habit_key": key, "created": now,
+                                    "last_used": now, "hits": 0})
+            self._save()  # no Supermemory call here; the next `add` trims to MAX_FACTS
+
+    @property
+    def _muted_path(self) -> Path:
+        return self.dir / "habits-muted.json"
+
+    def _muted(self) -> list[str]:
+        try:
+            data = json.loads(self._muted_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
 
     def forget(self, id: str) -> bool:
         with self._lock:
+            self._refresh()
             fact = next((f for f in self._facts if f["id"] == id), None)
             if fact is None:
                 return False
             self._facts.remove(fact)
             self._save()
+            if fact.get("habit_key"):  # or the next daily count would bring it back
+                _write_atomic(self._muted_path, json.dumps([*self._muted(), fact["habit_key"]]))
             # The profile was written from the facts: rewrite it without this one now, so a
             # forgotten fact is not still sent with every request until the next consolidate.
             if self.profile_path.exists():
                 self.set_profile(summary(self._facts))
-        self._sm_forget(fact["text"])
+        if _mirrored(fact):
+            self._sm_forget(fact["text"])
         log(self.root, "memory_forgotten", id=id)
         return True
 
     def all(self) -> list[dict]:
         with self._lock:
+            self._refresh()
             return [dict(f) for f in self._facts]
 
     def profile_text(self) -> str:
@@ -325,9 +403,10 @@ class Store:
         _write_atomic(self.profile_path, text.strip()[:PROFILE_CHARS] + "\n")
 
     def context_for(self, user_text: str) -> str:
-        """The profile and the few memories most relevant to this request, for a system prompt."""
+        """The profile and the few memories most relevant to this request, for its turn. Local
+        search only: the raw request never leaves the laptop."""
         profile = self.profile_text()[:1200]
-        hits = self.search(user_text, limit=6)
+        hits = self.search(user_text, limit=6, remote=False)
         if not profile and not hits:
             return ""
         out = "## What Robo remembers about the user\n"
@@ -365,6 +444,8 @@ class Store:
             return None
 
     def _sm_add(self, fact: dict) -> None:
+        if not _mirrored(fact):
+            return
         self._sm_call(
             "add",
             "POST",
@@ -393,7 +474,8 @@ class Store:
         results = reply.get("results") if isinstance(reply, dict) else None
         if not isinstance(results, list):
             return []
-        local = {f["id"]: f for f in self._facts}
+        facts = self.all()
+        local = {f["id"]: f for f in facts}
         out = []
         for r in results:
             if not isinstance(r, dict):
@@ -407,7 +489,7 @@ class Store:
             text = r.get("memory") if isinstance(r.get("memory"), str) else r.get("chunk")
             if not isinstance(text, str) or private_reason(" ".join(text.split())):
                 continue
-            if any(overlap(text, f["text"]) >= OVERLAP for f in self._facts):
+            if any(overlap(text, f["text"]) >= OVERLAP for f in facts):
                 continue
             out.append({"id": f"sm:{r.get('id', '')}", "text": " ".join(text.split()),
                         "kind": "fact", "hits": 0, "last_used": 0.0})
@@ -417,8 +499,8 @@ class Store:
 def summary(facts: list[dict], limit: int = PROFILE_CHARS) -> str:
     """Deterministic profile: the most used, then most recent facts, grouped by kind."""
     ranked = sorted(facts, key=lambda f: (-f["hits"], -f["last_used"]))
-    heads = {"preference": "Preferences", "habit": "Habits", "correction": "Corrections",
-             "fact": "Facts"}
+    heads = {"preference": "Preferences", "habit": "Habits", "goal": "Goals", "event": "Events",
+             "correction": "Corrections", "fact": "Facts"}
     groups: dict[str, list[str]] = {k: [] for k in heads}
     size = 0
     for f in ranked:

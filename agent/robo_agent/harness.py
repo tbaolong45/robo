@@ -4,7 +4,9 @@ The app's events come out of `Run.emit` in the shape Brain.swift reads (see serv
 call passes robo-guard first: the PreToolUse hook answers allow or deny for every call (robo has
 the whole laptop), and PostToolUse leaves a receipt. No permission mode is set: the CLI forces
 "default" while CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps the key out of Bash's environment, so the
-tools are allowed by name and the hook's explicit "allow" answers the rest.
+tools are allowed by name and the hook's explicit "allow" answers the rest. The guard's patterns
+are a speed bump; `boundary` is the wall: the CLI's deny rules for Read, Edit, Grep and Glob, and on
+macOS a sandbox around Bash (checked by tests/test_e2e.py against the real CLI).
 """
 
 from __future__ import annotations
@@ -14,12 +16,14 @@ import contextlib
 import json
 import os
 import shutil
+import sys
 import uuid
 from datetime import date
 from pathlib import Path
 
 from .config import AGENT, Config, builtin_skills, render_skills, soul
 from .guard import Guard
+from .memory import private_reason
 
 TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Skill"]
 PLAYWRIGHT = "@playwright/mcp@0.0.83"
@@ -31,6 +35,12 @@ LLM_S = 60
 TERMINAL = {"run.completed", "run.failed", "run.cancelled"}
 DENIED = ("BLOCKED: the user denied this. Do NOT retry it or try another way; tell the user what "
           "you wanted to do.")
+LOST = "No conversation found"  # the CLI's words when the transcript of a resume is gone
+# Runs nobody asked for in words: what they read comes from pages and must not teach anything.
+AUTOMATED_SESSIONS = ("robo-posts-", "robo-eval-")
+DIGEST_PROMPT = "Give me my school digest for today (use the school digest skill)."  # Window.swift
+TRACE_ARGS = ("command", "file_path", "path", "url", "pattern", "glob", "element", "key")
+TRACE_CLIP = 200
 _background: set[asyncio.Task] = set()  # learning outlives its run; keep a reference
 
 
@@ -58,6 +68,7 @@ class Run:
         self.asks: dict[str, tuple[asyncio.Future, str]] = {}  # request_id -> (answer, rule_key)
         self.approved: set[str] = set()  # rule keys answered "session"
         self.sdk_session = ""  # the SDK's id for this conversation, from its result
+        self.trace: list[str] = []  # each tool call in a line, for the learner
         self._tick = asyncio.Event()
 
     @property
@@ -134,6 +145,12 @@ def remember_session(cfg: Config, session_id: str, sdk_id: str) -> None:
     _write(cfg.root / "sessions.json", json.dumps(dict(list(data.items())[-200:]), indent=1))
 
 
+def forget_session(cfg: Config, session_id: str) -> None:
+    data = sessions(cfg)
+    data.pop(session_id, None)
+    _write(cfg.root / "sessions.json", json.dumps(data, indent=1))
+
+
 def consolidate_due(cfg: Config) -> bool:
     """True once a day: the first call of the day also marks the day."""
     stamp, today = cfg.root / "consolidated", date.today().isoformat()
@@ -200,6 +217,19 @@ def memory_server(store):
     return create_sdk_mcp_server("robo", "1.0.0", [memory_add, memory_search, memory_forget])
 
 
+def trace_line(tool: str, args: dict, ok: bool, error: object = "") -> str:
+    """One tool call for the learner: the arguments that say what was done (never typed text or a
+    file's content), clipped, with anything private replaced."""
+    def clean(text: str) -> str:
+        text = " ".join(text.split())[:TRACE_CLIP]
+        return "[redacted]" if private_reason(text) else text
+
+    parts = [f"{name}={clean(args[name].split('?')[0] if name == 'url' else args[name])}"
+             for name in TRACE_ARGS if isinstance(args.get(name), str) and args[name].strip()]
+    outcome = "ok" if ok else "FAILED: " + clean(str(error))
+    return " ".join([tool, *parts]) + " -> " + outcome
+
+
 def hooks(run: Run, cfg: Config, guard: Guard, used: list[tuple[str, bool]]) -> dict:
     from claude_agent_sdk import HookMatcher
 
@@ -213,6 +243,8 @@ def hooks(run: Run, cfg: Config, guard: Guard, used: list[tuple[str, bool]]) -> 
 
     async def pre(data, tool_use_id, context):
         try:
+            if data.get("cwd"):  # a `cd` in Bash moves the CLI's folder for the next calls
+                guard.cwd = Path(data["cwd"])
             verdict = guard.pre(short(data["tool_name"]), data.get("tool_input") or {})
             if verdict is None:
                 return decide("allow")
@@ -229,6 +261,8 @@ def hooks(run: Run, cfg: Config, guard: Guard, used: list[tuple[str, bool]]) -> 
         ok = data.get("hook_event_name") != "PostToolUseFailure"
         tool = short(str(data.get("tool_name", "")))
         used.append((tool, ok))
+        args = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+        run.trace.append(trace_line(tool, args, ok, data.get("error", "")))
         with contextlib.suppress(Exception):  # evidence is best effort
             guard.post(tool, data.get("tool_input") or {},
                        data.get("tool_response") if ok else data.get("error", ""), ok)
@@ -239,17 +273,41 @@ def hooks(run: Run, cfg: Config, guard: Guard, used: list[tuple[str, bool]]) -> 
             "PostToolUseFailure": [HookMatcher(hooks=[post])]}
 
 
-def options(run: Run, cfg: Config, key: str, store, plugin: Path, context: str, guard: Guard,
+def boundary(cfg: Config) -> dict:
+    """What the CLI enforces whatever the guard's patterns miss. `open` alone stays outside Bash's
+    sandbox, or no app could start (it needs Launch Services); a command that chains it stays in."""
+    home = cfg.home.resolve()
+    shared = home / ".local" / "share" / "robo"
+    closed = [str(cfg.root.resolve()), str(home / ".hermes")]
+    fixed = [str(AGENT.resolve()), str(shared / "receipts.jsonl"), str(shared / "usage.jsonl")]
+    # `//` starts an absolute path in a permission rule
+    deny = [f"Read(/{p}/**)" for p in closed] + [f"Edit(/{p}/**)" for p in closed + fixed[:1]]
+    deny += [f"Edit(/{p})" for p in fixed[1:]]
+    out = {"settings": json.dumps({"permissions": {"deny": deny},
+                                   "disableSkillShellExecution": True})}
+    if sys.platform == "darwin":
+        out["sandbox"] = {
+            "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
+            "allowUnsandboxedCommands": False, "excludedCommands": ["open:*"],
+            "filesystem": {"denyRead": closed, "allowWrite": ["/"],
+                           "denyWrite": closed + fixed},
+            # any host, through the sandbox's proxy; loopback stays closed: Brave's debugging port
+            # and robo's own service are not for Bash (Playwright runs outside this sandbox)
+            "network": {"allowedDomains": ["*"]}}
+    return out
+
+
+def options(run: Run, cfg: Config, key: str, store, plugin: Path, guard: Guard,
             used: list[tuple[str, bool]]):
     from claude_agent_sdk import ClaudeAgentOptions
 
     shared = cfg.home / ".local" / "share" / "robo"
-    prompt = soul(cfg) + (f"\n\n{context}" if context else "")  # context_for has its heading
+    skills = sorted(f"robo:{path.parent.name}" for path in plugin.glob("skills/*/SKILL.md"))
     return ClaudeAgentOptions(
-        tools=TOOLS, system_prompt=prompt, model=cfg.model, cwd=str(cfg.home),
+        tools=TOOLS, system_prompt=soul(cfg), model=cfg.model, cwd=str(cfg.home),
         allowed_tools=[*TOOLS, "mcp__playwright", "mcp__robo"],
         resume=sessions(cfg).get(run.session_id),
-        include_partial_messages=True, setting_sources=[], skills="all",
+        include_partial_messages=True, setting_sources=[], skills=skills, **boundary(cfg),
         plugins=[{"type": "local", "path": str(plugin)}], strict_mcp_config=True,
         mcp_servers={
             "playwright": {"command": "npx", "args": [
@@ -336,11 +394,23 @@ async def execute(run: Run, cfg: Config, store, connect=None, previous: dict | N
     try:
         learned = learn.learned_skills_dir(cfg.root)
         render_skills(cfg, plugin, learned)
+        # In the turn, not the system prompt: a resumed session keeps its first system prompt.
         context = await asyncio.to_thread(store.context_for, run.input)
+        turn = f"{context}\n---\n{run.input}" if context else run.input
         guard = Guard(cfg.home, runtime=cfg.root, own=[AGENT], moodle=cfg.moodle_url or "")
-        async with connect(options(run, cfg, key, store, plugin, context, guard, used)) as client:
-            await client.query(run.input)
-            reply, ok = await stream(run, client, used)
+
+        async def attempt():
+            async with connect(options(run, cfg, key, store, plugin, guard, used)) as client:
+                await client.query(turn)
+                return await stream(run, client, used)
+
+        try:
+            reply, ok = await attempt()
+        except Exception as e:
+            if LOST not in str(e) or run.events:
+                raise
+            forget_session(cfg, run.session_id)  # its transcript is gone: start the session anew
+            reply, ok = await attempt()
         if run.sdk_session:
             remember_session(cfg, run.session_id, run.sdk_session)
     except asyncio.CancelledError:
@@ -351,12 +421,19 @@ async def execute(run: Run, cfg: Config, store, connect=None, previous: dict | N
     finally:
         shutil.rmtree(plugin, ignore_errors=True)
     if cfg.learn and run.events[-1]["event"] != "run.cancelled":
-        llm = make_llm(key)
         previous = previous if previous is not None else {}
+        last, previous[run.session_id] = previous.get(run.session_id), reply
+        if run.session_id.startswith(AUTOMATED_SESSIONS) or run.input.strip() == DIGEST_PROMPT:
+            return
+        llm = make_llm(key)
         record = learn.RunRecord(session_id=run.session_id, user_text=run.input, reply=reply,
-                                 tools=used, ok=ok, previous_reply=previous.get(run.session_id))
-        previous[run.session_id] = reply
+                                 tools=used, trace=run.trace, ok=ok, previous_reply=last)
         names = {path.parent.name for path in builtin_skills()}
-        spawn(learn.after_run(record, store, llm, learn.learned_skills_dir(cfg.root), names))
-        if consolidate_due(cfg):
-            spawn(learn.consolidate(store, llm))
+        due = consolidate_due(cfg)
+
+        async def job():  # in this order: the day's profile must see this run's facts
+            await learn.after_run(record, store, llm, learn.learned_skills_dir(cfg.root), names)
+            if due:
+                await learn.daily(store, llm)
+
+        spawn(job())

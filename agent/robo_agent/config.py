@@ -17,7 +17,11 @@ from pathlib import Path
 CHECKOUT = Path(__file__).resolve().parents[2]
 AGENT = CHECKOUT / "agent"  # SOUL.md, skills/ and this package: robo's own setup
 DEFAULT_MODEL = "claude-sonnet-5-5"
-DESKTOP_APPS = "Open GUI apps on this Mac with `open -a \"<App>\"` from Bash."
+DESKTOP_APPS = ("Open GUI apps on this Mac with `open -a \"<App>\"` from Bash, as a command of its "
+                "own. Bash runs in a sandbox: `ps`, `top`, AppleScript to other apps, anything on "
+                "localhost, `git init` and `git clone` don't work there (commits in an existing "
+                "repository do). Tell the user when that stops a request; don't try to get around "
+                "it.")
 PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
@@ -34,7 +38,6 @@ class Config:
     vault: str = ""
     moodle_url: str | None = None
     robo_cmd: str = "robo"
-    uv_path: str = "uv"
     learn: bool = True
 
     @property

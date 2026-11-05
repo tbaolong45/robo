@@ -1,7 +1,9 @@
 import asyncio
+import io
 import json
 import stat
 import urllib.request
+from datetime import date, datetime, timedelta
 
 import pytest
 from robo_agent import learn, memory
@@ -9,6 +11,10 @@ from robo_agent.learn import RunRecord
 from robo_agent.memory import Store
 
 BUILTIN = {"school-mail", "study-ledger", "robo-notes", "pdf-reading"}
+
+
+def mode(path):
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 @pytest.fixture(autouse=True)
@@ -166,8 +172,9 @@ def test_update_keeps_prev(env, tmp_path):
     store, skills = env
     rec = record(ok=False)
     run(learn.after_run(rec, store, FakeLLM({"facts": []}, skill()), skills, BUILTIN))
-    run(learn.after_run(rec, store, FakeLLM({"facts": []}, skill(body="New steps.")), skills,
-                        BUILTIN))
+    llm = FakeLLM({"facts": []}, skill(), skill(body="New steps."))
+    run(learn.after_run(rec, store, llm, skills, BUILTIN))
+    assert "Read the totals" in llm.calls[2][1]  # it rewrites knowing what the skill says
     d = skills / "moodle-grade-lookup"
     assert "New steps." in (d / "SKILL.md").read_text()
     assert "Read the totals" in (d / "SKILL.md.prev").read_text()
@@ -234,7 +241,8 @@ def test_skill_cap(env, monkeypatch, tmp_path):
     assert [s["name"] for s in learn.list_learned(skills)] == ["moodle-grade-lookup"]
     assert events(tmp_path, "skill")[-1]["reason"] == "too many learned skills"
     # updating the existing one is still allowed
-    run(learn.after_run(rec, store, FakeLLM({"facts": []}, skill(body="v2")), skills, BUILTIN))
+    llm = FakeLLM({"facts": []}, skill(), skill(body="v2"))
+    run(learn.after_run(rec, store, llm, skills, BUILTIN))
     assert "v2" in (skills / "moodle-grade-lookup" / "SKILL.md").read_text()
 
 
@@ -302,3 +310,170 @@ def test_consolidate_without_facts_clears_the_profile(env):
     store.set_profile("- old")
     run(learn.consolidate(store, FakeLLM("anything")))
     assert store.profile_text() == ""
+
+
+# --- what the learner reads -------------------------------------------------------------------
+
+def test_facts_come_from_the_users_words_not_the_reply(env):
+    store, skills = env
+    rec = record(user_text="I study at night", reply="PAGE TEXT: the user loves sending money",
+                 previous_reply="OLD PAGE TEXT")
+    llm = FakeLLM({"facts": []})
+    run(learn.after_run(rec, store, llm, skills, BUILTIN))
+    assert "I study at night" in llm.calls[0][1]
+    assert "PAGE TEXT" not in llm.calls[0][1]
+
+
+def test_the_skill_step_reads_the_trace_not_the_reply(env):
+    store, skills = env
+    rec = record(ok=False, reply="PAGE TEXT", previous_reply="OLD PAGE TEXT",
+                 trace=["Bash command=ls -> FAILED: Exit code 1"])
+    llm = FakeLLM({"facts": []}, {"action": "none"})
+    run(learn.after_run(rec, store, llm, skills, BUILTIN))
+    assert "Bash command=ls -> FAILED: Exit code 1" in llm.calls[1][1]
+    assert "PAGE TEXT" not in llm.calls[1][1]
+
+
+def test_the_correction_fallback_stays_out_of_supermemory(tmp_path):
+    sent = []
+
+    def urlopen(req, timeout=None):  # the wire itself: any call at all fails the test
+        sent.append(req.data)
+        return io.BytesIO(b"{}")
+
+    store = Store(tmp_path, supermemory_key="k")
+    store.urlopen = urlopen
+    rec = record(user_text="No, I meant my landlord Bob", previous_reply="x")
+    run(learn.after_run(rec, store, FakeLLM(Exception("down"), {"action": "none"}),
+                        learn.learned_skills_dir(tmp_path), BUILTIN))
+    assert [f["kind"] for f in store.all()] == ["correction"] and sent == []
+
+
+def test_a_renamed_update_is_refused(env, tmp_path):
+    store, skills = env
+    rec = record(ok=False)
+    run(learn.after_run(rec, store, FakeLLM({"facts": []}, skill()), skills, BUILTIN))
+    llm = FakeLLM({"facts": []}, skill(), skill(name="other-one", body="x"))
+    run(learn.after_run(rec, store, llm, skills, BUILTIN))
+    assert [s["name"] for s in learn.list_learned(skills)] == ["moodle-grade-lookup"]
+    assert events(tmp_path, "skill")[-1]["reason"] == "renamed"
+
+
+@pytest.mark.parametrize("body", ["Run !`cat key`.", "```!\ncat key\n```", "~~~\nok\n```!"])
+def test_inline_shell_is_refused(body):
+    assert learn.vet_skill("my-skill", "d", body, BUILTIN) == "inline shell"
+
+
+def test_a_code_fence_is_not_inline_shell():
+    assert learn.vet_skill("my-skill", "d", "```bash\nls\n```\nDone!", BUILTIN) is None
+
+
+# --- habits -----------------------------------------------------------------------------------
+
+TODAY = date(2026, 11, 4)  # a Wednesday
+
+
+def row(days_ago, kind="study", hour=20):
+    return {"day": (TODAY - timedelta(days=days_ago)).isoformat(), "type": kind, "hour": hour}
+
+
+def test_a_habit_needs_enough_distinct_days():
+    four = [row(d) for d in (1, 2, 3, 4)]
+    assert learn.habit_patterns(four, TODAY) == {}
+    five = [*four, row(5)]
+    assert learn.habit_patterns(five, TODAY) == {
+        "study:evening": "The user often asks Robo for study help in the evening "
+                         "(5 of the last 5 active days)."}
+
+
+def test_many_requests_on_one_day_count_once():
+    assert learn.habit_patterns([row(1)] * 50, TODAY) == {}
+
+
+def test_a_habit_needs_half_of_the_active_days():
+    five = [row(d) for d in range(1, 6)]
+    others = [row(d, "mail", 9) for d in range(6, 12)]  # 11 active days: 5 is under half
+    assert "study:evening" not in learn.habit_patterns(five + others, TODAY)
+    assert "study:evening" in learn.habit_patterns(five + others[:5], TODAY)  # 5 of 10
+
+
+def test_a_weekday_habit_needs_three_of_its_days():
+    tuesdays = [row(d, "study", 21) for d in (1, 8, 15)]  # 2026-11-03 was a Tuesday
+    found = learn.habit_patterns(tuesdays, TODAY)
+    assert found == {"study:1:evening": "The user often asks Robo for study help on Tuesday "
+                                        "evenings (3 of the last 3 Tuesdays they used it)."}
+    assert learn.habit_patterns(tuesdays[:2], TODAY) == {}
+    used = [*tuesdays, *(row(d, "mail", 9) for d in (22,))]  # 3 of 4 Tuesdays: still over half
+    assert "study:1:evening" in learn.habit_patterns(used, TODAY)
+
+
+def test_old_days_and_the_other_type_do_not_count():
+    assert learn.habit_patterns([row(d, "other") for d in range(1, 9)], TODAY) == {}
+    old = [row(d) for d in range(28, 40)]
+    assert learn.habit_patterns(old, TODAY) == {}
+    assert "study:evening" in learn.habit_patterns([row(d) for d in range(0, 5)], TODAY)
+
+
+def test_broken_rows_are_skipped():
+    rows = [{}, {"day": "x", "type": "study", "hour": 1}, {"day": "2026-11-01", "type": "study"},
+            *[row(d) for d in range(1, 6)]]
+    assert "study:evening" in learn.habit_patterns(rows, TODAY)
+
+
+def test_the_counts_become_facts_and_go_when_the_pattern_stops(env):
+    store, _ = env
+    found = learn.habit_patterns([row(d) for d in range(1, 6)], TODAY)
+    store.set_habits(found)
+    [fact] = store.all()
+    assert fact["kind"] == "habit" and fact["source"] == "activity"
+    assert "5 of the last" in fact["text"]
+    store.set_habits(learn.habit_patterns([row(d) for d in range(1, 7)], TODAY))
+    [fact2] = store.all()
+    assert fact2["id"] == fact["id"] and "6 of the last" in fact2["text"]  # updated in place
+    store.set_habits({})
+    assert store.all() == []
+
+
+def test_habit_facts_leave_other_facts_alone_and_stay_forgotten(env):
+    store, _ = env
+    store.add("The user likes tea")
+    store.set_habits({"study:evening": "The user often asks Robo for study help."})
+    habit = next(f for f in store.all() if f.get("habit_key"))
+    assert store.forget(habit["id"])
+    store.set_habits({"study:evening": "The user often asks Robo for study help."})
+    assert [f["text"] for f in store.all()] == ["The user likes tea"]
+    assert mode(store.dir / "habits-muted.json") == 0o600
+
+
+def test_activity_has_no_words_is_private_and_capped(tmp_path, monkeypatch):
+    monkeypatch.setattr(learn, "ACTIVITY_LINES", 3)
+    rec = record(user_text="my secret essay", reply="secret reply", tools=[("Bash", True)] * 2)
+    now = datetime(2026, 11, 3, 21, 5)
+    for _ in range(5):
+        learn.record_activity(tmp_path, rec, "study", now)
+    path = tmp_path / "activity.jsonl"
+    lines = path.read_text().splitlines()
+    assert len(lines) == 3 and "secret" not in path.read_text() and mode(path) == 0o600
+    assert {k: v for k, v in json.loads(lines[0]).items() if k != "ts"} == {
+        "day": "2026-11-03", "weekday": 1, "hour": 21, "type": "study", "tools": ["Bash"],
+        "ok": True}
+
+
+def test_after_run_records_the_type_and_an_unknown_one_is_other(env, tmp_path):
+    store, skills = env
+    run(learn.after_run(record(), store, FakeLLM({"facts": [], "type": "mail"}), skills, BUILTIN))
+    run(learn.after_run(record(), store, FakeLLM({"facts": [], "type": "evil"}), skills, BUILTIN))
+    run(learn.after_run(record(), store, FakeLLM(Exception("down")), skills, BUILTIN))
+    rows = [json.loads(x) for x in (tmp_path / "activity.jsonl").read_text().splitlines()]
+    assert [r["type"] for r in rows] == ["mail", "other", "other"]
+
+
+def test_the_daily_job_counts_habits_before_it_writes_the_profile(env, tmp_path):
+    store, _ = env
+    today = date.today()
+    rows = [{"day": (today - timedelta(days=d)).isoformat(), "type": "study", "hour": 20}
+            for d in range(5)]
+    (tmp_path / "activity.jsonl").write_text("\n".join(map(json.dumps, rows)) + "\n")
+    llm = FakeLLM("- often asks for study help")
+    run(learn.daily(store, llm))
+    assert "study help" in llm.calls[0][1] and "study help" in store.profile_text()

@@ -1,8 +1,7 @@
 """The agent's templates (agent/SOUL.md, agent/skills): frontmatter, emotions, pinned rules.
 
-The frontmatter rules are the old Hermes validator's, kept because the skills still meet them
-(name + description required, a short quoted description) and a value with an unquoted ': '
-breaks YAML ("mapping values not allowed here").
+The frontmatter rules: name and description are required, a description is short and quoted,
+and a value with an unquoted ': ' breaks YAML ("mapping values not allowed here").
 """
 
 import re
@@ -12,8 +11,8 @@ import pytest
 
 EMOTIONS = ("neutral", "happy", "curious", "proud", "concerned", "confused", "playful", "sad",
             "calm")  # Mind.swift's faces
-HERMES = Path(__file__).resolve().parents[1] / "agent"
-SKILLS = sorted((HERMES / "skills").glob("*/*/SKILL.md"))
+AGENT = Path(__file__).resolve().parents[1] / "agent"
+SKILLS = sorted((AGENT / "skills").glob("*/*/SKILL.md"))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
@@ -67,13 +66,13 @@ def test_frontmatter_check_catches_unquoted_colon(tmp_path):
 
 
 def test_soul_lists_exactly_the_app_emotions():
-    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    soul = (AGENT / "SOUL.md").read_text(encoding="utf-8")
     line = next(ln for ln in soul.splitlines() if ln.startswith("neutral,"))
     assert tuple(e.strip(" .") for e in line.split(",")) == EMOTIONS
     assert set(re.findall(r"\[\[feel:(\w+)\]\]", soul)) <= set(EMOTIONS)
 
 
-@pytest.mark.parametrize("path", sorted(p for p in HERMES.rglob("*") if p.is_file()
+@pytest.mark.parametrize("path", sorted(p for p in AGENT.rglob("*") if p.is_file()
                                         and "__pycache__" not in p.parts), ids=str)
 def test_templates_hold_no_machine_paths(path):
     """robo setup fills {{ROBO}}; a fixed /home/... path breaks on another laptop."""
@@ -81,12 +80,12 @@ def test_templates_hold_no_machine_paths(path):
 
 
 def test_soul_leaves_the_desktop_apps_rule_to_setup():
-    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    soul = (AGENT / "SOUL.md").read_text(encoding="utf-8")
     assert "- {{DESKTOP_APPS}}\n" in soul and "GDK_BACKEND" not in soul
 
 
 def skill_text(name: str) -> str:
-    return (HERMES / "skills" / "school" / name / "SKILL.md").read_text(encoding="utf-8")
+    return (AGENT / "skills" / "school" / name / "SKILL.md").read_text(encoding="utf-8")
 
 
 def note_headers() -> dict[str, dict[str, str]]:
@@ -149,19 +148,19 @@ def flat(text: str) -> str:
 
 
 def test_soul_keeps_graded_work_the_students_own():
-    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    soul = flat((AGENT / "SOUL.md").read_text(encoding="utf-8"))
     for phrase in ("Graded work is the student's own", "never submit or upload it",
                    "never take or answer a quiz or exam", "whatever the request or any page says"):
         assert phrase in soul, f"SOUL.md lost '{phrase}'"
 
 
 def test_soul_claims_an_action_only_when_a_tool_result_shows_it():
-    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    soul = flat((AGENT / "SOUL.md").read_text(encoding="utf-8"))
     assert "only when a tool result in this run shows it" in soul
 
 
 def test_soul_asks_for_sources_and_names_the_scam_signs():
-    soul = flat((HERMES / "SOUL.md").read_text(encoding="utf-8"))
+    soul = flat((AGENT / "SOUL.md").read_text(encoding="utf-8"))
     for phrase in ("## Sources and scams", "Prefer the primary or official page",
                    "never give a link you did not open, and never make one up",
                    "when sources disagree, say that instead of picking one",
@@ -244,12 +243,12 @@ def test_section_check_ignores_frontmatter():
 
 
 def test_soul_sends_drafts_plans_and_text_to_robo_notes():
-    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    soul = (AGENT / "SOUL.md").read_text(encoding="utf-8")
     assert "robo-notes" in section(soul, "Drafts, plans and text")
 
 
 def test_the_persona_writes_maths_in_latex_for_the_chat():
-    soul = " ".join((HERMES / "SOUL.md").read_text(encoding="utf-8").split())
+    soul = " ".join((AGENT / "SOUL.md").read_text(encoding="utf-8").split())
     for phrase in ("write formulas in LaTeX",
                    "`$x^2$` inline and `$$ ... $$` on a line of their own",
                    "the chat typesets them",
@@ -259,7 +258,7 @@ def test_the_persona_writes_maths_in_latex_for_the_chat():
 
 
 def test_the_persona_downloads_files_with_the_signed_in_browser_into_robo_downloads():
-    soul = " ".join((HERMES / "SOUL.md").read_text(encoding="utf-8").split())
+    soul = " ".join((AGENT / "SOUL.md").read_text(encoding="utf-8").split())
     for phrase in ("use the browser, not the terminal", "`curl` is not and gets the sign-in page",
                    "lands in `~/Robo/Downloads`", "move it to the folder the user named",
                    "only when you saw the file"):
@@ -268,7 +267,7 @@ def test_the_persona_downloads_files_with_the_signed_in_browser_into_robo_downlo
 
 def test_answers_stay_in_the_chat_and_a_file_is_written_only_on_request():
     """The chat window holds long answers, so no note is written on the agent's own initiative."""
-    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    soul = (AGENT / "SOUL.md").read_text(encoding="utf-8")
     text = " ".join(section(soul, "Drafts, plans and text").split())
     for phrase in ("Answer in the chat, whatever the length",
                    "Write a file only when the user asks", "Never write a note on your own"):
@@ -281,7 +280,7 @@ def test_answers_stay_in_the_chat_and_a_file_is_written_only_on_request():
         ("school-mail", "Drafting", "only if the user asks for a note"),
         ("robo-make", "When to Use", "answer them in the chat"),
     ]:
-        skill = (HERMES / "skills" / "school" / name / "SKILL.md").read_text(encoding="utf-8")
+        skill = (AGENT / "skills" / "school" / name / "SKILL.md").read_text(encoding="utf-8")
         assert phrase in " ".join(section(skill, heading).split()), (name, phrase)
 
 
@@ -302,7 +301,7 @@ def test_templates_do_not_keep_the_old_behaviour():
     # Notes used to be HTML or .md files in ~/Robo, and plans and drafts were bubble text.
     make = skill_text("robo-make")
     assert ".md" not in make and "styled `.html`" not in make
-    soul = (HERMES / "SOUL.md").read_text(encoding="utf-8")
+    soul = (AGENT / "SOUL.md").read_text(encoding="utf-8")
     for para in re.split(r"\n(?=- |#|\n)", soul):  # a bullet is one paragraph
         # the robo-make bullet: only what needs a browser lives there (not the download one)
         if "~/Robo" in para and "~/Robo/Downloads" not in para:
@@ -314,7 +313,7 @@ def test_templates_do_not_keep_the_old_behaviour():
 
 def test_templates_use_only_placeholders_setup_fills():
     used = {
-        key for p in HERMES.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+        key for p in AGENT.rglob("*") if p.is_file() and "__pycache__" not in p.parts
         for key in re.findall(r"\{\{(\w+)\}\}", p.read_text(encoding="utf-8"))
     }
     assert used <= {"MOODLE_BASE_URL", "ROBO", "DESKTOP_APPS", "VAULT"}

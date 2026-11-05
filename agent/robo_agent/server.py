@@ -122,7 +122,10 @@ def serve(cfg: Config) -> None:
 
     cfg.root.mkdir(mode=0o700, parents=True, exist_ok=True)
     cfg.root.chmod(0o700)
+    shared = Store(cfg.root)  # one store, so one lock, for every run and its learner
+
     def store():
-        return Store(cfg.root, cfg.key("supermemory_key", "SUPERMEMORY_API_KEY") or None)
+        shared.key = cfg.key("supermemory_key", "SUPERMEMORY_API_KEY") or None
+        return shared
 
     web.run_app(make_app(cfg, store), host="127.0.0.1", port=cfg.port, print=None)
