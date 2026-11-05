@@ -63,9 +63,4 @@ final class Bridge {
     func heard(_ text: String, handsFree: Bool) { DispatchQueue.main.async { [weak window] in window?.onHeard(text, handsFree: handsFree) } }
     func note(_ text: String) { DispatchQueue.main.async { [weak window] in window?.onNote(text) } }
     func link(_ state: HealthState) { DispatchQueue.main.async { [weak window] in window?.onLink(state) } }
-    func calendar(_ fetched: CalendarRefresh) { DispatchQueue.main.async { [weak window] in window?.onCalendar(fetched) } }
-    func radar(_ found: RadarOutcome, day: String) { DispatchQueue.main.async { [weak window] in window?.onRadar(found, day: day) } }
-    func scout(_ step: LMSPosts.Step, _ reply: ScoutReply, host: String, day: String) {
-        DispatchQueue.main.async { [weak window] in window?.onScout(step, reply, host: host, day: day) }
-    }
 }

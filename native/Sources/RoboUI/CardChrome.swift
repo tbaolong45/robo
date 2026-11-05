@@ -60,13 +60,6 @@ enum Chrome {
         NSColor(name: "robo.wash.\(alpha)") { NSColor(white: $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 1 : 0, alpha: alpha) }
     }
 
-    /// A filled button's capsule and its label: the text's own ink and its opposite.
-    static var solid: NSColor { text }
-    static var onSolid: NSColor {
-        if let ink { return NSColor(white: ink >= 0.5 ? 0.98 : 0.07, alpha: 1) }
-        return NSColor(name: "robo.onSolid") { NSColor(white: $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 0.07 : 0.98, alpha: 1) }
-    }
-
     /// A status as a sentence starts: "listening" reads "Listening".
     static func sentence(_ s: String) -> String { s.prefix(1).uppercased() + s.dropFirst() }
 
@@ -221,7 +214,7 @@ extension LedState {
     var suffix: String { [.warn: " …", .loading: " …", .bad: " problem", .off: " off"][self] ?? "" }
 }
 
-/// A small caption in the system font: "You", "Approval", the status line, in sentence case.
+/// A small caption in the system font: "You", the status line, in sentence case.
 final class MicroLabel: NSView {
     var text: String { didSet { if text != oldValue { needsDisplay = true } } }
     let px: CGFloat, bold: Bool
@@ -430,18 +423,16 @@ final class TypingDotsView: NSView {
     }
 }
 
-/// A capsule button on the glass: the menu chips (an SF Symbol before the title), Allow / Deny and the nudge's answers. It takes the keyboard focus (Tab moves it
-/// along `nextKeyView`, Space or Return presses), draws the system focus ring, and VoiceOver presses it by its title.
+/// A capsule button on the glass: the menu chips (an SF Symbol before the title). It takes the keyboard focus (Tab moves it along
+/// `nextKeyView`, Space or Return presses), draws the system focus ring, and VoiceOver presses it by its title.
 final class ButtonView: NSView {
-    enum Kind { case plain, allow, deny }
     var title: String { didSet { needsDisplay = true; setAccessibilityLabel(title) } }
     var symbol: String? { didSet { if symbol != oldValue { needsDisplay = true } } }
-    var kind: Kind { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
     private var hovered = false { didSet { if hovered != oldValue { needsDisplay = true } } }
 
-    init(_ title: String, symbol: String? = nil, kind: Kind = .plain) {
-        (self.title, self.symbol, self.kind) = (title, symbol, kind)
+    init(_ title: String, symbol: String? = nil) {
+        (self.title, self.symbol) = (title, symbol)
         super.init(frame: .zero)
         setAccessibilityRole(.button); setAccessibilityLabel(title)
     }
@@ -467,7 +458,7 @@ final class ButtonView: NSView {
         NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
     }
 
-    /// Space, Return and Enter press it (never while it is hidden: a hidden Allow must not take a stray key); Tab and Shift+Tab move on.
+    /// Space, Return and Enter press it (never while it is hidden: a hidden button must not take a stray key); Tab and Shift+Tab move on.
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 49, 36, 76: if !isHiddenOrHasHiddenAncestor { onClick?() }
@@ -477,17 +468,11 @@ final class ButtonView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        var fill = Chrome.wash(hovered ? 0.16 : 0.08), edge = NSColor.clear, ink = Chrome.text, weight = NSFont.Weight.regular
-        switch kind {
-        case .plain: break
-        case .allow: fill = Chrome.solid.withAlphaComponent(hovered ? 1 : 0.9); ink = Chrome.onSolid; weight = .semibold
-        case .deny: fill = hovered ? Chrome.wash(0.08) : .clear; edge = Chrome.textDim  // the safe answer must not be the faint one
-        }
+        let ink = Chrome.text
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let capsule = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
-        fill.setFill(); capsule.fill()
-        if edge != .clear { edge.setStroke(); capsule.lineWidth = 1; capsule.stroke() }
-        let s = NSAttributedString(string: title, attributes: [.font: Chrome.ui(13, weight), .foregroundColor: ink, .kern: Chrome.qtKern(13)])
+        Chrome.wash(hovered ? 0.16 : 0.08).setFill()
+        NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+        let s = NSAttributedString(string: title, attributes: [.font: Chrome.ui(13), .foregroundColor: ink, .kern: Chrome.qtKern(13)])
         let size = s.size()
         let glyph = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 12, weight: .regular).applying(.init(hierarchicalColor: ink))) }
         let lead = glyph.map { $0.size.width + 5 } ?? 0
@@ -496,59 +481,5 @@ final class ButtonView: NSView {
             glyph.draw(in: NSRect(x: x, y: ((bounds.height - glyph.size.height) / 2).rounded(), width: glyph.size.width, height: glyph.size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
         s.draw(at: NSPoint(x: x + lead, y: ((bounds.height - size.height) / 2).rounded(.down)))
-    }
-}
-
-/// A word-wrapped label: the footer (a hairline above, 6 px of padding), the approval's well (a soft orange wash with a bar at its left,
-/// rounded on the right) and the nudge's note (a neutral wash, its first line bold).
-final class WrapLabelView: NSView {
-    enum Kind { case footer, well, note }
-    let kind: Kind
-    var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
-
-    init(_ kind: Kind) { self.kind = kind; super.init(frame: .zero) }
-    required init?(coder: NSCoder) { fatalError("not used") }
-    override var isFlipped: Bool { true }
-
-    private var font: NSFont { Chrome.ui(kind == .footer ? 11 : 12) }
-    // QLabel puts half the width of an "x" in front of its text when it has a frame (a border in the style sheet)
-    private var indent: CGFloat { (Chrome.advance("x", font) / 2).rounded(.down) }
-    private var inset: NSEdgeInsets { kind == .footer ? NSEdgeInsets(top: 7, left: indent, bottom: 0, right: 0) : NSEdgeInsets(top: 6, left: 10 + indent, bottom: 6, right: 8) }
-    /// What is drawn and what is measured: the same attributes, or a line that just fits wraps when drawn (`.kern: 0` turns pair kerning off).
-    private var shown: NSAttributedString {
-        let s = NSMutableAttributedString(string: text, attributes: Chrome.attrs(font, ink))
-        if kind == .note {
-            let title = (text as NSString).range(of: "\n").location
-            s.addAttribute(.font, value: Chrome.ui(12, .semibold), range: NSRange(location: 0, length: title == NSNotFound ? s.length : title))
-        }
-        return s
-    }
-    private var ink: NSColor { kind == .footer ? Chrome.textDim : Chrome.text }
-
-    /// The height the text needs at `width` (QLabel's height for width).
-    func height(for width: CGFloat) -> CGFloat {
-        let i = inset
-        let box = shown.boundingRect(
-            with: NSSize(width: width - i.left - i.right, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin])
-        return i.top + i.bottom + ceil(box.height)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let i = inset
-        if kind == .footer {
-            Chrome.hairline.setFill(); NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
-        } else if kind == .note {
-            Chrome.wash(0.06).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
-        } else {
-            NSGraphicsContext.saveGraphicsState()
-            bounds.clip()
-            NSColor.systemOrange.withAlphaComponent(0.12).setFill()
-            NSBezierPath(roundedRect: NSRect(x: -8, y: 0, width: bounds.width + 8, height: bounds.height), xRadius: 8, yRadius: 8).fill()
-            NSGraphicsContext.restoreGraphicsState()
-            NSColor.systemOrange.setFill(); NSRect(x: 0, y: 0, width: 2, height: bounds.height).fill()
-        }
-        shown.draw(
-            with: NSRect(x: i.left, y: i.top, width: bounds.width - i.left - i.right, height: bounds.height - i.top - i.bottom), options: [.usesLineFragmentOrigin])
     }
 }

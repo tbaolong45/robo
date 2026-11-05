@@ -241,7 +241,7 @@ final class ChatView: NSView, NSTextFieldDelegate {
     /// The glass at `level` (0 dark ... 1 light, nil = the system's look): the panel's appearance is set by the window.
     func setShade(_ level: Double?) { glass.setShade(level) }
 
-    /// The one line under the title that says what Robo is doing ("Listening…", what the tool does, "Listening for your reply").
+    /// The one line under the title that says what Robo is doing ("Listening…", "on it…", "Listening for your reply").
     func setStatus(_ text: String) {
         let shown = Chrome.sentence(text)
         if statusLabel.stringValue != shown { statusLabel.stringValue = shown }

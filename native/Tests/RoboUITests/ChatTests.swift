@@ -11,9 +11,6 @@ import RoboSystem
 @MainActor private func turns(_ r: Rig) -> [String] { r.window.transcript.turns.map(\.text) }
 @MainActor private func roles(_ r: Rig) -> [Turn.Role] { r.window.transcript.turns.map(\.role) }
 @MainActor private func bubbleCount(_ r: Rig) -> Int { r.window.chat?.chat.bubbles.count ?? 0 }
-private func receipt(_ at: Double) -> String {
-    #"{"ts": "\#(Usage.stamp(at))", "tool": "browser_click", "label_or_path": "Send", "host": "outlook.office.com", "ok": true}"#
-}
 
 // MARK: - the conversation in the window
 
@@ -101,9 +98,9 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        r.window.ask("close the Moodle tab")
+        r.window.ask("close the browser tab")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && r.agent.asked.map(\.text) == ["hi", "close the Moodle tab"])
+        #expect(r.window.chatOpen && r.agent.asked.map(\.text) == ["hi", "close the browser tab"])
     }
 
     @Test func closeWithTheChatClosedIsAnOrdinaryRequest() async {
@@ -222,7 +219,7 @@ private func receipt(_ at: Double) -> String {
         #expect(turns(r) == ["hi", HELLO, "Sorry, I didn't catch that."] && r.window.card.isHidden)
     }
 
-    // MARK: failures, footers, the digest
+    // MARK: failures
 
     @Test func aFailedRunIsAFailedTurnWithItsReason() async {
         let r = Rig(fail: BrainError("The agent is not running"), chat: true)
@@ -234,42 +231,6 @@ private func receipt(_ at: Double) -> String {
         #expect(last?.text == "The agent is not running" && last?.failed == true)
     }
 
-    @Test func theFooterAndTheReceiptSitUnderTheAnswer() async {
-        let reply = "I sent the email."
-        let r = Rig([delta(reply), completed(reply)], chat: true)
-        defer { r.close() }
-        r.agent.onAsk = {
-            Usage.append(receipt(Date().timeIntervalSince1970), to: r.receipts)
-            write([r.vault.appendingPathComponent("Drafts/Mail.md"): "Hi"])
-        }
-        r.window.ask("send it")
-        #expect(await pump(!r.window.busy))
-        #expect(r.window.transcript.turns.last?.footer == ["In Obsidian: Mail", "✓ sent · outlook.office.com"])
-        #expect(r.window.transcript.turns.last?.text == reply)  // the footer is not part of the answer
-    }
-
-    @Test func theMorningDigestGoesOnTheCardNotTheChatAndIsInTheConversationLater() async {
-        let r = Rig([completed("Today: two things.")], chat: true)
-        defer { r.close() }
-        r.window.ask(RoboWindow.digestPrompt, waitNetwork: true)
-        #expect(!r.window.card.isHidden && r.screenAsks == 0)  // a card at once, and no permission dialog nobody asked for
-        #expect(await pump(!r.window.busy))
-        #expect(!r.window.chatOpen && r.chats.isEmpty && !r.window.card.isHidden && r.blurs.isEmpty)
-        for _ in 0..<80 where r.window.tw.pending { r.step() }
-        #expect(roles(r) == [.robo] && turns(r) == ["Today: two things."])
-        r.window.typeText()  // opened later: the digest is there, and the card has gone
-        #expect(r.window.chatOpen && turns(r) == ["Today: two things."] && r.window.card.isHidden)
-    }
-
-    @Test func aMorningDigestWhileTheChatIsOpenStaysInTheChat() async {
-        let r = Rig([completed("Today: two things.")], chat: true)
-        defer { r.close() }
-        r.window.typeText()
-        r.window.ask(RoboWindow.digestPrompt, waitNetwork: true)
-        #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && r.window.card.isHidden)
-    }
-
     @Test func theCloseButtonClosesTheChatAndSaysSoToVoiceOver() throws {
         let r = Rig(chat: true)
         defer { r.close() }
@@ -278,14 +239,6 @@ private func receipt(_ at: Double) -> String {
         #expect(view.close.accessibilityLabel() == "Close chat" && view.close.acceptsFirstMouse(for: nil))
         view.close.performClick(nil)
         #expect(!r.window.chatOpen)
-    }
-
-    @Test func theMenuDigestShowsADigestTurn() async {
-        let r = Rig([completed("Today: two things.")], chat: true)
-        defer { r.close() }
-        r.window.ask(RoboWindow.digestPrompt)
-        #expect(await pump(!r.window.busy))
-        #expect(turns(r) == ["School digest", "Today: two things."])
     }
 
     // MARK: the pet and the rest of the window
@@ -331,7 +284,7 @@ private func receipt(_ at: Double) -> String {
         defer { panel.orderOut(nil) }
         #expect(panel.isKeyWindow)  // needs an unlocked screen
         panel.chat.focusInput()
-        #expect(panel.inputActive && r.window.nudgeHeld)  // a nudge waits while you type
+        #expect(panel.inputActive)
         panel.chat.input.currentEditor()?.insertText("typed hello")
         #expect(panel.chat.input.stringValue == "typed hello")
         panel.chat.input.sendAction(panel.chat.input.action, to: panel.chat.input.target)  // Return
@@ -359,16 +312,6 @@ private func receipt(_ at: Double) -> String {
         r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(r.window.chatOpen && r.window.card.isHidden)  // the card is out, so "called" (`busy || card shown`) is false again
-    }
-
-    @Test func aNudgeIsNotHeldByAChatThatIsOnlyOpen() async {
-        let r = Rig([completed(HELLO)], chat: true)
-        defer { r.close() }
-        r.window.ask("hi")
-        #expect(await pump(!r.window.busy))
-        #expect(await r.run(until: r.window.typed))
-        for _ in 0..<600 { r.step() }  // the follow-up window is over
-        #expect(r.window.chatOpen && !r.window.nudgeHeld)
     }
 
     // MARK: called: the pet goes to a side, the background is blurred a little
@@ -530,7 +473,7 @@ private func receipt(_ at: Double) -> String {
         t.append(.robo, "")
         t.seal("Hello there. This is a reply that is a little longer than the question was.")
         t.append(.robo, "")
-        t.seal("And a second bubble from Robo.", footer: ["✓ sent · outlook.office.com"])
+        t.seal("And a second bubble from Robo.", footer: ["stopped"])
         t.append(.you, "thanks")
         return t
     }
@@ -713,12 +656,12 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "hi")
         t.append(.robo, "")
         let v = view(t)
-        v.setStatus("searching the web…")
+        v.setStatus("still working · 40 s")
         v.setWorking(true)
         let bubble = v.bubbles[t.turns[1].id]!
-        #expect(v.statusLabel.stringValue == "Searching the web…" && bubble.dots != nil)
+        #expect(v.statusLabel.stringValue == "Still working · 40 s" && bubble.dots != nil)
         let labels = bubble.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
-        #expect(!labels.contains("searching the web…"))
+        #expect(!labels.contains("still working · 40 s"))
         #expect(bubble.bubbleSize.height == 16 + BubbleView.pad.top + BubbleView.pad.bottom)  // just the dots
     }
 

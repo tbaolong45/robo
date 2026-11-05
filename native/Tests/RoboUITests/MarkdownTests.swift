@@ -513,7 +513,7 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
 
     @Test func aLineWithAnEmojiIsNotTallerThanOneWithout() {
         let plain = TextBox(width: 302), emoji = TextBox(width: 302)
-        plain.setContent(md("In Obsidian: Plan")); emoji.setContent(md("In Obsidian: Plan 📂"))
+        plain.setContent(md("The plan")); emoji.setContent(md("The plan 📂"))
         #expect(abs(plain.wantedHeight(cap: 300) - emoji.wantedHeight(cap: 300)) <= 1)
     }
 

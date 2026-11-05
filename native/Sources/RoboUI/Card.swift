@@ -1,11 +1,10 @@
 // The speech card, on a pane of Liquid Glass (`GlassSurface`, behind everything): the widgets laid out in one column, the
-// sizing of the text boxes, the right-click menu and the approval. The window (RoboWindow) owns the face, the clock and
-// the agent's events; it drives this view through the setters below and gets callbacks back.
+// sizing of the text boxes and the right-click menu. The window (RoboWindow) owns the face, the clock and the agent's events;
+// it drives this view through the setters below and gets callbacks back.
 //
 // Layout: the card is 340 wide with one column (margins 19, 42, 19, 19, spacing 8, 302 wide) in this order: menu,
-// quote, status row, reply, footer, approval, nudge. Hidden items take no room. The header is a child at (6, 6) of the frame,
-// not in the column, and the glass pane sits from (6, 6) to `Chrome.gap` short of the bottom. The owner sets the card's
-// frame to `fittingHeight` inside `fit`.
+// quote, status row, reply. Hidden items take no room. The header is a child at (6, 6) of the frame, not in the column, and the
+// glass pane sits from (6, 6) to `Chrome.gap` short of the bottom. The owner sets the card's frame to `fittingHeight` inside `fit`.
 import AppKit
 import RoboCore
 
@@ -13,7 +12,7 @@ import RoboCore
 enum LedState: String, CaseIterable, Sendable { case unknown, ok, warn, loading, bad, hot, off }
 
 /// A right-click menu entry.
-enum MenuAction: Sendable { case digest, type, stay, watch, nudges, quit }
+enum MenuAction: Sendable { case type, stay, quit }
 
 /// A view that places its own children (no Auto Layout) whenever its size changes, and when the card asks.
 class Placing: NSView {
@@ -22,37 +21,25 @@ class Placing: NSView {
     func place() {}
 }
 
-/// The right-click menu: three chips in a row of six columns, two columns each; the second row is Watch, Nudges and Quit
-/// (two columns each), or Nudges and Quit (three each) when there is nothing to watch.
+/// The right-click menu: three equal chips in one row.
 final class MenuView: Placing {
-    let digest, type, stay, watch, nudges, quit: ButtonView
-    let hasWatch: Bool
+    let type, stay, quit: ButtonView
     static let rowH: CGFloat = 28, spacing: CGFloat = 6
 
-    init(hasWatch: Bool) {
-        digest = ButtonView("Digest", symbol: "books.vertical"); type = ButtonView("Type", symbol: "text.bubble"); stay = ButtonView("Stay", symbol: "pin")
-        watch = ButtonView("Watch", symbol: "pause"); nudges = ButtonView("Nudges", symbol: "bell"); quit = ButtonView("Quit", symbol: "xmark")
-        self.hasWatch = hasWatch
+    init() {
+        type = ButtonView("Type", symbol: "text.bubble"); stay = ButtonView("Stay", symbol: "pin"); quit = ButtonView("Quit", symbol: "xmark")
         super.init(frame: .zero)
         for b in buttons { addSubview(b) }
-        if !hasWatch { watch.isHidden = true }  // never shown, so not in the grid
     }
     required init?(coder: NSCoder) { fatalError("not used") }
-    var buttons: [ButtonView] { [digest, type, stay, watch, nudges, quit] }
-    var height: CGFloat { 2 * Self.rowH + Self.spacing }
-
-    /// The cells as (row, column, columns spanned).
-    var cells: [(ButtonView, Int, Int, Int)] {
-        let low = hasWatch ? [watch, nudges, quit] : [nudges, quit]
-        return [digest, type, stay].enumerated().map { ($1, 0, 2 * $0, 2) }
-            + low.enumerated().map { ($1, 1, 6 / low.count * $0, 6 / low.count) }
-    }
+    var buttons: [ButtonView] { [type, stay, quit] }
+    var height: CGFloat { Self.rowH }
 
     override func place() {
-        let free = bounds.width - 5 * Self.spacing, width = free / 6  // six equal columns
-        for (button, row, column, span) in cells {
-            let left = (CGFloat(column) * (width + Self.spacing)).rounded(), right = (CGFloat(column + span - 1) * (width + Self.spacing) + width).rounded()
-            button.frame = NSRect(x: left, y: CGFloat(row) * (Self.rowH + Self.spacing), width: right - left, height: Self.rowH)
+        let width = (bounds.width - 2 * Self.spacing) / 3
+        for (i, button) in buttons.enumerated() {
+            let left = (CGFloat(i) * (width + Self.spacing)).rounded(), right = (CGFloat(i) * (width + Self.spacing) + width).rounded()
+            button.frame = NSRect(x: left, y: 0, width: right - left, height: Self.rowH)
         }
     }
 }
@@ -84,7 +71,7 @@ final class QuoteBlock: Placing {
     }
 }
 
-/// The typing dots and the status line (e.g. "searching the web…"); each takes room only while it shows.
+/// The typing dots and the status line (e.g. "on it…"); each takes room only while it shows.
 final class StatusRow: Placing {
     let dots: TypingDotsView, label: MicroLabel
     init() {
@@ -104,64 +91,6 @@ final class StatusRow: Placing {
     }
 }
 
-/// "Approval", the request in a well, and Allow / Deny.
-final class ApprovalView: Placing {
-    let label: MicroLabel, well: WrapLabelView
-    let allow: ButtonView, deny: ButtonView
-
-    override init(frame: NSRect = .zero) {
-        label = MicroLabel("Approval")
-        well = WrapLabelView(.well)
-        allow = ButtonView("Allow", kind: .allow)  // filled; Deny is outlined
-        deny = ButtonView("Deny", kind: .deny)
-        super.init(frame: .zero)
-        for v in [label, well, allow, deny] { addSubview(v) }
-        allow.nextKeyView = deny; deny.nextKeyView = allow  // Tab goes between the two
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-    func height(for width: CGFloat) -> CGFloat { 12 + 6 + well.height(for: width) + 6 + MenuView.rowH }
-
-    override func place() {
-        let wellH = well.height(for: bounds.width), half = (bounds.width - 8) / 2
-        label.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 12)
-        well.frame = NSRect(x: 0, y: 18, width: bounds.width, height: wellH)
-        let y = 18 + wellH + 6
-        allow.frame = NSRect(x: 0, y: y, width: half, height: MenuView.rowH)
-        deny.frame = NSRect(x: half + 8, y: y, width: half, height: MenuView.rowH)
-    }
-}
-
-/// A nudge: "Heads-up", the title and why in a note, and Open (only when there is a link or a note to open) / Later / Not for me.
-final class NudgeView: Placing {
-    let label: MicroLabel, well: WrapLabelView
-    let open: ButtonView, later: ButtonView, notForMe: ButtonView
-
-    override init(frame: NSRect = .zero) {
-        label = MicroLabel("Heads-up")
-        well = WrapLabelView(.note)
-        open = ButtonView("Open", kind: .allow)  // filled; Not for me is outlined
-        later = ButtonView("Later")
-        notForMe = ButtonView("Not for me", kind: .deny)
-        super.init(frame: .zero)
-        for v in [label, well, open, later, notForMe] { addSubview(v) }
-        open.nextKeyView = later; later.nextKeyView = notForMe; notForMe.nextKeyView = open  // a hidden Open is skipped
-    }
-    required init?(coder: NSCoder) { fatalError("not used") }
-    func height(for width: CGFloat) -> CGFloat { 12 + 6 + well.height(for: width) + 6 + MenuView.rowH }
-
-    override func place() {
-        let wellH = well.height(for: bounds.width), gap: CGFloat = 8
-        label.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 12)
-        well.frame = NSRect(x: 0, y: 18, width: bounds.width, height: wellH)
-        let row = open.isHidden ? [later, notForMe] : [open, later, notForMe]
-        let width = (bounds.width - gap * CGFloat(row.count - 1)) / CGFloat(row.count)
-        for (i, button) in row.enumerated() {
-            let left = (CGFloat(i) * (width + gap)).rounded(), right = (CGFloat(i) * (width + gap) + width).rounded()
-            button.frame = NSRect(x: left, y: 18 + wellH + 6, width: right - left, height: MenuView.rowH)
-        }
-    }
-}
-
 final class CardView: NSView {
     static let width: CGFloat = 340  // BUBBLE_W
     static let textMax: CGFloat = 300  // TEXT_MAX: the reply scrolls past this
@@ -175,8 +104,6 @@ final class CardView: NSView {
     var fit: (_ change: () -> Void) -> Void = { $0() }
     var onReplyClick: (() -> Void)?  // left click on the reply: within 4 pt, not a link, nothing selected
     var onMenu: ((MenuAction) -> Void)?  // after the card hid the menu
-    var onApprove: ((String) -> Void)?  // "once" | "deny"
-    var onNudge: ((NudgeBudget.Outcome) -> Void)?  // the buttons of a nudge: .opened, .later, .notForMe
 
     /// The glass pane: behind everything else, `Chrome.glow` in from the sides and top, `Chrome.gap` short of the bottom.
     let glass = GlassSurface()
@@ -185,27 +112,20 @@ final class CardView: NSView {
     let quote: QuoteBlock
     let statusRow: StatusRow
     let reply = TextBox(width: 302)
-    let footer: WrapLabelView
-    let approval: ApprovalView
-    let nudge: NudgeView
     let caret: CaretView
     private var caretBox: CGRect?  // in the reply's viewport
-    private var footerText = ""
     private var heardText = ""
 
-    init(theme: Theme, hasWatch: Bool) {
+    init(theme: Theme) {
         self.theme = theme
         header = HeaderView(theme: theme)
-        chips = MenuView(hasWatch: hasWatch)
+        chips = MenuView()
         quote = QuoteBlock()
         statusRow = StatusRow()
-        footer = WrapLabelView(.footer)
-        approval = ApprovalView()
-        nudge = NudgeView()
         caret = CaretView()
         super.init(frame: NSRect(x: 0, y: 0, width: CardView.width, height: Chrome.margins.top + Chrome.margins.bottom))
-        for v in [glass, chips, quote, statusRow, reply, footer, approval, nudge, caret, header] as [NSView] { addSubview(v) }
-        for v in [chips, quote, statusRow, reply, footer, approval, nudge] as [NSView] { v.isHidden = true }
+        for v in [glass, chips, quote, statusRow, reply, caret, header] as [NSView] { addSubview(v) }
+        for v in [chips, quote, statusRow, reply] as [NSView] { v.isHidden = true }
         header.frame = NSRect(x: Chrome.glow, y: Chrome.glow, width: CardView.width - 2 * Chrome.glow, height: Chrome.headerH)
         reply.textView.onClick = { [weak self] in self?.onReplyClick?() }
         wire()
@@ -215,17 +135,9 @@ final class CardView: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     private func wire() {
-        chips.digest.onClick = { [weak self] in self?.pressed(.digest) }
         chips.type.onClick = { [weak self] in self?.pressed(.type) }
         chips.stay.onClick = { [weak self] in self?.pressed(.stay) }
-        chips.watch.onClick = { [weak self] in self?.pressed(.watch) }
-        chips.nudges.onClick = { [weak self] in self?.pressed(.nudges) }
         chips.quit.onClick = { [weak self] in self?.pressed(.quit) }
-        approval.allow.onClick = { [weak self] in self?.onApprove?("once") }
-        approval.deny.onClick = { [weak self] in self?.onApprove?("deny") }
-        nudge.open.onClick = { [weak self] in self?.onNudge?(.opened) }
-        nudge.later.onClick = { [weak self] in self?.onNudge?(.later) }
-        nudge.notForMe.onClick = { [weak self] in self?.onNudge?(.notForMe) }
     }
 
     private func pressed(_ action: MenuAction) { hideMenu(); onMenu?(action) }
@@ -368,28 +280,19 @@ final class CardView: NSView {
         placeCaret(at: max(0, text.length - hiddenTail))
     }
 
-    /// A new exchange: nothing of the last reply stays (text, caret, footer).
+    /// A new exchange: nothing of the last reply stays (text, caret).
     func clearReply() {
         dropPending()
         shownReply = nil
         reply.setContent(NSAttributedString())
         caretBox = nil
         caret.isHidden = true
-        footerText = ""; footer.text = ""
         sizeText()
-        if !footer.isHidden { refit { footer.isHidden = true } }
     }
 
     func setCaret(show: Bool, on: Bool) {
         if caret.isHidden == show { caret.isHidden = !show }
         if show { caret.setOn(on) }
-    }
-
-    /// Stored and drawn when `showFooter` runs (notes and files opened: shown when the typing is done).
-    func setFooter(_ text: String) { footerText = text; footer.text = text }
-
-    func showFooter() {
-        if !footerText.isEmpty && footer.isHidden { refit { footer.isHidden = false } }
     }
 
     private func placeCaret(at index: Int) {
@@ -415,50 +318,12 @@ final class CardView: NSView {
         }
     }
 
-    // MARK: approval and menu
+    // MARK: menu
 
-    /// nil hides the approval; text shows it (the window grows for the buttons). `more` other asks wait behind this one. When the
-    /// pet's window has the keyboard, Deny (the safe answer) takes the focus; Tab reaches Allow. VoiceOver hears what is asked as the
-    /// buttons' help.
-    func setApproval(_ text: String?, more: Int = 0) {
-        if let text {
-            approval.label.text = more > 0 ? "Approval +\(more) more" : "Approval"
-            approval.well.text = text
-            for b in [approval.allow, approval.deny] { b.setAccessibilityHelp(text) }
-            refit { approval.isHidden = false }
-            if let window, window.isKeyWindow { window.makeFirstResponder(approval.deny) }
-        } else if !approval.isHidden {
-            dropFocus([approval.allow, approval.deny])
-            refit { approval.isHidden = true }
-        }
-    }
-
-    /// A button that goes away must not keep the keyboard focus.
-    private func dropFocus(_ buttons: [ButtonView]) {
-        if let window, buttons.contains(where: { window.firstResponder === $0 }) { window.makeFirstResponder(nil) }
-    }
-
-    /// nil hides the nudge; text shows it (the window grows for the buttons, Open only when the nudge has a link or a note).
-    func setNudge(_ text: NudgeText?) {
-        if let text {
-            nudge.label.text = text.label
-            nudge.well.text = text.body
-            nudge.open.isHidden = !text.canOpen
-            refit { nudge.isHidden = false }
-        } else if !nudge.isHidden {
-            dropFocus([nudge.open, nudge.later, nudge.notForMe])
-            refit { nudge.isHidden = true }
-        }
-    }
-
-    /// The chips say what a press does next: `staying` offers Wander, `watchPaused` resumes, `nudgesOn` is a bell (crossed out when off).
-    func showMenu(staying: Bool = false, watchPaused: Bool = false, nudgesOn: Bool = true) {
+    /// The Stay chip says what a press does next: `staying` offers Wander.
+    func showMenu(staying: Bool = false) {
         chips.stay.title = staying ? "Wander" : "Stay"
         chips.stay.symbol = staying ? "figure.walk" : "pin"
-        chips.watch.symbol = watchPaused ? "play" : "pause"
-        chips.watch.setAccessibilityLabel(watchPaused ? "Resume watching" : "Pause watching")
-        chips.nudges.symbol = nudgesOn ? "bell" : "bell.slash"
-        chips.nudges.setAccessibilityLabel(nudgesOn ? "Turn nudges off" : "Turn nudges on")
         refit { chips.isHidden = false }
     }
 
@@ -468,21 +333,18 @@ final class CardView: NSView {
 
     // MARK: layout
 
-    private var flow: [NSView] { [chips, quote, statusRow, reply, footer, approval, nudge].filter { !$0.isHidden } }
+    private var flow: [NSView] { [chips, quote, statusRow, reply].filter { !$0.isHidden } }
 
     private func height(of v: NSView) -> CGFloat {
         switch v {
         case chips: return chips.height
         case quote: return quote.height
         case statusRow: return statusRow.height
-        case footer: return footer.height(for: Self.columnWidth)
-        case approval: return approval.height(for: Self.columnWidth)
-        case nudge: return nudge.height(for: Self.columnWidth)
         default: return v.frame.height  // the reply: the height `sizeText` gave it
         }
     }
 
-    /// The height of the card with what shows now, wrapped footer and approval text included.
+    /// The height of the card with what shows now.
     var fittingHeight: CGFloat {
         let rows = flow
         return Chrome.margins.top + Chrome.margins.bottom + rows.map(height(of:)).reduce(0, +) + Chrome.spacing * CGFloat(max(0, rows.count - 1))

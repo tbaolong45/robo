@@ -1,7 +1,7 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// Robo, the macOS app. Its brain is the robo-agent service in ../agent.
+// Robo, the macOS app. Its brain is the robo-agent chat service in ../agent.
 let package = Package(
     name: "Robo",
     platforms: [.macOS(.v26)],
@@ -17,7 +17,7 @@ let package = Package(
         .target(name: "RoboVoice", dependencies: [
             .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
         ]),
-        .target(name: "RoboSystem", dependencies: ["RoboCore"]),  // activity, wake, setup, vault, calendar links, nudge files
+        .target(name: "RoboSystem"),  // setup, keys, starting the chat service
         .target(name: "RoboUI", dependencies: ["RoboCore", "RoboVoice", "RoboSystem", .product(name: "SwiftMath", package: "SwiftMath")]),  // AppKit: window, face, card
         .executableTarget(name: "robo", dependencies: ["RoboUI"]),  // thin: dispatches the subcommands
         .testTarget(name: "RoboCoreTests", dependencies: ["RoboCore"]),

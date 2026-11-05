@@ -1,21 +1,22 @@
 // The Liquid Glass card: the glass pane and its tint,
-// the header and its lights, the quote, the caret, the menu grid, the approval, the sizing and scrolling of the reply, the
+// the header and its lights, the quote, the caret, the menu, the sizing and scrolling of the reply, the
 // skip click. The card paints no frame of its own any more (the pane is a system view behind it), so what is checked here is
 // its geometry, its tint, and that everything else it draws is the small marks on top.
 // Colours that the system decides (label, separator, fills) follow light and dark, so a pixel probe on them asserts "painted /
 // not painted / differs".
 import AppKit
 import Foundation
+import ObjectiveC
 import Testing
 @testable import RoboCore
 @testable import RoboUI
 
 // MARK: helpers
 
-@MainActor private func makeCard(_ t: Theme = Themes.glass, watch: Bool = false) -> CardView {
+@MainActor private func makeCard(_ t: Theme = Themes.glass) -> CardView {
     _ = NSApplication.shared
     Chrome.ink = nil  // a test that gave the card an ink must not colour the next one
-    let card = CardView(theme: t, hasWatch: watch)
+    let card = CardView(theme: t)
     card.renderBudget = .infinity  // a slow machine must not make a test skip a render
     card.setFrameSize(NSSize(width: CardView.width, height: max(200, card.fittingHeight)))
     return card
@@ -103,11 +104,11 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         #expect(card.fittingHeight == 61.0)  // nothing shows: the top margin 42 and the bottom 19
         card.showMenu()
-        #expect(card.fittingHeight == 123.0)  // 42 + 62 (two rows of 28 and 6 between) + 19: one item, so no spacing
-        #expect(card.chips.frame == NSRect(x: 19, y: 42, width: 302, height: 62))
+        #expect(card.fittingHeight == 89.0)  // 42 + a row of 28 + 19: one item, so no spacing
+        #expect(card.chips.frame == NSRect(x: 19, y: 42, width: 302, height: 28))
         card.setStatusRow(typing: true, label: "")
-        #expect(card.fittingHeight == 123.0 + 8 + 16)  // the status row (16) under the menu with the column's 8
-        #expect(card.statusRow.frame == NSRect(x: 19, y: 42 + 62 + 8, width: 302, height: 16))
+        #expect(card.fittingHeight == 89.0 + 8 + 16)  // the status row (16) under the menu with the column's 8
+        #expect(card.statusRow.frame == NSRect(x: 19, y: 42 + 28 + 8, width: 302, height: 16))
         card.setStatusRow(typing: false, label: "")
         card.hideMenu()
         #expect(card.fittingHeight == 61)
@@ -118,9 +119,9 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         fitted(card)
         #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 340 - 12, height: card.frame.height - 6 - 9))
         card.showMenu()  // taller card: the pane follows
-        #expect(card.fittingHeight == 123)
+        #expect(card.fittingHeight == 89)
         card.setFrameSize(NSSize(width: 340, height: card.fittingHeight))
-        #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 328, height: 123 - 15))
+        #expect(card.glass.frame == NSRect(x: 6, y: 6, width: 328, height: 89 - 15))
         #expect(card.glass.isFlipped)
     }
 
@@ -128,9 +129,9 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         let card = makeCard()
         #expect(card.subviews.first === card.glass)
         let others = card.subviews.dropFirst()
-        #expect(others.count == 9 && !others.contains { $0 === card.glass })
+        #expect(others.count == 6 && !others.contains { $0 === card.glass })
         let order = { (v: NSView) in card.subviews.firstIndex { $0 === v }! }
-        for column in [card.chips, card.quote, card.statusRow, card.reply, card.footer, card.approval, card.nudge, card.caret] as [NSView] {
+        for column in [card.chips, card.quote, card.statusRow, card.reply, card.caret] as [NSView] {
             #expect(order(card.header) > order(column) && order(column) > order(card.glass))
         }
     }
@@ -402,7 +403,7 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         #expect(!card.quote.isHidden && card.quote.text.string == "what's due?" && card.quote.followUp.isHidden)
         card.setHeard("and Friday?", followUp: true)
         #expect(!card.quote.followUp.isHidden)
-        card.setHeard("", followUp: true)  // the automatic digest: no user text, so no tag either
+        card.setHeard("", followUp: true)  // a local message: no user text, so no tag either
         #expect(card.quote.isHidden && card.quote.followUp.isHidden)
     }
 
@@ -433,12 +434,12 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
     @Test func aMicroLabelReadsAsASentenceInAGreyInk() {
         let label = MicroLabel("You")
         #expect(label.text == "You")
-        label.text = "searching the web…"
+        label.text = "still working · 40 s"
         #expect(label.fitting.width > 60)
         label.frame = NSRect(origin: .zero, size: label.fitting)
         let painted = Bitmap(snap(label, scale: 2)).pixels.filter { $0.a > 20 }
         #expect(!painted.isEmpty && painted.allSatisfy { abs($0.r - $0.b) < 20 })
-        #expect(Chrome.sentence("searching the web…") == "Searching the web…" && Chrome.sentence("") == "")
+        #expect(Chrome.sentence("still working · 40 s") == "Still working · 40 s" && Chrome.sentence("") == "")
     }
 
     @Test func theStatusRowShowsTheDotsAndTheLabelOnlyWhileTheyAreOn() {
@@ -447,10 +448,10 @@ private let longReply = (0..<24).map { "Paragraph \($0) with a few words in it."
         card.fit = { fits += 1; $0() }
         card.setStatusRow(typing: false, label: "")
         #expect(fits == 0 && card.statusRow.isHidden)
-        card.setStatusRow(typing: true, label: "searching the web…")
+        card.setStatusRow(typing: true, label: "on it…")
         #expect(fits == 1 && !card.statusRow.isHidden && card.statusRow.height == max(16, card.statusRow.label.fitting.height))
-        card.setStatusRow(typing: true, label: "reading a page…")  // the same pair is no change
-        #expect(fits == 1 && card.statusRow.label.text == "reading a page…")
+        card.setStatusRow(typing: true, label: "still working · 40 s")  // the same pair is no change
+        #expect(fits == 1 && card.statusRow.label.text == "still working · 40 s")
         card.setStatusRow(typing: false, label: "listening")
         #expect(fits == 2 && card.statusRow.dots.isHidden && !card.statusRow.label.isHidden && card.statusRow.height == card.statusRow.label.fitting.height)
         card.setStatusRow(typing: false, label: "")
@@ -575,74 +576,45 @@ private extension MicroLabel {
 // MARK: the menu
 
 @Suite @MainActor struct CardMenuTests {
-    @Test func theMenuIsThreeByTwoAndWithoutAWatcherNudgesAndQuitShareTheSecondRow() {
-        func grid(_ card: CardView) -> [String: [Int]] {
-            Dictionary(uniqueKeysWithValues: card.chips.cells.map { ($0.0.title.split(separator: " ").last.map(String.init)!, [$0.1, $0.2, $0.3]) })
-        }
-        #expect(makeCard().chips.buttons.count == 6 && makeCard().chips.subviews.count == 6)  // digest, type, stay, watch, nudges, quit
-        #expect(grid(makeCard()) == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Nudges": [1, 0, 3], "Quit": [1, 3, 3]])  // row, column, columns
-        let watched = grid(makeCard(watch: true))
-        #expect(watched == ["Digest": [0, 0, 2], "Type": [0, 2, 2], "Stay": [0, 4, 2], "Watch": [1, 0, 2], "Nudges": [1, 2, 2], "Quit": [1, 4, 2]])
+    @Test func theMenuHasExactlyTypeStayAndQuit() {
+        let card = makeCard()
+        #expect(card.chips.buttons.map(\.title) == ["Type", "Stay", "Quit"] && card.chips.subviews.count == 3)
+        #expect(card.chips.buttons.map(\.symbol) == ["text.bubble", "pin", "xmark"])
     }
 
-    @Test func theMenuChipsFillTheColumnInSixEqualColumns() {
-        let card = makeCard(watch: true)
+    @Test func theMenuChipsFillTheColumnInThreeEqualColumnsAndOneRow() {
+        let card = makeCard()
         card.showMenu()
-        let rects = card.chips.buttons.map { $0.frame }  // digest, type, stay, watch, nudges, quit
-        #expect(rects.map(\.width) == [97, 96, 97, 97, 96, 97] && rects.map(\.minY) == [0, 0, 0, 34, 34, 34])  // six columns of 45 1/3 and a gap of 6, edges rounded
-        #expect(rects.map(\.height) == [28, 28, 28, 28, 28, 28] && card.chips.height == 62 && card.chips.frame.height == 62)
+        let rects = card.chips.buttons.map { $0.frame }
+        #expect(rects.map(\.width) == [97, 96, 97] && rects.map(\.minY) == [0, 0, 0])  // three columns of 96 2/3 and a gap of 6, edges rounded
+        #expect(rects.map(\.height) == [28, 28, 28] && card.chips.height == 28 && card.chips.frame.height == 28)
         #expect(rects[0].minX == 0 && rects[2].maxX == 302 && rects[1].minX - rects[0].maxX == 6 && rects[2].minX - rects[1].maxX == 6)
-        #expect(rects[3].minX == 0 && rects[5].maxX == 302 && rects[4].minX - rects[3].maxX == 6 && rects[5].minX - rects[4].maxX == 6)  // watch | nudges | quit, two columns each
-        let bare = makeCard()
-        bare.showMenu()
-        #expect(bare.chips.watch.isHidden)
-        #expect(bare.chips.nudges.frame == NSRect(x: 0, y: 34, width: 148, height: 28) && bare.chips.quit.frame == NSRect(x: 154, y: 34, width: 148, height: 28))  // nudges | quit, three columns each
-    }
-
-    @Test(arguments: [true, false]) func theMenuButtonsStayInsideTheColumnAndNeverOverlap(_ watch: Bool) {
-        let card = makeCard(watch: watch)
-        card.showMenu()
-        let shown = card.chips.buttons.filter { !$0.isHidden }
-        #expect(shown.count == (watch ? 6 : 5))
-        let column = NSRect(x: 0, y: 0, width: 302, height: 62)
-        for (i, a) in shown.enumerated() {
-            #expect(column.contains(a.frame), "\(a.title)")
-            for b in shown[(i + 1)...] { #expect(!a.frame.intersects(b.frame), "\(a.title) over \(b.title)") }
-        }
-        #expect(card.chips.frame.width == 302 && card.chips.subviews.count == 6)
     }
 
     @Test func aMenuEntryHidesTheMenuBeforeItIsReported() {
-        let card = makeCard(watch: true)
+        let card = makeCard()
         var got: [(MenuAction, Bool)] = []
         card.onMenu = { got.append(($0, card.chips.isHidden)) }
-        card.showMenu(staying: true, watchPaused: true, nudgesOn: false)
-        #expect(card.chips.stay.title == "Wander" && card.chips.stay.symbol == "figure.walk" && card.chips.watch.symbol == "play" && card.chips.nudges.symbol == "bell.slash")
-        #expect(card.chips.watch.accessibilityLabel() == "Resume watching" && card.chips.nudges.accessibilityLabel() == "Turn nudges on")
+        card.showMenu(staying: true)
+        #expect(card.chips.stay.title == "Wander" && card.chips.stay.symbol == "figure.walk" && card.chips.stay.accessibilityLabel() == "Wander")
         card.chips.stay.onClick?()
         card.showMenu()
-        #expect(card.chips.nudges.title == "Nudges" && card.chips.nudges.symbol == "bell")  // the default: on
-        card.chips.digest.onClick?()
-        card.showMenu()
+        #expect(card.chips.stay.title == "Stay" && card.chips.stay.symbol == "pin")  // the default
         card.chips.type.onClick?()
         card.showMenu()
-        card.chips.watch.onClick?()
-        card.showMenu()
-        card.chips.nudges.onClick?()
-        card.showMenu()
         card.chips.quit.onClick?()
-        #expect(got.map(\.0) == [.stay, .digest, .type, .watch, .nudges, .quit] && got.allSatisfy(\.1))
+        #expect(got.map(\.0) == [.stay, .type, .quit] && got.allSatisfy(\.1))
     }
 
     @Test func buttonsAreButtonsForAccessibilityAndClickWhenReleasedInside() {
-        let card = makeCard(watch: true)
-        #expect(card.chips.digest.accessibilityRole() == .button && card.chips.digest.accessibilityLabel() == "Digest")
+        let card = makeCard()
+        #expect(card.chips.type.accessibilityRole() == .button && card.chips.type.accessibilityLabel() == "Type")
         var clicks = 0
-        card.chips.digest.onClick = { clicks += 1 }
-        _ = card.chips.digest.accessibilityPerformPress()
+        card.chips.type.onClick = { clicks += 1 }
+        _ = card.chips.type.accessibilityPerformPress()
         #expect(clicks == 1)
 
-        let button = ButtonView("Allow", kind: .allow)
+        let button = ButtonView("OK")
         button.frame = NSRect(x: 0, y: 0, width: 100, height: 28)
         button.onClick = { clicks += 1 }
         func release(at p: NSPoint) {
@@ -654,18 +626,12 @@ private extension MicroLabel {
         #expect(clicks == 2)  // released outside: no click
     }
 
-    @Test func theButtonKindsPaintAWashAnAccentFillAndAnOutline() {
-        func shot(_ kind: ButtonView.Kind) -> Bitmap {
-            let b = ButtonView("OK", kind: kind)
-            b.frame = NSRect(x: 0, y: 0, width: 100, height: 28)
-            return Bitmap(snap(b))
-        }
-        let plain = shot(.plain), allow = shot(.allow), deny = shot(.deny)
+    @Test func aButtonPaintsAQuietWashInACapsule() {
+        let b = ButtonView("OK")
+        b.frame = NSRect(x: 0, y: 0, width: 100, height: 28)
+        let plain = Bitmap(snap(b))
         #expect(plain.alpha(14, 14) > 5 && plain.alpha(14, 14) < 60)  // a quiet wash
-        #expect(allow.alpha(14, 14) > 200)  // filled
-        #expect(deny.alpha(14, 14) == 0 && deny.alpha(50, 0) > 0)  // outline only: empty inside, a hairline on the edge
         #expect(plain.alpha(1, 1) == 0)  // capsule: the corner is empty
-        #expect(plain.bytes != allow.bytes && allow.bytes != deny.bytes)
     }
 
     @Test func theFitCallbackWrapsEveryChangeOfHeight() {
@@ -673,177 +639,11 @@ private extension MicroLabel {
         var fits = 0, heights: [CGFloat] = []
         card.fit = { change in fits += 1; change(); heights.append(card.fittingHeight) }
         card.showMenu()
-        card.setApproval("ok?")
-        card.setApproval(nil)
+        card.setStatusRow(typing: true, label: "")
+        card.setStatusRow(typing: false, label: "")
         card.hideMenu()
         card.hideMenu()  // already hidden: nothing to fit
-        #expect(fits == 4 && heights.first == 42 + 62 + 19 && heights.last == 61)
-    }
-}
-
-// MARK: approval and footer
-
-@Suite @MainActor struct CardApprovalTests {
-    @Test func theApprovalShowsTheRequestAndReportsAllowAndDeny() {
-        let card = makeCard()
-        var choices: [String] = []
-        card.onApprove = { choices.append($0) }
-        card.setApproval("Run: ls -la")
-        #expect(!card.approval.isHidden && card.approval.well.text == "Run: ls -la" && card.approval.label.text == "Approval")
-        card.approval.allow.onClick?(); card.approval.deny.onClick?()
-        #expect(choices == ["once", "deny"])
-        card.setApproval(nil)
-        #expect(card.approval.isHidden)
-    }
-
-    @Test func theApprovalSaysHowManyMoreWaitWithoutChangingTheLayout() {
-        let card = makeCard()
-        card.setApproval("Run: ls", more: 2)
-        #expect(card.approval.label.text == "Approval +2 more" && card.approval.well.text == "Run: ls")
-        let height = card.fittingHeight
-        card.setApproval("Run: ls")  // the last one: back to the plain label
-        #expect(card.approval.label.text == "Approval" && card.fittingHeight == height)
-        #expect(card.approval.label.fitting.width < CardView.columnWidth)  // the longer label fits its row
-        card.setApproval("Run: ls", more: 12)
-        #expect(card.approval.label.fitting.width < CardView.columnWidth)
-    }
-
-    @Test func theApprovalGrowsWithItsWrappedText() {
-        let card = makeCard()
-        card.setApproval("ls")
-        let short = card.fittingHeight
-        card.setApproval(String(repeating: "word ", count: 60))
-        #expect(card.fittingHeight > short + 28)
-        let a = card.approval
-        #expect(card.fittingHeight == 42 + a.height(for: 302) + 19 && a.frame.height == a.height(for: 302))
-        #expect(a.allow.frame.maxY == a.frame.height && a.allow.frame.width == 147 && a.deny.frame.minX == 155)
-    }
-
-    @Test func theFooterIsStoredNotShownUntilTheTypingIsDone() {
-        let card = makeCard()
-        card.setFooter("In Obsidian: Plan")
-        #expect(card.footer.isHidden && card.fittingHeight == 61)
-        card.showFooter()
-        #expect(!card.footer.isHidden && card.footer.text == "In Obsidian: Plan" && card.fittingHeight == 42 + card.footer.height(for: 302) + 19)
-        #expect(card.fittingHeight >= 81)
-        card.clearReply()
-        #expect(card.footer.isHidden && card.footer.text == "")
-        card.setFooter("")
-        card.showFooter()
-        #expect(card.footer.isHidden)  // nothing to show
-    }
-
-    @Test func aWrappedFooterCountsInTheHeight() {
-        let card = makeCard()
-        card.setFooter("one\ntwo\nthree")
-        card.showFooter()
-        #expect(card.footer.frame.height == card.footer.height(for: 302) && card.footer.height(for: 302) >= 7 + 3 * 13)
-    }
-
-    @Test func theApprovalAndFooterPaintOnlyTheirOwnMarksOnTheGlass() {
-        let approval = ApprovalView()
-        approval.well.text = "Run: ls -la"
-        approval.frame = NSRect(x: 0, y: 0, width: 302, height: approval.height(for: 302))
-        approval.place()
-        let img = Bitmap(snap(approval))
-        #expect(img.alpha(0.5, approval.well.frame.midY) > 200)  // the well's orange bar
-        #expect(img.at(0.5, approval.well.frame.midY).r > img.at(0.5, approval.well.frame.midY).b)
-        #expect(img.alpha(150, approval.well.frame.minY + 2) > 0)  // and the wash inside the well
-        let footer = WrapLabelView(.footer)
-        footer.text = "In Obsidian: Plan"
-        footer.frame = NSRect(x: 0, y: 0, width: 302, height: footer.height(for: 302))
-        let f = Bitmap(snap(footer))
-        #expect(f.alpha(150, 0) > 0 && f.alpha(150, 2) == 0)  // the hairline above the text
-    }
-}
-
-// MARK: the nudge
-
-@Suite @MainActor struct CardNudgeTests {
-    private func one(url: String? = "https://moodle.example.edu/mod/assign/view.php?id=7") -> NudgeText {
-        NudgeText([NudgeCandidate(id: "a", category: .deadline, title: "MATH201 midterm", detail: "tomorrow 09:00", url: url)])
-    }
-
-    /// Found live (2026-10-20): a deadline read from a post had a quote that fit one line when measured and wrapped when drawn (the
-    /// well draws with `.kern: 0`, which turns pair kerning off), so the well was a line short and the domain line was cut off.
-    @Test func aWellMeasuresTextTheWayItIsDrawn() {
-        _ = NSApplication.shared
-        let font = Chrome.ui(12), quote = "“Hand in the demo problem set within two hours.”"
-        let drawn = Chrome.advance(quote, font)  // with kern 0, as the well draws it
-        let kerned = NSAttributedString(string: quote, attributes: [.font: font]).size().width
-        #expect(kerned < drawn - 0.5, "this text no longer separates the two ways of measuring: pick another")
-        let well = WrapLabelView(.well)
-        let inset = 10 + (Chrome.advance("x", font) / 2).rounded(.down) + 8  // the well's left and right insets
-        well.text = "x"
-        let line = well.height(for: 1000) - 12  // one line, plus 6 above and 6 below
-        well.text = quote
-        #expect(well.height(for: drawn - 0.5 + inset) == 12 + 2 * line)  // one point too narrow for how it is drawn: two lines
-        #expect(well.height(for: drawn + 1 + inset) == 12 + line)  // and room enough: one
-    }
-
-    @Test func aNudgeShowsLabelTitleWhyAndDomainAndReportsTheThreeButtons() {
-        let card = makeCard()
-        var got: [NudgeBudget.Outcome] = []
-        card.onNudge = { got.append($0) }
-        card.setNudge(one())
-        #expect(!card.nudge.isHidden && card.nudge.label.text == "Heads-up")
-        #expect(card.nudge.well.text == "MATH201 midterm\ntomorrow 09:00\n↗ moodle.example.edu")
-        #expect(!card.nudge.open.isHidden)
-        card.nudge.open.onClick?(); card.nudge.later.onClick?(); card.nudge.notForMe.onClick?()
-        #expect(got == [.opened, .later, .notForMe])
-        card.setNudge(nil)
-        #expect(card.nudge.isHidden && card.fittingHeight == 61)
-    }
-
-    @Test func openIsOnlyThereWhenThereIsAnHttpsLinkAndTheOtherButtonsShareTheRow() {
-        let card = makeCard()
-        card.setNudge(one(url: nil))
-        #expect(card.nudge.open.isHidden && card.nudge.well.text == "MATH201 midterm\ntomorrow 09:00")  // no link, no domain line
-        fitted(card)
-        #expect(card.nudge.later.frame.width == 147 && card.nudge.notForMe.frame == NSRect(x: 155, y: card.nudge.later.frame.minY, width: 147, height: 28))
-        card.setNudge(one(url: "http://moodle.example.edu/x"))  // plain http is no link robo opens
-        #expect(card.nudge.open.isHidden)
-        card.setNudge(one())
-        fitted(card)
-        let row = [card.nudge.open, card.nudge.later, card.nudge.notForMe].map(\.frame)
-        #expect(row.map(\.width) == [95, 96, 95] && row[0].minX == 0 && row[2].maxX == 302 && row[1].minX - row[0].maxX == 8 && row[2].minX - row[1].maxX == 8)
-    }
-
-    @Test func theNudgeGrowsWithItsTextAndJoinsTheColumnLikeTheApproval() {
-        let card = makeCard()
-        card.setNudge(one())
-        let short = card.fittingHeight, n = card.nudge
-        #expect(short == 42 + n.height(for: 302) + 19 && n.height(for: 302) == 12 + 6 + n.well.height(for: 302) + 6 + 28)
-        card.setNudge(NudgeText((0..<5).map { NudgeCandidate(id: "\($0)", category: .deadline, title: String(repeating: "word ", count: 12), detail: "tomorrow 09:00") }))
-        #expect(card.fittingHeight > short + 30)
-        fitted(card)
-        #expect(n.frame == NSRect(x: 19, y: 42, width: 302, height: n.height(for: 302)) && n.later.frame.maxY == n.frame.height)
-        card.showMenu()  // the menu sits above it, the column's 8 between
-        #expect(card.fittingHeight == 42 + card.chips.height + 8 + n.height(for: 302) + 19)
-    }
-
-    @Test func severalThingsMakeOneCardWithACountAndAtMostThreeLines() {
-        func c(_ i: Int, _ category: NudgeCategory = .deadline) -> NudgeCandidate {
-            NudgeCandidate(id: "\(i)", category: category, title: "Thing \(i)", detail: "tomorrow 09:00", url: "https://a.example/\(i)")
-        }
-        let deadlines = NudgeText([c(1), c(2), c(3)])
-        #expect(deadlines.title == "3 things due soon" && deadlines.lines == ["Thing 1 · tomorrow 09:00", "Thing 2 · tomorrow 09:00", "Thing 3 · tomorrow 09:00"])
-        #expect(deadlines.domain == nil && !deadlines.canOpen)  // which link would Open take?
-        let mixed = NudgeText([c(1), c(2, .event), c(3), c(4), c(5)])
-        #expect(mixed.title == "5 things coming up" && mixed.lines.count == 4 && mixed.lines.last == "+ 2 more")
-        #expect(NudgeText([NudgeCandidate(id: "x", category: .opportunity, title: "Programme", detail: "")]).label == "Worth a look")
-    }
-
-    @Test func theNudgePaintsItsWellAndButtonsOnTheGlass() {
-        let nudge = NudgeView()
-        nudge.well.text = "MATH201 midterm\ntomorrow 09:00"
-        nudge.frame = NSRect(x: 0, y: 0, width: 302, height: nudge.height(for: 302))
-        nudge.place()
-        let img = Bitmap(snap(nudge))
-        let wash = img.straight(20, nudge.well.frame.midY)  // a neutral note, no warning colour
-        #expect(wash.a > 0 && abs(wash.r - wash.b) < 12)
-        let open = nudge.open.frame
-        #expect(img.alpha(open.midX, open.minY + 3) > 0)  // the filled capsule
+        #expect(fits == 4 && heights.first == 42 + 28 + 19 && heights.last == 61)
     }
 }
 
@@ -882,18 +682,16 @@ private extension MicroLabel {
     }
 
     @Test func aFirstReplyAfterAnEmptyQuoteStillFollowsTheEnd() {
-        let card = makeCard()  // as the window starts an exchange: the quote and the footer are cleared, then the reply comes
+        let card = makeCard()  // as the window starts an exchange: the quote is cleared, then the reply comes
         card.setHeard("", followUp: false)
-        card.setFooter("")
         card.setReply(markdown: longReply, hiddenTail: 0)
-        card.showFooter()
         #expect(card.reply.scrollMaximum > 0 && card.reply.scrollValue >= card.reply.scrollMaximum - 4)
     }
 
     @Test func theStatusLabelHasRoomForEveryTextItIsGiven() {
         let card = makeCard()
-        card.setStatusRow(typing: true, label: "browsing…")
-        for label in ["using computer_use…", "searching the web…", "ok"] {
+        card.setStatusRow(typing: true, label: "on it…")
+        for label in ["still working · 140 s", "still working · 60 s", "ok"] {
             card.setStatusRow(typing: true, label: label)
             #expect(card.statusRow.label.frame.width >= card.statusRow.label.fitting.width, "\(label)")
         }
@@ -1038,7 +836,7 @@ private extension MicroLabel {
         #expect(card.reply.string == "see the notes")  // the link is not typed into the text
     }
 
-    /// The reply is a model's text built from mail: `[grades](https://evil.example/?d=SECRET)` must not leave on one click. A click
+    /// The reply is a model's text: `[grades](https://evil.example/?d=SECRET)` must not leave on one click. A click
     /// asks first, with the full address and the words that showed it, and only "Open" opens.
     @Test func aLinkAsksWithItsFullAddressAndItsWordsAndOpensOnlyOnOpen() {
         let card = makeCard()
@@ -1065,24 +863,45 @@ private extension MicroLabel {
         #expect(words == ["https://example.com/a", ""])
     }
 
-    /// The alert also says what the source check found (it needs no request, so the text is a pure function of the address and the words).
-    @Test func theLinkAlertSaysWhatTheSourceCheckFound() throws {
-        func text(_ link: String, _ words: String = "") -> (title: String, body: String, open: String) {
-            BoxTextView.alertText(for: URL(string: link)!, words: words)
+    /// The alert's text: the full address, and the words that showed it only when they say something else.
+    @Test func theLinkAlertSaysTheFullAddressAndTheWords() {
+        let address = "https://evil.example/collect?d=SECRET&more=1#frag"
+        let url = URL(string: address)!
+        #expect(BoxTextView.alertText(for: url, words: "your grades") == address + "\n\nThe link text says “your grades”.")
+        #expect(BoxTextView.alertText(for: url, words: "") == address)
+        #expect(BoxTextView.alertText(for: url, words: address) == address)  // nothing else to say
+        let cut = String(repeating: "x", count: 120)
+        #expect(BoxTextView.alertText(for: url, words: cut + "yyy") == address + "\n\nThe link text says “\(cut)”.")  // the words are cut, the address never
+    }
+
+    /// The real alert: only its modal run, the app's "running" and its activation are replaced, for the length of this test (which holds
+    /// the main actor throughout), so nothing shows and nothing takes the keyboard. Cancel comes first, so it is what the alert falls to.
+    /// AppKit gives a first button titled Cancel the Esc key, not Return, and makes no button the Return default: no key opens the link.
+    @Test func theLinkAlertShowsTheFullAddressWithCancelAsItsDefaultAndOnlyOpenOpens() throws {
+        func replace(_ cls: AnyClass, _ selector: Selector, with block: Any) -> () -> Void {
+            let method = class_getInstanceMethod(cls, selector)!
+            let original = method_getImplementation(method)
+            method_setImplementation(method, imp_implementationWithBlock(block))
+            return { method_setImplementation(method, original) }
         }
-        let known = text("https://arxiv.org/abs/2410.01234", "the paper")
-        #expect(known.title == "Open this link?" && known.open == "Open")
-        #expect(known.body.hasPrefix("https://arxiv.org/abs/2410.01234\n\nThe link text says “the paper”.\n\n✓ A primary source (arxiv.org)."))
-        let plain = text("https://example.org/page")
-        #expect(plain.title == "Open this link?" && plain.open == "Open" && plain.body.contains("Not on Robo's list of known sources"))
-        let careful = text("https://bit.ly/3abc")
-        #expect(careful.title == "Open this link?" && careful.open == "Open anyway" && careful.body.contains("⚠ Be careful with this link.") && careful.body.contains("shortened"))
-        let scam = text("https://paypal.com.evil.xyz/login")
-        #expect(scam.title == "This link looks like a scam" && scam.open == "Open anyway" && scam.body.contains("⚠ This looks like a scam."))
-        // the classic: words that name one site on a link that goes to another
-        let mismatch = text("https://evil.example.xyz/collect", "paypal.com")
-        #expect(mismatch.title == "This link looks like a scam" && mismatch.body.contains("The link says “paypal.com” but goes to evil.example.xyz"))
-        #expect(!text("mailto:a@b.example").body.contains("Robo's list"))  // a mail address is not a website
+        var alert: NSAlert?, answer = NSApplication.ModalResponse.alertFirstButtonReturn
+        let run: @convention(block) (NSAlert) -> NSApplication.ModalResponse = { alert = $0; return answer }
+        let running: @convention(block) (NSApplication) -> Bool = { _ in true }
+        let activate: @convention(block) (NSApplication) -> Void = { _ in }
+        let undo = [replace(NSAlert.self, #selector(NSAlert.runModal), with: run),
+                    replace(NSApplication.self, #selector(getter: NSApplication.isRunning), with: running),
+                    replace(NSApplication.self, NSSelectorFromString("activate"), with: activate)]
+        defer { undo.forEach { $0() } }
+        let address = "https://evil.example/collect?d=SECRET&more=1#frag"
+        #expect(!BoxTextView.askToOpen(URL(string: address)!, "your grades"))  // the first button: Cancel
+        let shown = try #require(alert)
+        #expect(shown.messageText == "Open this link?" && shown.informativeText == address + "\n\nThe link text says “your grades”.")
+        #expect(shown.buttons.map(\.title) == ["Cancel", "Open"])
+        shown.layout()  // as `runModal` does: it picks the first responder here
+        #expect(shown.buttons[0].keyEquivalent == "\u{1b}" && shown.buttons[1].keyEquivalent == "")  // Esc cancels, no key opens
+        #expect(shown.window.defaultButtonCell?.title != "Open" && shown.window.initialFirstResponder !== shown.buttons[1])
+        answer = .alertSecondButtonReturn
+        #expect(BoxTextView.askToOpen(URL(string: address)!, ""))  // the second: Open
     }
 
     /// With no running app (every test) the default asks nothing and says no, so a test that forgets to replace it opens nothing.
@@ -1091,7 +910,7 @@ private extension MicroLabel {
         #expect(!BoxTextView.askToOpen(URL(string: "https://example.com/")!, "example"))
     }
 
-    /// The reply is a model's text built from mail, Teams and Moodle: a link in it may not open a file, a share or an app.
+    /// The reply is a model's text: a link in it may not open a file, a share or an app.
     @Test(arguments: ["file:///etc/passwd", "smb://host/share", "javascript:alert(1)", "robo://x", "ftp://host/f", "x-apple.systempreferences:com.apple.preference.security",
                       "tel:123", "data:text/html,hi", "/relative/path", "example.com", "vnc://host", "FILE:///Users"])
     func aLinkToAnythingElseDoesNothing(_ link: String) {
@@ -1137,7 +956,7 @@ private extension MicroLabel {
     }
 
     @Test func spaceAndReturnPressAButtonButNeverAHiddenOne() {
-        let b = ButtonView("Allow", kind: .allow)
+        let b = ButtonView("Stay")
         var presses = 0
         b.onClick = { presses += 1 }
         #expect(b.acceptsFirstResponder && b.canBecomeKeyView)
@@ -1147,30 +966,7 @@ private extension MicroLabel {
         b.isHidden = true
         b.keyDown(with: key(49, " "))
         #expect(presses == 2 && !b.canBecomeKeyView)
-        #expect(b.accessibilityRole() == .button && b.accessibilityLabel() == "Allow")
-    }
-
-    @Test func tabGoesBetweenAllowAndDenyAndVoiceOverHearsTheRequest() {
-        let card = makeCard()
-        card.setApproval("rm -rf build")
-        #expect(card.approval.allow.nextKeyView === card.approval.deny && card.approval.deny.nextKeyView === card.approval.allow)
-        #expect(card.approval.allow.accessibilityHelp() == "rm -rf build" && card.approval.deny.accessibilityHelp() == "rm -rf build")
-        #expect(card.nudge.open.nextKeyView === card.nudge.later && card.nudge.notForMe.nextKeyView === card.nudge.open)
-    }
-
-    @Test func inAKeyWindowDenyTakesTheFocusAndAnApprovalThatGoesTakesItAway() {
-        let card = makeCard()
-        let window = NSPanel(contentRect: NSRect(x: 100_000, y: 100_000, width: 340, height: 400), styleMask: [.borderless, .nonactivatingPanel],
-                             backing: .buffered, defer: false)
-        window.contentView?.addSubview(card)
-        window.orderFrontRegardless()
-        window.makeKey()
-        defer { window.orderOut(nil) }
-        guard window.isKeyWindow else { return }  // a locked screen gives no key window; the rest is the same code path
-        card.setApproval("send the mail")
-        #expect(window.firstResponder === card.approval.deny)  // the safe answer, not Allow
-        card.setApproval(nil)
-        #expect(window.firstResponder !== card.approval.deny && window.firstResponder !== card.approval.allow)
+        #expect(b.accessibilityRole() == .button && b.accessibilityLabel() == "Stay")
     }
 
     @Test func increaseContrastDrawsTheInkAtFullStrengthAndStrengthensTheVeil() {

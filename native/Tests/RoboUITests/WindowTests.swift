@@ -1,5 +1,5 @@
-// The window: the displays and their coordinates, layout, dragging across displays, the Type window, the
-// menu and leaving. The rig (fake agent, ear, displays, clock, openers) is in TestRig.swift.
+// The window: the displays and their coordinates, layout, dragging across displays, the menu and leaving.
+// The rig (fake agent, ear, displays, clock) is in TestRig.swift.
 import AppKit
 import Foundation
 import Testing
@@ -460,13 +460,10 @@ import RoboVoice
     // MARK: the menu
 
     @Test func theMenuEntriesDoWhatTheyAreFor() async {
-        let r = Rig([.event(.runEnded(status: "completed", output: "digest"))], chat: true)
+        let r = Rig(chat: true)
         defer { r.close() }
         r.window.menu(.type)
         #expect(r.chatFocuses == 1)
-        r.window.menu(.digest)
-        #expect(await pump(!r.agent.asked.isEmpty && !r.window.busy))
-        #expect(r.agent.asked[0].text == RoboWindow.digestPrompt)
         r.window.menu(.quit)
         #expect(await pump(r.terminated))
     }
@@ -482,39 +479,19 @@ import RoboVoice
         #expect(w.roamer.heldUntil <= r.clock.now() + 1)
     }
 
-    @Test func theMenuPausesAndResumesWatchingAndRemembersIt() async {
-        let watcher = FakeWatcher()
-        let r = Rig(watcher: watcher)
-        defer { r.close() }
-        let file = r.dir.appendingPathComponent("watch.paused")
-        #expect(watcher.started && !watcher.paused)
-        r.window.menu(.watch)
-        #expect(watcher.paused && FileManager.default.fileExists(atPath: file.path))
-        r.window.menu(.watch)
-        #expect(!watcher.paused && !FileManager.default.fileExists(atPath: file.path))
-        r.window.menu(.watch)
-        r.window.quit()
-        #expect(await pump(watcher.stopped))
-        let again = FakeWatcher()
-        let r2 = Rig(watcher: again, watchPaused: true)  // still paused after a restart
-        defer { r2.close() }
-        #expect(again.paused && again.started)
-    }
-
     // MARK: leaving
 
-    @Test func closingStopsTheListenerTheWatcherAndThePoller() async {
-        let watcher = FakeWatcher()
-        let r = Rig(watcher: watcher, health: "http://127.0.0.1:8765")
+    @Test func closingStopsTheListenerAndThePoller() async {
+        let r = Rig(health: "http://127.0.0.1:8765")
         defer { r.close() }
         r.window.quit()
         #expect(await pump(r.terminated))
-        #expect(r.ear.stopped && watcher.stopped && r.pollers[0].stopped == 1)
+        #expect(r.ear.stopped && r.pollers[0].stopped == 1)
     }
 
     // MARK: leaving without a freeze
 
-    /// A run still being created (the gateway is down) has no id to stop. Waiting for one must not freeze
+    /// A run still being created (the agent is down) has no id to stop. Waiting for one must not freeze
     /// the pet, which is still on screen: the waits happen off the main thread, after the panel is gone.
     @Test func quitWhileARunHasNoIdNeverBlocksTheMainThread() async {
         let r = Rig()
@@ -532,8 +509,7 @@ import RoboVoice
     }
 
     @Test func aSystemQuitRunsTheCleanupAndWaitsForIt() async {
-        let watcher = FakeWatcher()
-        let r = Rig([delta("x"), .wait, .event(.runEnded(status: "cancelled"))], watcher: watcher, health: "http://127.0.0.1:9")
+        let r = Rig([delta("x"), .wait, .event(.runEnded(status: "cancelled"))], health: "http://127.0.0.1:9")
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.mind.activity == .talking))
@@ -545,7 +521,7 @@ import RoboVoice
         #expect(!r.window.panel.isVisible && !replied)
         #expect(await pump(replied))
         #expect(r.agent.stopped == ["run_1"], "the running request is stopped before the app ends")
-        #expect(r.ear.stops == 1 && watcher.stopped && r.pollers[0].stopped == 1)
+        #expect(r.ear.stops == 1 && r.pollers[0].stopped == 1)
         #expect(r.window.shouldTerminate(reply: {}) == .terminateNow)  // done: nothing more to wait for
         r.agent.gate.signal()
     }

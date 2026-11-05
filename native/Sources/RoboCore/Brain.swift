@@ -9,12 +9,6 @@ public struct BrainError: Error, LocalizedError, Equatable, CustomStringConverti
     public var description: String { message }
 }
 
-/// How to answer a pending approval. There is no "always" on purpose.
-public enum ApprovalChoice: String, Sendable {
-    /// `session`: that kind of action for the rest of this run; robo uses it only for desktop control.
-    case once, session, deny
-}
-
 private struct Malformed: Error {}
 
 /// Declines every redirect (the 3xx comes back as the answer), as httpx does by default.
@@ -57,7 +51,7 @@ struct SSEParser {
 /// Minimal client for one agent server. It keeps no per-run state (the caller tracks the run id
 /// that `ask` reports), only immutable settings, so any number of runs may use one client at once.
 public final class AgentClient: Sendable {
-    private static let terminal = ["run.completed", "run.failed", "run.cancelled", "run.interrupted"]
+    private static let terminal = ["run.completed", "run.failed", "run.cancelled"]
 
     private let base: String
     private let auth: String
@@ -92,14 +86,6 @@ public final class AgentClient: Sendable {
     /// Ask the agent to stop a run.
     public func stop(_ runId: String) async throws {
         _ = try await send("POST", "/v1/runs/\(runId)/stop")
-    }
-
-    /// Answer a pending approval. `requestId` (from the `approval.request` event) names the request; without it the agent
-    /// answers the oldest one it has pending, which is not always the one the user saw.
-    public func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String = "") async throws {
-        var body = ["choice": choice.rawValue]
-        if !requestId.isEmpty { body["request_id"] = requestId }
-        _ = try await send("POST", "/v1/runs/\(runId)/approval", body)
     }
 
     /// The run's events; always ends with exactly one `.runEnded` and never throws.
@@ -163,10 +149,10 @@ public final class AgentClient: Sendable {
                 var sse = SSEParser()
                 for try await byte in bytes {
                     guard let frame = sse.feed(byte) else { continue }
-                    let events = try Self.parse(frame.data)
+                    let event = try Self.parse(frame.data)
                     if let id = frame.id, !id.isEmpty { last = id }
-                    events.forEach { out.yield($0) }
-                    if case .runEnded? = events.last { return }
+                    if let event { out.yield(event) }
+                    if case .runEnded? = event { return }
                 }
                 failure = "Robo's agent stream ended without a result"
             } catch let e as BrainError {  // an error response: retrying would get the same
@@ -224,38 +210,13 @@ public final class AgentClient: Sendable {
         throw BrainError("Robo's agent error \(r.statusCode): \(detail)")
     }
 
-    /// The events of one frame: a `run.completed` that reports its usage gives `.usage` first, then `.runEnded`.
-    static func parse(_ json: String) throws -> [Event] {
+    /// The robo event of one frame (nil for ones robo ignores).
+    static func parse(_ json: String) throws -> Event? {
         guard let d = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { throw Malformed() }
-        return [usage(d).map { .usage($0) }, parse(d)].compactMap { $0 }
-    }
-
-    /// The tokens and the model of a `run.completed` frame (`usage`: input_tokens, output_tokens, total_tokens, cache_read_tokens,
-    /// cache_write_tokens; `runtime`: provider, model); nil for any other frame, or one without a `usage` object.
-    static func usage(_ d: [String: Any]) -> UsageRecord? {
-        guard d["event"] as? String == "run.completed", let u = d["usage"] as? [String: Any], !u.isEmpty else { return nil }
-        let (input, output) = (u["input_tokens"] as? Int ?? 0, u["output_tokens"] as? Int ?? 0)
-        return UsageRecord(model: (d["runtime"] as? [String: Any])?["model"] as? String ?? "", input: input, output: output,
-                           total: u["total_tokens"] as? Int ?? input + output, cacheRead: u["cache_read_tokens"] as? Int ?? 0,
-                           cacheWrite: u["cache_write_tokens"] as? Int ?? 0)
-    }
-
-    /// Map one agent run event to a robo event (nil for ones robo ignores).
-    static func parse(_ d: [String: Any]) -> Event? {
         guard let name = d["event"] as? String else { return nil }
         switch name {
         case "message.delta":
             return .delta(d["delta"] as? String ?? "")
-        case "tool.started":
-            return .toolStarted(d["tool"] as? String ?? "")
-        case "tool.completed":
-            return .toolCompleted(tool: d["tool"] as? String ?? "", error: d["error"] as? Bool ?? false)
-        case "approval.request":
-            let what = d["description"] as? String ?? ""
-            var command = d["command"] as? String ?? ""
-            if command.hasSuffix("(plugin approval rule)") { command = "" }  // robo-guard's sentence says it all
-            return .approvalNeeded(!what.isEmpty && !command.isEmpty ? "\(what): \(command)" : what.isEmpty ? command : what,
-                                   id: d["request_id"] as? String ?? "")
         case _ where terminal.contains(name):
             return .runEnded(status: String(name.dropFirst("run.".count)), output: d["output"] as? String ?? "",
                              error: d["error"] as? String ?? "")

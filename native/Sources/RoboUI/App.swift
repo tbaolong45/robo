@@ -1,30 +1,21 @@
 // The conversation: asking the agent, what its events do to the face and the card, the reply
-// typed letter by letter, the card's life (open, close in a while), and what robo made opening by itself.
-// Plus `RoboApp.run()`, the app itself.
+// typed letter by letter, and the card's life (open, close in a while).
 import AppKit
 import RoboCore
-import RoboSystem
 import RoboVoice
 
 extension RoboWindow {
     // MARK: - talking to the agent
 
     /// Start one run; while another is in flight, stop it and ask this one after it.
-    func ask(_ text: String, waitNetwork: Bool = false) {
+    func ask(_ text: String) {
         if chatOpen && Intent.closesChat(text) {  // "close the chat" closes the chat window; it is not a request for the agent
             closeChat()
             return
         }
-        dismissNudge()  // a request of any kind takes the card: the nudge is closed unanswered
-        scout.running?.cancel()  // the user comes first: an LMS scan in the background gives way (Scout.swift)
         if busy {
             pending = text
             stop()
-            return
-        }
-        let cap = machine.dailyTokens
-        if cap > 0 && Usage.todayTokens(file: machine.usageFile, now: machine.wall()) >= cap {  // no run starts: it would only cost more
-            say("Today's token budget (\(cap)) is used up. Raise the number in daily_tokens (in ~/.local/share/robo) or wait for tomorrow.")
             return
         }
         let day = today()
@@ -32,78 +23,37 @@ extension RoboWindow {
             busy = true
             runID = nil
             cancel = false
-            scanned = nil
         }
         reply = ""
         runStart = now()
-        toolLabel = ""
         // One agent session per day and persona version (Setup persona stamp).
         sessionID = ["robo", day.iso, persona].filter { !$0.isEmpty }.joined(separator: "-")
-        digestDay = text == RoboWindow.digestPrompt ? day : nil
-        autoDigest = waitNetwork && digestDay != nil
-        startedAt = machine.wall()  // files robo makes from now on are opened when it's done
         if machine.chatOn {
             // Your turn and Robo's answer go to the chat window, which keeps the conversation; the pet's card only listened.
-            chatBegin(you: digestDay == nil ? text : (waitNetwork ? nil : "School digest"), show: !autoDigest)
+            chatBegin(you: text)
             clearReply()
         } else {
             let shown = !tw.text.isEmpty && !card.isHidden  // an answer is still up, or just
             let follow = shown || now() - answeredAt < RoboWindow.followUpS  // was: this follows it up
-            setHeard(digestDay != nil ? "" : text, followUp: follow)
+            setHeard(text, followUp: follow)
             clearReply()
         }
         onEvent(.userSent(text))
-        let (session, since, output, vault) = (sessionID, startedAt, machine.outputDir, machine.vaultDir)
-        let (receipts, usageFile, clock, wall, began) = (machine.receiptsFile, machine.usageFile, machine.clock, machine.wall, runStart)
-        Task.detached { [self] in
-            await work(text, session: session, waitNetwork: waitNetwork, finish: { status, reply, usage, steps in
-                var found = status == "completed" ? Self.made(output: output, vault: vault, since: since) : Made()
-                found.receipts = Receipt.lines(reply: reply, evidence: ReceiptLog.read(receipts, since: since))
-                Usage.append(Usage.line(usage, status: status, seconds: clock() - began, steps: steps, wall: wall()), to: usageFile)
-                return found
-            })
-        }
+        let session = sessionID
+        Task.detached { [self] in await work(text, session: session) }
     }
 
     /// The worker (any thread): everything it learns goes to the main thread through the bridge.
-    /// `finish` (the run ended `status`, with this `reply`, `usage` and number of tool `steps`) reads what the request made and
-    /// what the guard recorded, and logs the run: here and not at the end of the run on the main thread, as the folders can
-    /// hold tens of thousands of files.
-    func work(_ text: String, session: String, waitNetwork: Bool,
-              finish: (_ status: String, _ reply: String, _ usage: UsageRecord?, _ steps: Int) -> Made) async {
+    func work(_ text: String, session: String) async {
         let emit = bridge.event
-        if waitNetwork {
-            let online = await withCheckedContinuation { c in
-                DispatchQueue.global().async {
-                    c.resume(returning: waitForNetwork { self.lock.withLock { self.cancel } || self.network() })
-                }
-            }
-            if !online {
-                emit(.runEnded(status: "failed", error: "I can't reach the internet yet."))
-                return
-            }
-        }
         if lock.withLock({ cancel }) {
             emit(.runEnded(status: "cancelled"))
             return
         }
         do {
-            var streamed = "", steps = 0
-            var usage: UsageRecord?
-            for try await ev in agent.ask(text, sessionId: session, started: { [weak self] id in self?.started(id) }) {
-                switch ev {
-                case .delta(let t): streamed += t
-                case .toolStarted: steps += 1
-                case .usage(let u): usage = u
-                case .runEnded(let status, let output, _):
-                    let found = finish(status, output.isEmpty ? streamed : output, usage, steps)
-                    lock.withLock { scanned = found }
-                default: break
-                }
-                emit(ev)
-            }
+            for try await ev in agent.ask(text, sessionId: session, started: { [weak self] id in self?.started(id) }) { emit(ev) }
         } catch let e as BrainError {
-            poller?.poke()  // is the gateway down? the light says so within a second
+            poller?.poke()  // is the agent down? the light says so within a second
             emit(.runEnded(status: "failed", error: e.message))
         } catch {  // never leave the window stuck "busy"
             emit(.runEnded(status: "failed", error: "Something went wrong: \(error)"))
@@ -130,22 +80,6 @@ extension RoboWindow {
         if running, let run { background { [agent] in try await agent.stop(run) } }
     }
 
-    /// A click on the card answers the ask it shows (the oldest), then the next one shows.
-    func approve(_ choice: ApprovalChoice) {
-        if !approvals.isEmpty { answer(choice, approvals.removeFirst().id) }
-        showApproval()
-    }
-
-    /// Tell the agent what to do about one ask, by its id: without one it answers the oldest pending ask, which may be another.
-    func answer(_ choice: ApprovalChoice, _ id: String) {
-        if let run = lock.withLock({ runID }) { background { [agent] in try await agent.approve(run, choice, requestId: id) } }
-    }
-
-    /// The card shows the oldest ask and how many wait behind it; with none it hides.
-    func showApproval() {
-        card.setApproval(approvals.first?.text, more: max(0, approvals.count - 1))
-    }
-
     /// The run's own stream reports what happened, so a failed call is ignored.
     func background(_ call: @escaping () async throws -> Void) {
         Task { try? await call() }
@@ -153,16 +87,11 @@ extension RoboWindow {
 
     // MARK: - voice
 
-    static let handsFreeRefusal = "Hold Ctrl+Q and say that again: without the key I only answer questions."
-
     func onHeard(_ text: String, handsFree: Bool) {
         onEvent(.listening(false))  // changes nothing unless robo was listening
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !said.isEmpty && handsFree {
-            // said in the follow-up window without the key (the TV or the room may have said it), and robo has not woken for it:
-            // what may change something, or what `Intent` cannot read, is never acted on, and the reply being read stays
-            if Intent.changesThings(said) { return refuseHandsFree() }
-            onEvent(.listening(true))  // taken: the wake the listener left to us (it stops a run and clears the last reply)
+        if !said.isEmpty && handsFree {  // said in the follow-up window without the key: robo has not woken for it yet
+            onEvent(.listening(true))  // the wake the listener left to us (it stops a run and clears the last reply)
             onEvent(.listening(false))
         }
         if !said.isEmpty {
@@ -170,14 +99,6 @@ extension RoboWindow {
         } else if !busy {
             say("Sorry, I didn't catch that.")
         }
-    }
-
-    /// The note goes beside the reply (a line of the chat, or the card's "heard" line), and the follow-up window the listener closed
-    /// when it delivered the sentence is open again for what is left of it.
-    private func refuseHandsFree() {
-        if chatOpen { say(Self.handsFreeRefusal) } else { setHeard(Self.handsFreeRefusal) }
-        if followUntil > now() { ear?.followUp(seconds: followUntil - now()) }
-        refresh()
     }
 
     func onNote(_ text: String) {
@@ -195,13 +116,11 @@ extension RoboWindow {
     /// of the reply: the agent goes on and `runEnded` finishes it.
     func say(_ text: String) {
         if chatOpen {  // a notice is a line of the conversation; the answer being typed (if any) is not touched
-            dismissNudge()
             retireListeningCard()
             transcript.note(text)
             chat?.chat.set(turns: transcript.turns)
             return
         }
-        dismissNudge()
         setHeard("")
         clearReply()
         feed(text, end: !busy)
@@ -215,38 +134,16 @@ extension RoboWindow {
         switch ev {
         case .listening(true):
             stop()  // speaking over robo interrupts its answer
-            dismissNudge()
             noted = false
             chatInterrupted(stopped: busy, footer: busy ? [] : chatFooter)  // an answer being written in the chat is kept as far as it got
             setHeard("")
             clearReply()
             open()  // the pet's card listens; the chat opens when there is something to ask
         case .userSent:
-            if !machine.chatOn {
-                open()
-            } else if autoDigest && !chatOpen {  // it goes on the card, and nobody asked: no permission dialog
-                setHeard("")
-                open(askScreen: false)
-            }
+            if !machine.chatOn { open() }
         case .delta(let t):
             reply += t
             feed(reply)
-        case .toolStarted(let tool):
-            toolLabel = Mind.toolLabel(tool)
-        case .approvalNeeded(let d, let id):
-            if autoDigest {
-                // The automatic digest only reads and nobody is looking: every ask is denied at once, none waits on a
-                // card (a digest from the menu is attended and asks). Every other ask shows the card: nothing is approved unseen.
-                answer(.deny, id)
-                refresh()
-                return
-            }
-            let scalars = d.unicodeScalars
-            let shown = scalars.count <= RoboWindow.approvalMax ? d
-                : String(String.UnicodeScalarView(scalars.prefix(RoboWindow.approvalMax - 1))) + "…"
-            approvals.append((id, shown))  // parallel tool calls ask together: in order, the oldest first
-            showApproval()  // room for the buttons: the window grows
-            open()
         case .runEnded(let status, let output, let error):
             ended(status: status, output: output, error: error)
         default:
@@ -258,45 +155,26 @@ extension RoboWindow {
     }
 
     private func ended(status: String, output: String, error: String) {
-        let made = lock.withLock { () -> Made? in
+        lock.withLock {
             busy = false
             runID = nil
-            defer { scanned = nil }
-            return scanned
         }
-        approvals.removeAll()  // a run that ended has nothing left to ask
-        showApproval()
-        toolLabel = ""
         var text = status == "completed" ? (output.isEmpty ? reply : output) : (error.isEmpty ? "Run \(status)." : error)
         if listening {  // interrupted by the user speaking: keep listening
             mind = mind.react(.listening(true), now: now())
         }
-        if let day = digestDay, status == "completed" { try? digest.mark(day) }
         if status == "completed" { answeredAt = now() }
         followDue = status == "completed" && pending.isEmpty && !listening  // a reply needs no "robo", once it is typed (finishedTyping)
-        var lines: [String] = []
-        if status == "completed" && !listening {
-            let (notes, files) = (made?.notes ?? [], made?.files ?? [])
-            for n in notes { machine.openNote(n, !autoDigest) }  // the automatic digest opens behind what you are doing
-            for f in files { machine.openFile(f) }
-            if !notes.isEmpty { lines.append("In Obsidian: " + notes.map { $0.deletingPathExtension().lastPathComponent }.joined(separator: ", ")) }
-            if !files.isEmpty { lines.append("Opened " + files.map(\.lastPathComponent).joined(separator: ", ")) }
-        }
-        if !listening { lines += made?.receipts ?? [] }  // what the guard recorded, also under a failed or stopped run: a send may have happened
         let toChat = machine.chatOn && chatOpen  // the answer is written in the chat window (else on the pet's card, as before)
-        var stopped = false
-        if toChat && status != "completed" && !reply.isEmpty {  // cut short: what arrived stays, marked as stopped
-            (text, stopped) = (reply, true)
-            lines.insert("stopped", at: 0)
-        }
+        let cutShort = toChat && status != "completed" && !reply.isEmpty  // what arrived stays, marked as stopped
+        if cutShort { text = reply }
+        let footer = cutShort ? ["stopped"] : []
         if !listening && pending.isEmpty {
-            if machine.chatOn { (chatFooter, chatFailed) = (lines, status != "completed" && !stopped) }  // sealed when the typing is done
-            if !toChat { card.setFooter(lines.joined(separator: "\n")) }  // shown when the typing is done
+            if machine.chatOn { (chatFooter, chatFailed) = (footer, status != "completed" && !cutShort) }  // sealed when the typing is done
             feed(text, end: true)
         } else if toChat {
-            chatInterrupted(stopped: status != "completed", footer: lines)  // you spoke or asked again: nothing more is typed
+            chatInterrupted(stopped: status != "completed", footer: footer)  // you spoke or asked again: nothing more is typed
         }
-        digestDay = nil
         if !toChat { open(closeAfter: listening ? 0 : RoboWindow.closeAfter) }
         if !pending.isEmpty {
             text = pending
@@ -318,7 +196,6 @@ extension RoboWindow {
             }
         }
         alive(now)
-        if machine.wall() >= nudge.checkAt { nudgeTick() }  // wall time: the Mac's sleep does not stop a deadline
         if !card.isHidden && now >= sampleAt { look() }  // nothing runs while the card is away
         if chatOpen && now >= chatSampleAt { chatLook() }  // one look at a time (`sampling`): the other tries again at the next tick
         refresh()
@@ -355,7 +232,7 @@ extension RoboWindow {
         caret(now)
         let listeningNow = m.activity == .listening
         let thinking = busy && reply.isEmpty && !listeningNow
-        let label = listeningNow ? "listening" : thinking ? workingLabel(m, now) : ""  // e.g. "searching the web…" beside the dots
+        let label = listeningNow ? "listening" : thinking ? workingLabel(now) : ""  // beside the dots
         card.setStatusRow(typing: thinking, label: label)
         refreshChat(listening: listeningNow, thinking: thinking, label: label)
         // Listening, or typing in the chat: the rest of the screen is blurred a little, the pet and the chat stay sharp.
@@ -367,14 +244,11 @@ extension RoboWindow {
         }
     }
 
-    /// The line beside the dots while the agent works: what the last tool does (it stays while the model thinks between tools),
-    /// "on it…" before the first one, and from 40 s on how long it has gone, every 20 s ("still working · 60 s"). Nothing
-    /// while the card asks the user something: the wait is theirs.
-    func workingLabel(_ m: Mind, _ now: Double) -> String {
-        if m.activity == .waiting { return "" }
+    /// The line beside the dots while the agent works: "on it…", and from 40 s on how long it has gone, every 20 s
+    /// ("still working · 60 s").
+    func workingLabel(_ now: Double) -> String {
         let seconds = Int(max(0, now - runStart))
-        if seconds >= 40 { return "still working · \(seconds / 20 * 20) s" }
-        return m.label.isEmpty ? (toolLabel.isEmpty ? "on it…" : toolLabel) : m.label
+        return seconds >= 40 ? "still working · \(seconds / 20 * 20) s" : "on it…"
     }
 
     /// Shown while the reply types and for `caretS` after: solid just after a letter, else blinking
@@ -387,12 +261,12 @@ extension RoboWindow {
 
     // MARK: - the reply: typed letter by letter
 
-    /// What you said, above the answer (hidden when there is none, as for the digest).
+    /// What you said, above the answer (hidden when there is none).
     func setHeard(_ text: String, followUp: Bool = false) {
         card.setHeard(text, followUp: followUp)
     }
 
-    /// A new exchange: nothing of the last reply stays (text, typing, caret, footer, timer).
+    /// A new exchange: nothing of the last reply stays (text, typing, caret, timer).
     func clearReply() {
         tw.reset()
         revealer?.invalidate()
@@ -457,11 +331,10 @@ extension RoboWindow {
         }
     }
 
-    /// The reply is all on screen: show the footer and let the card close in a while.
+    /// The reply is all on screen: let the card close in a while.
     func finishedTyping() {
         typed = true
         typedAt = now()
-        card.showFooter()
         let toChat = machine.chatOn && chatOpen
         chatSealed()  // the answer in the conversation is final now, with its footer
         announceReply(inChat: toChat)
@@ -497,16 +370,15 @@ extension RoboWindow {
 
     // MARK: - the card's life
 
-    /// Show the card; it closes `closeAfter` s after the reply is typed (0: stays). `askScreen` false: a card nobody asked for (a
-    /// nudge) never raises the system's Screen Recording dialog; the next card the user asks for does.
-    func open(closeAfter after: Double = 0, askScreen: Bool = true) {
+    /// Show the card; it closes `closeAfter` s after the reply is typed (0: stays).
+    func open(closeAfter after: Double = 0) {
         closeAfter = after
         let armed = after != 0 && !tw.pending  // while it types, finishedTyping arms the timer
         closeAt = armed ? now() + after : 0
         if card.isHidden {
             fit { card.isHidden = false }
             fadeIn()
-            if askScreen && !askedScreen {
+            if !askedScreen {
                 askedScreen = true
                 machine.askScreenAccess()  // the system's dialog, once per launch; the card and its typing do not wait for it
             }
@@ -530,7 +402,6 @@ extension RoboWindow {
         stopShading()
         if !chatOpen { endFollowUp() }  // the chat's answer may still be waiting for your reply: a card closing does not end that
         fit {
-            dismissNudge()  // a nudge that is still up when the card goes was not answered
             card.hideMenu()
             card.isHidden = true
         }
@@ -588,59 +459,5 @@ extension RoboWindow {
     func stopShading() {
         shadeTimer?.invalidate()
         shadeTimer = nil
-    }
-
-    // MARK: - what robo made opens by itself
-
-    /// What a finished request made (Obsidian notes, files in the output folder) and what the guard recorded of it (footer lines).
-    struct Made {
-        var notes: [URL] = [], files: [URL] = []
-        var receipts: [String] = []
-    }
-
-    private static let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
-
-    /// When `url` was written, if it is a regular file (through a link) written
-    /// since `started`.
-    private static func written(_ url: URL, since started: Double) -> Date? {
-        var values = try? url.resourceValues(forKeys: keys)
-        if values?.isSymbolicLink == true { values = try? url.resolvingSymlinksInPath().resourceValues(forKeys: keys) }
-        guard let values, values.isRegularFile == true, let t = values.contentModificationDate,
-              t.timeIntervalSince1970 >= started else { return nil }
-        return t
-    }
-
-    /// The newest (at most `openMax`) of `found` written since `started`, newest first: one pass, nothing sorted.
-    static func newest(_ found: some Sequence<URL>, since started: Double) -> [URL] {
-        var top: [(url: URL, date: Date)] = []
-        for url in found {
-            guard let date = written(url, since: started) else { continue }
-            let at = top.firstIndex { $0.date < date } ?? top.count  // after equals: the first found stays first
-            if at < openMax { top.insert((url, date), at: at) }
-            if top.count > openMax { top.removeLast() }
-        }
-        return top.map(\.url)
-    }
-
-    /// Everything under `dir` (a link to a folder too), with what `written` reads prefetched.
-    private static func files(under dir: URL) -> some Sequence<URL> {
-        let walk = FileManager.default.enumerator(at: dir.resolvingSymlinksInPath(), includingPropertiesForKeys: Array(keys))
-        return (walk?.lazy.compactMap { $0 as? URL }).map { AnySequence($0) } ?? AnySequence([])
-    }
-
-    /// What was written under the output folder and the vault's Drafts, Plans, Notes and Brain since `started`: up to
-    /// `openMax` notes first, then pages for what is left of the limit. Reads folders: not for the main thread.
-    static func made(output: URL, vault: URL, since started: Double) -> Made {
-        let notes = Vault.opened.flatMap { folder in
-            newest(files(under: vault.appendingPathComponent(folder)).filter { $0.pathExtension == "md" }, since: started)
-        }
-        let top = newest(notes, since: started)
-        return Made(notes: top, files: Array(newest(files(under: output), since: started).prefix(max(0, openMax - top.count))))
-    }
-
-    // MARK: - the digest
-
-    func maybeDigest() {
-        if digest.due(today()) && !busy { ask(RoboWindow.digestPrompt, waitNetwork: true) }
     }
 }

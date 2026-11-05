@@ -2,7 +2,7 @@
 // how the app reaches it, `robo key`, and keeping the service running while the app runs.
 //
 // Everything is in `R = ~/.local/share/robo/agent/` (0700): `config.json` (written by `robo setup`, see `Setup.writeConfig`) and
-// one-line key files (0600): `api_key` (DeepSeek), `supermemory_key` (optional) and `server_key` (the bearer the app sends).
+// one-line key files (0600): `api_key` (DeepSeek) and `server_key` (the bearer the app sends).
 // No key is ever printed, logged or put in an error.
 import CryptoKit
 import Foundation
@@ -14,7 +14,7 @@ public struct AgentHome {
     public static let defaultPort = 8765
     public static let defaultModel = "deepseek-flash"
     /// What `robo key set <name>` writes, by name.
-    public static let keyFiles = ["deepseek": "api_key", "supermemory": "supermemory_key"]
+    public static let keyFiles = ["deepseek": "api_key"]
     public static let serverKeyFile = "server_key"
     /// The one line the card or the chat shows when the agent cannot work without the user's DeepSeek key.
     public static let noKeyMessage = "Robo's agent has no DeepSeek API key yet: run `robo key set deepseek` in Terminal."
@@ -34,12 +34,10 @@ public struct AgentHome {
     public func keyFile(_ name: String) -> URL { dir.appendingPathComponent(name) }
     /// The service's stdout and stderr.
     public var logFile: URL { home.appendingPathComponent("Library/Logs/Robo/agent.log") }
-    /// Robo's Brave (school logins). It stays where the Hermes build kept it, so the logins survive the switch.
-    public var braveDir: URL { home.appendingPathComponent(".hermes/profiles/robo/brave") }
     /// The PATH the service runs with (launchd gives the app almost none): where uv and its Python live.
     public var servicePATH: String { Host.path(home.appendingPathComponent(".local/bin")) + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" }
 
-    /// ROBO_AGENT_URL: another agent (a dead address for a test copy). The app then never starts the service, nor robo's Brave.
+    /// ROBO_AGENT_URL: another agent (a dead address for a test copy). The app then never starts the service.
     public var otherAgent: Bool { !(env["ROBO_AGENT_URL"] ?? "").isEmpty }
 
     // MARK: config.json
@@ -57,16 +55,6 @@ public struct AgentHome {
 
     public var port: Int { (config["port"] as? Int).flatMap { (1...65535).contains($0) ? $0 : nil } ?? Self.defaultPort }
 
-    /// The model the agent runs, for the card's header chip.
-    public var model: String { (config["model"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? Self.defaultModel }
-
-    /// The Moodle address, normalised as setup stores it, or nil (unset, or not an https address). It goes into Brave's command line
-    /// (`robo signin`) and gates the LMS posts scan.
-    public var moodle: String? {
-        guard let url = config["moodle_url"] as? String, !url.isEmpty else { return nil }
-        return try? Setup.moodleURL(url)
-    }
-
     // MARK: keys
 
     /// The key in `file`, trimmed; nil when missing or empty.
@@ -76,7 +64,7 @@ public struct AgentHome {
 
     /// One line, 0600, atomically (the folder 0700).
     func writeKey(_ value: String, to file: String) throws {
-        try NudgeFiles.atomicWrite(Data((value + "\n").utf8), to: keyFile(file))
+        try Host.atomicWrite(Data((value + "\n").utf8), to: keyFile(file))
     }
 
     /// 32 bytes from the system's secure generator, base64url without padding.
@@ -97,31 +85,11 @@ public struct AgentHome {
         return ("http://127.0.0.1:\(port)", key)
     }
 
-    /// The connection, after making sure robo's Brave is up for school browsing (chat still works without it; school questions will
-    /// say so). With `ROBO_AGENT_URL` Brave is left alone.
-    public func clientConnection(ensureBrowser: (URL) throws -> Bool = { try Browser.ensure($0, downloads: Browser.downloadsDir) },
-                                 warn: (String) -> Void = Host.warn) throws -> (url: String, key: String) {
-        let connection = try connection()
-        if !otherAgent {
-            do { _ = try ensureBrowser(braveDir) } catch let e as BrowserError { warn("robo: \(e)") }
-        }
-        return connection
-    }
-
-    /// Short hash of the agent's SOUL.md and skills (`<agent>/SOUL.md`, `<agent>/skills/**/SKILL.md`).
-    ///
-    /// A session's system prompt is built once, so robo starts a new session whenever this changes; otherwise a running day's chat
-    /// would never see an updated persona or skill.
+    /// Short hash of the persona (`<agent>/SOUL.md`). Robo starts a new session whenever this changes, so a running day's chat
+    /// does not carry on under an old persona.
     public func personaStamp(agentDir: URL? = nil) -> String {
-        let agentDir = agentDir ?? Setup.checkout.appendingPathComponent("agent")
-        let skills = Setup.files(under: agentDir.appendingPathComponent("skills")).filter { $0.last == "SKILL.md" }
-        var h = SHA256()
-        for rel in ([["SOUL.md"]] + skills.map { ["skills"] + $0 }).sorted(by: Setup.pathOrder) {
-            guard let data = FileManager.default.contents(atPath: rel.reduce(agentDir, { $0.appendingPathComponent($1) }).path)
-            else { continue }
-            h.update(data: Data(rel.joined(separator: "/").utf8) + [0] + data + [0])
-        }
-        return h.finalize().prefix(4).map { String(format: "%02x", $0) }.joined()
+        let soul = (agentDir ?? Setup.checkout.appendingPathComponent("agent")).appendingPathComponent("SOUL.md")
+        return SHA256.hash(data: FileManager.default.contents(atPath: soul.path) ?? Data()).prefix(4).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: the service
@@ -241,7 +209,7 @@ public final class AgentService: @unchecked Sendable {
 // MARK: - `robo key`
 
 public enum Keys {
-    static let usage = "usage: robo key set {deepseek,supermemory} | robo key status\n"
+    static let usage = "usage: robo key set deepseek | robo key status\n"
         + "  set: reads the key from the terminal (not shown) or from stdin, never from the command line"
 
     /// A key as typed or piped: trimmed, then one run of printable non-space ASCII of at most 1024 characters; nil otherwise.

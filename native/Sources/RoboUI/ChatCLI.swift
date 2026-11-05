@@ -48,7 +48,6 @@ func runChat(_ agent: AgentAPI, session: String, readLine: () -> String? = { Swi
                     switch ev {
                     case .feeling(let e): write("[\(e)] ")
                     case .delta(let t): write(t)
-                    case .toolStarted(let tool): write("\n  (\(tool)…)\n")
                     case .runEnded(let status, _, let error): write(status == "completed" ? "\n" : "\n[\(status)] \(error)\n")
                     default: break
                     }
@@ -65,12 +64,12 @@ func runChat(_ agent: AgentAPI, session: String, readLine: () -> String? = { Swi
     }
 }
 
-/// `robo chat` for real: the agent of this Mac, started if it is not up (and stopped at the end if this started it), with robo's
-/// Brave made sure of first, unless ROBO_AGENT_URL points elsewhere (see `DevSwitches`).
+/// `robo chat` for real: the agent of this Mac, started if it is not up (and stopped at the end if this started it), unless
+/// ROBO_AGENT_URL points elsewhere (see `DevSwitches`).
 public func chatMain(environment: [String: String] = ProcessInfo.processInfo.environment) async -> Int32 {
     let agent = AgentHome(env: environment)
     do {
-        let c = try agent.clientConnection()
+        let c = try agent.connection()
         let service = agent.service()
         defer { service?.stop() }
         let session = "robo-chat-\(CalendarDay().iso)-\(agent.personaStamp())"

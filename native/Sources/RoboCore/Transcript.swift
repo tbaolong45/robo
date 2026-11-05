@@ -9,7 +9,7 @@ public struct Turn: Equatable, Sendable, Identifiable {
     public let id: Int
     public let role: Role
     public var text: String
-    /// Small lines under a Robo turn: the notes it opened, what the guard recorded of a send.
+    /// Small lines under a Robo turn ("stopped" on an answer cut short).
     public var footer: [String]
     /// The run failed or was stopped: the text is the reason, shown as such.
     public var failed: Bool

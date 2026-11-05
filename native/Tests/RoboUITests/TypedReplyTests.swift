@@ -125,15 +125,12 @@ import RoboSystem
         let r = Rig([delta(LONG), completed(LONG)], cps: 55)
         defer { r.close() }
         let w = r.win
-        r.agent.onAsk = { write([r.vault.appendingPathComponent("Notes/A note.md"): "x"]) }
         w.ask("first")
         #expect(await r.run(until: !w.busy && w.tw.k > 5))
-        #expect(w.tw.pending && !w.card.footerShown.isEmpty && w.card.footer.isHidden)
-        r.agent.onAsk = nil
-        r.agent.script = [.event(.toolStarted("WebSearch")), .wait, completed("ok")]
+        #expect(w.tw.pending)
+        r.agent.script = [.wait, completed("ok")]
         w.ask("second")  // asked while the first answer is still on screen
         #expect(w.tw.text == "" && w.revealer == nil && w.closeAt == 0)
-        #expect(w.card.footerShown == "" && w.card.footer.isHidden)
         #expect(w.card.heardShown == "second" && w.card.followUpShown)  // a follow-up
         #expect(!w.card.caretShown.show)
         r.agent.gate.signal()
@@ -151,26 +148,10 @@ import RoboSystem
         #expect(w.tw.text == "" && w.revealer == nil && w.card.heardShown == "")
     }
 
-    @Test func theFooterShowsWhenTheTypingIsDoneAndIsNotPartOfTheMarkdown() async {
-        let reply = "It is **in Obsidian** now."
-        let r = Rig([delta(reply), completed(reply)], cps: 40)
+    @Test func aLocalNoteDuringARunLeavesTheAutoCloseWorking() async {
+        let reply = "It is done now."
+        let r = Rig([delta("It is "), .wait, delta("done now."), completed(reply)], cps: 200)
         defer { r.close() }
-        r.agent.onAsk = { write([r.vault.appendingPathComponent("Drafts/Email to Prof Lee.md"): "Hi"]) }
-        let w = r.win
-        w.ask("write me an email")
-        #expect(await r.run(until: !w.busy))
-        #expect(w.tw.pending && !w.typed && w.card.footer.isHidden)  // still typing: the footer is not up
-        #expect(w.card.footerShown == "In Obsidian: Email to Prof Lee")
-        #expect(await r.run(until: w.typed))
-        #expect(!w.card.footer.isHidden)
-        #expect(shown(r) == reply && !w.tw.text.contains("In Obsidian"))
-    }
-
-    @Test func aLocalNoteDuringARunLeavesTheFooterAndTheAutoCloseWorking() async {
-        let reply = "It is in Obsidian now."
-        let r = Rig([delta("It is "), .wait, delta("in Obsidian now."), completed(reply)], cps: 200)
-        defer { r.close() }
-        r.agent.onAsk = { write([r.vault.appendingPathComponent("Drafts/Email to Prof Lee.md"): "Hi"]) }
         let w = r.win
         w.ask("write me an email")
         #expect(await r.run(until: w.tw.k > 2))
@@ -181,7 +162,7 @@ import RoboSystem
         r.agent.gate.signal()
         #expect(await r.run(until: !w.busy && w.tw.text == reply && !w.tw.pending))
         #expect(await r.run(until: w.typed))
-        #expect(shown(r) == reply && w.card.footerShown == "In Obsidian: Email to Prof Lee" && !w.card.footer.isHidden)
+        #expect(shown(r) == reply)
         #expect(w.closeAt == w.typedAt + RoboWindow.closeAfter)  // it closes by itself
     }
 

@@ -1,5 +1,5 @@
 // A URLProtocol stub answers the client (no real network); the one test that needs a real socket (events arrive while the connection is still open) talks to
-// a throwaway server on 127.0.0.1, never the live gateway.
+// a throwaway server on 127.0.0.1, never the live service.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -84,19 +84,14 @@ private func frame(_ seq: Int, _ name: String, _ fields: [String: Any] = [:]) ->
 }
 
 private let FULL: Data = {
-    let approval: [String: Any] = ["command": "rm -rf /tmp/x", "description": "recursive delete", "choices": ["once", "deny"],
-                                   "request_id": "q1"]
     let frames: [Data] = [
         Data(": open\n\n".utf8),
         frame(0, "message.delta", ["delta": "[[feel:happy]] Hel"]),
-        frame(1, "reasoning.available", ["text": "hmm"]),  // post-hoc copy of the reply: ignored
-        frame(2, "tool.started", ["tool": "WebSearch", "preview": "robots"]),
-        frame(3, "tool.completed", ["tool": "WebSearch", "duration": 1.5, "error": false]),
-        frame(4, "message.interim", ["text": "x", "already_streamed": true]),
-        frame(5, "subagent.spawned", ["agent": "kid"]),
-        frame(6, "approval.request", approval),
-        frame(7, "message.delta", ["delta": "lo"]),
-        frame(8, "run.completed", ["output": "[[feel:happy]] Hello", "completed": true]),
+        frame(1, "reasoning.available", ["text": "hmm"]),  // frames robo does not know: ignored
+        frame(2, "message.interim", ["text": "x", "already_streamed": true]),
+        frame(3, "subagent.spawned", ["agent": "kid"]),
+        frame(4, "message.delta", ["delta": "lo"]),
+        frame(5, "run.completed", ["output": "[[feel:happy]] Hello", "completed": true]),
         Data(": stream closed\n\n".utf8),
     ]
     return frames.reduce(Data(), +)
@@ -121,8 +116,7 @@ struct BrainTests {
     @Test func eventsParsesSplitFrames() async throws {
         let events = try await collect(client { _ in .sse(chunks: pieces(FULL, by: 7)) }.events("r1"))
         #expect(events == [
-            .delta("[[feel:happy]] Hel"), .toolStarted("WebSearch"), .toolCompleted(tool: "WebSearch", error: false),
-            .approvalNeeded("recursive delete: rm -rf /tmp/x", id: "q1"), .delta("lo"),
+            .delta("[[feel:happy]] Hel"), .delta("lo"),
             .runEnded(status: "completed", output: "[[feel:happy]] Hello"),
         ])
     }
@@ -130,7 +124,6 @@ struct BrainTests {
     @Test(arguments: [
         ("run.failed", ["error": "boom"], Event.runEnded(status: "failed", error: "boom")),
         ("run.cancelled", ["completed": false], .runEnded(status: "cancelled")),
-        ("run.interrupted", ["error": "shutdown"], .runEnded(status: "interrupted", error: "shutdown")),
     ] as [(String, [String: Any], Event)])
     func terminalEvents(name: String, fields: [String: Any], want: Event) async throws {
         #expect(try await collect(client { _ in .sse(frame(0, name, fields)) }.events("r1")) == [want])
@@ -139,48 +132,6 @@ struct BrainTests {
     @Test func stopsReadingAfterTerminalEvent() async throws {
         let body = frame(0, "run.completed", ["output": "a"]) + frame(1, "message.delta", ["delta": "late"])
         #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [.runEnded(status: "completed", output: "a")])
-    }
-
-    // The agent's run.completed: usage {input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens} and
-    // runtime {provider, model} (gateway/platforms/api_server_runs.py `_USAGE_FIELDS`, `_sanitize_runtime_metadata`).
-    private static let usage: [String: Any] = ["input_tokens": 1200, "output_tokens": 340, "total_tokens": 1540, "cache_read_tokens": 9000,
-                                               "cache_write_tokens": 15]
-    private static let runtime: [String: Any] = ["provider": "anthropic", "model": "claude-opus-4-5", "route_source": "global"]
-    private static let record = UsageRecord(model: "claude-opus-4-5", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15)
-
-    @Test func aCompletedRunReportsItsUsageJustBeforeItsEnd() async throws {
-        let body = frame(0, "message.delta", ["delta": "hi"]) + frame(1, "run.completed", ["output": "hi", "usage": Self.usage, "runtime": Self.runtime])
-        #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [
-            .delta("hi"), .usage(Self.record), .runEnded(status: "completed", output: "hi"),
-        ])
-    }
-
-    @Test func usageSurvivesAskInOrder() async throws {
-        let c = client { req in
-            req.method == "POST" ? .json(202, ["run_id": "r1"]) : .sse(frame(0, "message.delta", ["delta": "[[feel:happy]]Hi"]),
-                                                                       frame(1, "run.completed", ["output": "Hi", "usage": Self.usage, "runtime": Self.runtime]))
-        }
-        #expect(try await collect(c.ask("hi", sessionId: "s")) == [
-            .feeling("happy"), .delta("Hi"), .usage(Self.record), .runEnded(status: "completed", output: "Hi"),
-        ])
-    }
-
-    @Test func usageIsReadFromWhatAgentSendsAndOnlyOnACompletedRun() {
-        #expect(AgentClient.usage(["event": "run.completed", "usage": Self.usage]) == UsageRecord(
-            model: "", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15))  // no runtime: no model
-        #expect(AgentClient.usage(["event": "run.completed", "usage": ["input_tokens": 10, "output_tokens": 5]]) == UsageRecord(
-            input: 10, output: 5, total: 15))  // no total: input and output
-        #expect(AgentClient.usage(["event": "run.completed"]) == nil && AgentClient.usage(["event": "run.completed", "usage": [:]]) == nil)
-        for name in ["run.failed", "run.cancelled", "run.interrupted", "message.delta"] {  // none counts a run that did not complete
-            #expect(AgentClient.usage(["event": name, "usage": Self.usage]) == nil)
-        }
-    }
-
-    @Test func aRunWithoutUsageEndsWithoutAUsageEvent() async throws {
-        let body = frame(0, "run.completed", ["output": "hi", "usage": [:]])
-        #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [.runEnded(status: "completed", output: "hi")])
-        let failed = frame(0, "run.failed", ["error": "boom", "usage": Self.usage])
-        #expect(try await collect(client { _ in .sse(failed) }.events("r1")) == [.runEnded(status: "failed", error: "boom")])
     }
 
     @Test func lostStreamResumesOnceFromLastEventId() async throws {
@@ -305,29 +256,11 @@ struct BrainTests {
         }
     }
 
-    @Test(arguments: [ApprovalChoice.once, .session, .deny])
-    func approveAndStopBodies(choice: ApprovalChoice) async throws {
+    @Test func stopPostsToTheRun() async throws {
         let seen = Log<Seen>()
         let c = client(base: "http://h/p") { req in seen.add(req); return .json(200, [String: String]()) }
-        try await c.approve("r1", choice)
         try await c.stop("r1")
-        let (approve, stop) = (seen.all[0], seen.all[1])
-        #expect(approve.url == "http://h/p/v1/runs/r1/approval" && approve.json == ["choice": choice.rawValue])  // no id: the agent answers the oldest
-        #expect(stop.method == "POST" && stop.url == "http://h/p/v1/runs/r1/stop")
-    }
-
-    /// Two asks can be pending at once and the agent answers the oldest unless told which: the answer names its request.
-    @Test(arguments: [ApprovalChoice.once, .session, .deny])
-    func approveNamesTheRequestItAnswers(choice: ApprovalChoice) async throws {
-        let seen = Log<Seen>()
-        let c = client(base: "http://h/p") { req in seen.add(req); return .json(200, [String: String]()) }
-        try await c.approve("r1", choice, requestId: "9f2c")
-        #expect(seen.all[0].url == "http://h/p/v1/runs/r1/approval")
-        #expect(seen.all[0].json == ["choice": choice.rawValue, "request_id": "9f2c"])
-    }
-
-    @Test func approvalHasNoAlways() {
-        #expect(ApprovalChoice(rawValue: "always") == nil)  // robo never grants a permanent approval
+        #expect(seen.all[0].method == "POST" && seen.all[0].url == "http://h/p/v1/runs/r1/stop")
     }
 
     @Test func askSplitsFeelingsAndStripsOutput() async throws {
@@ -382,25 +315,12 @@ struct BrainTests {
         #expect(seen.isEmpty)
     }
 
-    @Test func approvalShowsTheCommandNotJustTheCategory() {
-        #expect(AgentClient.parse(["event": "approval.request", "description": "recursive delete",
-                                    "command": "rm -rf ~/Documents"]) == .approvalNeeded("recursive delete: rm -rf ~/Documents"))
-        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open x.", "command": ""])
-            == .approvalNeeded("Robo wants to open x."))
-    }
-
-    @Test func guardApprovalsShowOnlyTheGuardsOwnSentence() {
-        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
-                                    "command": "<browser_navigate> (plugin approval rule)"])
-            == .approvalNeeded("Robo wants to open https://x.example/."))
-    }
-
-    @Test func approvalsCarryTheirRequestId() {
-        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
-                                    "command": "<browser_navigate> (plugin approval rule)", "request_id": "9f2c"])
-            == .approvalNeeded("Robo wants to open https://x.example/.", id: "9f2c"))
-        #expect(AgentClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
-            == .approvalNeeded("recursive delete: rm -rf x", id: ""))  // none sent: the answer is the oldest one's
+    /// What the full agent sent is an unknown frame now: no event, and it does not end the run.
+    @Test func framesRoboDoesNotKnowGiveNoEvent() throws {
+        for name in ["run.interrupted", "tool.started", "tool.completed", "approval.request"] {
+            #expect(try AgentClient.parse(#"{"event": "\#(name)", "error": "x"}"#) == nil, "\(name)")
+        }
+        #expect(try AgentClient.parse(#"{"delta": "no event name"}"#) == nil)
     }
 
     // MARK: the default session and a real socket

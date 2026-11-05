@@ -1,6 +1,5 @@
-// The test rig shared by WindowTests, AppTests, TypedReplyTests and PetTests: a fake agent, ear, watcher and
-// health poll, a clock, fake displays and openers, in a temp home. Nothing here puts a window on the real
-// desktop: the panel is built but never ordered front.
+// The test rig shared by WindowTests, AppTests, TypedReplyTests and PetTests: a fake agent, ear and health poll, a clock and
+// fake displays, in a temp home. Nothing here puts a window on the real desktop: the panel is built but never ordered front.
 import AppKit
 import Foundation
 import RoboCore
@@ -52,11 +51,9 @@ final class FakeAgent: AgentAPI, @unchecked Sendable {
     private var _script: [Step]
     private var _asked: [(text: String, session: String)] = []
     private var _stopped: [String] = []
-    private var _approved: [(run: String, choice: ApprovalChoice, id: String)] = []
     let gate = Gate()
     var fail: Error?
     var beforeStart: Gate?  // holds the run between "asked" and "started"
-    var onAsk: (() -> Void)?  // what the agent does to the machine while it works (writes files)
 
     init(_ script: [Step] = [], fail: Error? = nil) {
         _script = script
@@ -69,11 +66,9 @@ final class FakeAgent: AgentAPI, @unchecked Sendable {
     }
     var asked: [(text: String, session: String)] { lock.withLock { _asked } }
     var stopped: [String] { lock.withLock { _stopped } }
-    var approved: [(run: String, choice: ApprovalChoice, id: String)] { lock.withLock { _approved } }
 
     func ask(_ text: String, sessionId: String, started: (@Sendable (String) -> Void)?) -> AsyncThrowingStream<Event, Error> {
         lock.withLock { _asked.append((text, sessionId)) }
-        onAsk?()
         let steps = script, fail = fail, before = beforeStart, gate = gate
         return AsyncThrowingStream { out in
             let task = Task {
@@ -93,9 +88,6 @@ final class FakeAgent: AgentAPI, @unchecked Sendable {
     }
 
     func stop(_ runId: String) async throws { lock.withLock { _stopped.append(runId) } }
-    func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String) async throws {
-        lock.withLock { _approved.append((runId, choice, requestId)) }
-    }
 }
 
 final class FakeEar: Ear {
@@ -116,13 +108,6 @@ final class FakeEar: Ear {
     func stop(wait: Double) { stops += 1 }
 }
 
-final class FakeWatcher: Watching {
-    var started = false, stopped = false, paused = false
-    func start() { started = true }
-    func stop() { stopped = true }
-    func pause(_ paused: Bool) { self.paused = paused }
-}
-
 final class FakePoller: Polling {
     let url: String, onState: @Sendable (HealthState) -> Void
     var started = 0, poked = 0, stopped = 0
@@ -141,77 +126,12 @@ final class TestClock: @unchecked Sendable {
     func advance(_ by: Double) { lock.withLock { seconds += by } }
 }
 
-/// What the nudges read from the machine, behind a lock because the calendar fetch runs off the main thread: the wall clock (nil =
-/// the real one), the calendar feed the fake fetch hands back (nil = no link added) with the links that fail, and how often it ran.
-final class NudgeFakes: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _wall: Double?, _ics: String?, _failures: [String] = [], _fetches = 0
-    var wall: Double? {
-        get { lock.withLock { _wall } }
-        set { lock.withLock { _wall = newValue } }
-    }
-    var ics: String? {
-        get { lock.withLock { _ics } }
-        set { lock.withLock { _ics = newValue } }
-    }
-    var failures: [String] {
-        get { lock.withLock { _failures } }
-        set { lock.withLock { _failures = newValue } }
-    }
-    var fetches: Int { lock.withLock { _fetches } }
-
-    func bodies() -> CalendarBodies {
-        lock.withLock {
-            _fetches += 1
-            return CalendarBodies(bodies: _ics.map { [Data($0.utf8)] } ?? [], failures: _failures, links: (_ics == nil ? 0 : 1) + _failures.count)
-        }
-    }
-}
-
-/// What the radar downloads, answered from a table: the body (or the error) of each URL, every URL asked, and how many requests were
-/// in flight at once (`delay` holds each answer so that they overlap). `offline` makes every request fail as a Mac without a network
-/// does. The feed hosts the radar allowed are in `hosts`. Nothing here touches the network.
-final class RadarFakes: RadarFetching, @unchecked Sendable {
-    private let lock = NSLock()
-    private var _answers: [String: Result<Data, RadarFetchError>] = [:]
-    private var _asked: [String] = [], _hosts: Set<String> = []
-    private var _flying = 0, _most = 0, _offline = false, _delay = Duration.zero, _watch = ""
-    var asked: [String] { lock.withLock { _asked } }
-    /// The most requests in flight at once; only those whose URL contains `watch` are counted ("" = all).
-    var most: Int { lock.withLock { _most } }
-    var watch: String { get { lock.withLock { _watch } } set { lock.withLock { _watch = newValue } } }
-    var hosts: Set<String> { get { lock.withLock { _hosts } } set { lock.withLock { _hosts = newValue } } }
-    var offline: Bool { get { lock.withLock { _offline } } set { lock.withLock { _offline = newValue } } }
-    var delay: Duration { get { lock.withLock { _delay } } set { lock.withLock { _delay = newValue } } }
-
-    func serve(_ url: String, _ body: String) { lock.withLock { _answers[url] = .success(Data(body.utf8)) } }
-    func fail(_ url: String, _ error: RadarFetchError) { lock.withLock { _answers[url] = .failure(error) } }
-    func forget() { lock.withLock { _asked = []; _most = 0 } }
-
-    func fetch(_ url: URL) async throws -> Data {
-        let (wait, answer, counted) = lock.withLock { () -> (Duration, Result<Data, RadarFetchError>, Bool) in
-            _asked.append(url.absoluteString)
-            let counted = _watch.isEmpty || url.absoluteString.contains(_watch)
-            if counted {
-                _flying += 1
-                _most = max(_most, _flying)
-            }
-            return (_delay, _offline ? .failure(.offline) : (_answers[url.absoluteString] ?? .failure(.http(404))), counted)
-        }
-        if wait > .zero { try? await Task.sleep(for: wait) }
-        if counted { lock.withLock { _flying -= 1 } }
-        return try answer.get()
-    }
-}
-
 /// What the card shows, read from its own views.
 extension CardView {
     var heardShown: String { quote.text.textView.string }
     var followUpShown: Bool { !quote.followUp.isHidden }
     var statusShown: String { statusRow.label.text }
     var dotsShown: Bool { !statusRow.dots.isHidden }
-    var footerShown: String { footer.text }
-    var approvalShown: String? { approval.isHidden ? nil : approval.well.text }
     var caretShown: (show: Bool, on: Bool) { (!caret.isHidden, caret.on) }
 }
 
@@ -234,7 +154,6 @@ extension CardView {
     let clock = TestClock()
     var displays = Rig.single
     var pointer = CGPoint(x: 100, y: 100)  // AppKit coordinates
-    var files: [URL] = [], notes: [(url: URL, front: Bool)] = []
     var ears: [FakeEar] = [], pollers: [FakePoller] = []
     var chats: [ChatPanel] = []  // each time the chat was put on screen, and how often its text box was asked to take the keyboard
     var chatFocuses = 0
@@ -252,19 +171,6 @@ extension CardView {
     var reduceMotion = false
     var reduceReads = 0  // how often the window asked the machine about Reduce Motion
     var systemDark = true  // what the machine says about the system's mode
-    /// The nudges: their fakes (set `fake.wall` for a wall clock of your own; UTC is the zone), whether the user is away, the links
-    /// robo was asked to open (with the alert's answer), and where the three files and the ledger are. Nothing here touches the
-    /// real link file (`calendars.json`), the real data folder or a real alert.
-    let fake = NudgeFakes()
-    /// The radar (off unless `radar: true`, so no other test reads a vault or sees a nudge it did not ask for): what it downloads.
-    let radarFake = RadarFakes()
-    var away = false
-    /// The Moodle address the LMS posts scan may use: nil (the default) is "the profile has none or the skill is not installed", so no
-    /// test reads the real agent folder and no other test meets a scan.
-    var moodle: String?
-    var openedLinks: [URL] = [], linkAsks: [URL] = [], linkAnswer = true
-    var nudgeDir: URL { dir.appendingPathComponent("data") }
-    var study: URL { nudgeDir.appendingPathComponent("study.md") }
     /// The app that had the keyboard before robo took it, whether robo's app is active, who got it back.
     var frontmost: NSRunningApplication? = NSWorkspace.shared.runningApplications.first {
         $0.processIdentifier != getpid() && $0.activationPolicy == .regular
@@ -273,56 +179,21 @@ extension CardView {
     var activated: [NSRunningApplication] = []
     var window: RoboWindow!
     var win: RoboWindow { window }
-    var digest: DigestClock
     var theme: URL { dir.appendingPathComponent("theme.json") }
     var ear: FakeEar { ears[0] }
-    var out: URL { dir.appendingPathComponent("Robo") }
-    var vault: URL { dir.appendingPathComponent("Vault") }
-    var receipts: URL { window.machine.receiptsFile }
-    var usage: URL { window.machine.usageFile }
 
-    /// `cps` is the typing speed of the theme (0 = at once); `digestDue` leaves today's digest to be asked.
-    init(_ script: [FakeAgent.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
-         listener: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
-         today: @escaping () -> CalendarDay = { Rig.day }, network: @escaping () -> Bool = { true },
-         watchPaused: Bool = false, hotkey: Hotkey? = nil, radar: Bool = false, chat: Bool = false) {
+    /// `cps` is the typing speed of the theme (0 = at once).
+    init(_ script: [FakeAgent.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "",
+         listener: Bool = true, health: String = "", persona: String = "",
+         today: @escaping () -> CalendarDay = { Rig.day }, hotkey: Hotkey? = nil, chat: Bool = false) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         agent = FakeAgent(script, fail: fail)
-        digest = DigestClock(path: dir.appendingPathComponent("state.json"))
-        if !digestDue { try? digest.mark(Rig.day) }
         try? "{\"tokens\": {\"cps\": \(cps)\(tokens)}}".write(to: theme, atomically: true, encoding: .utf8)
-        if watchPaused { FileManager.default.createFile(atPath: dir.appendingPathComponent("watch.paused").path, contents: nil) }
-        var m = Machine(home: dir)
+        var m = Machine()
         m.clock = { [clock] in clock.now() }
         m.themeFile = theme
-        m.vaultDir = vault
-        m.outputDir = out
-        m.watchPausedFile = dir.appendingPathComponent("watch.paused")
-        m.receiptsFile = dir.appendingPathComponent("data/receipts.jsonl")  // never the real data folder
-        m.usageFile = dir.appendingPathComponent("data/usage.jsonl")
-        m.dailyTokens = 0  // whatever ROBO_DAILY_TOKENS the shell has
-        m.nudgeDir = nudgeDir  // never the real data folder, ledger or link file (`calendarBodies` below is the fake)
-        m.studyFile = study
-        m.zone = TimeZone(identifier: "UTC")!
-        m.wall = { [fake] in fake.wall ?? Date().timeIntervalSince1970 }
-        m.userAway = { [weak self] in self?.away ?? false }
-        m.calendarBodies = { [fake] in fake.bodies() }
-        m.radarOn = radar
-        m.radarNow = false  // whatever ROBO_RADAR_NOW the shell has
-        m.postsMoodle = { [weak self] in self?.moodle }  // never the real agent folder
-        m.radarFetcher = { [radarFake] _, hosts in
-            radarFake.hosts = hosts
-            return radarFake
-        }
-        m.confirmLink = { [weak self] url, _ in
-            self?.linkAsks.append(url)
-            return self?.linkAnswer ?? false
-        }
-        m.openURL = { [weak self] in self?.openedLinks.append($0) }
         m.displays = { [weak self] in self?.displays ?? Rig.single }
         m.pointer = { [weak self] in self?.pointer ?? .zero }
-        m.openFile = { [weak self] in self?.files.append($0) }
-        m.openNote = { [weak self] url, front in self?.notes.append((url, front)) }
         m.chatOn = chat  // off unless a test asks for it: the pet's card tests stay as they are
         m.showChat = { [weak self] panel, visible in
             self?.chats.append(panel)
@@ -347,13 +218,13 @@ extension CardView {
         m.focus = Focus(frontmost: { [weak self] in self?.frontmost }, appIsActive: { [weak self] in self?.appActive ?? false },
                         activate: { [weak self] in self?.activated.append($0) })
         window = RoboWindow(
-            agent: agent, digest: digest, persona: persona, today: today, network: network, watchWake: false,
+            agent: agent, persona: persona, today: today,
             listener: listener ? { [unowned self] w, t, n in
                 let e = FakeEar(w, t, n)
                 self.ears.append(e)
                 return e
             } : nil,
-            watcher: watcher, health: health, poller: { [unowned self] url, on in
+            health: health, poller: { [unowned self] url, on in
                 let p = FakePoller(url, on)
                 self.pollers.append(p)
                 return p
@@ -405,12 +276,7 @@ extension CardView {
         window.panel.orderOut(nil)
         window.quit()
         Chrome.ink = nil
-        // A stopped run's worker may be writing its usage line as the home goes: the delete then fails (not empty), so again.
-        for _ in 0..<20 {
-            try? FileManager.default.removeItem(at: dir)
-            if !FileManager.default.fileExists(atPath: dir.path) { break }
-            Thread.sleep(forTimeInterval: 0.01)
-        }
+        try? FileManager.default.removeItem(at: dir)
     }
 
     var space: ScreenSpace { window.space }

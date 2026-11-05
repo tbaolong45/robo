@@ -18,8 +18,8 @@ import Testing
         t.append(.robo, "")
         let grew = t.update("Two things")
         #expect(grew && t.turns[1].text == "Two things" && t.writing)
-        let sealed = t.seal("Two things are due.", footer: ["In Obsidian: Plan"], failed: false)
-        #expect(sealed && !t.writing && t.turns[1].text == "Two things are due." && t.turns[1].footer == ["In Obsidian: Plan"] && !t.turns[1].failed)
+        let sealed = t.seal("Two things are due.", footer: ["stopped"], failed: false)
+        #expect(sealed && !t.writing && t.turns[1].text == "Two things are due." && t.turns[1].footer == ["stopped"] && !t.turns[1].failed)
         // sealed: it can be neither updated nor sealed again
         let again = t.update("more"), twice = t.seal("again")
         #expect(!again && !twice && t.turns[1].text == "Two things are due.")

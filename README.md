@@ -1,11 +1,10 @@
 # Robo
 
-Robo is a small animated robot face that lives on your macOS desktop and acts as a voice front end for a local AI agent. You hold Ctrl+Q and talk, Robo turns your speech into text on the Mac, hands it to its agent, and the answer streams back as text typed out in a Liquid Glass chat window. While it waits, Robo walks along the screen edges, looks around and reacts.
+Robo is a small animated robot face that lives on your macOS desktop, and a chatbot you talk to. Hold Ctrl+Q and speak, or type, and the answer is typed out as text in a Liquid Glass chat window. While it waits, Robo walks along the screen edges, looks around and reacts.
 
-Two ideas shape the project:
-
-- **The pet is only the interface.** Speech recognition, the face, windows and reminders run inside the Robo app. All reasoning and tool use (browser, terminal, files) happens in a separate agent process, `robo-agent`, which Robo reaches over loopback HTTP.
 - **Voice is input only.** Robo listens through the microphone and answers in text. It never speaks.
+- **It is a plain chatbot.** It has no tools: it can't browse, open files or read your mail, and it knows only what is said in the conversation. A fuller agent (tools, skills, memory, learning, school features) was removed on purpose and is kept on the `revamp` branch.
+- **Privacy.** Speech becomes text on the Mac, and no audio leaves it. That text, and what you type, goes to DeepSeek; [its privacy policy](https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html) says data is stored in the People's Republic of China.
 
 ## Architecture
 
@@ -14,40 +13,29 @@ flowchart LR
     subgraph App["Robo.app (Swift, native/)"]
         Mic["mic → endpointing → Parakeet<br/>(ONNX Runtime, CPU)"]
         UI["face · roaming · card · chat"]
-        Active["calendar nudges · daily radar<br/>source checks · LMS scan"]
     end
-    subgraph Agent["robo-agent (Python, agent/) on 127.0.0.1:8765"]
+    subgraph Service["robo-agent (Python, agent/) on 127.0.0.1:8765"]
         Server["HTTP run API + SSE<br/>(server.py)"]
-        Harness["Claude Agent SDK loop<br/>SOUL.md + skills (harness.py)"]
-        Guard["robo-guard PreToolUse hook<br/>block / ask / allow + receipts"]
-        Memory["memory: facts + BM25, profile<br/>(memory.py)"]
-        Learn["learning after each run<br/>(learn.py)"]
+        Chat["one reply: SOUL.md + history<br/>(chat.py)"]
     end
-    Claude["DeepSeek API<br/>(Anthropic format)"]
-    Brave["Robo's Brave<br/>(headless, CDP on 127.0.0.1:9333)"]
-    SM["Supermemory<br/>(optional mirror)"]
+    DeepSeek["DeepSeek API<br/>(Anthropic format)"]
 
     Mic --> UI
     UI -- "POST /v1/runs, Bearer key" --> Server
     Server -- "SSE events" --> UI
-    Server --> Harness
-    Harness --> Guard
-    Harness --> Memory
-    Harness -- "after the run" --> Learn
-    Learn --> Memory
-    Harness <--> Claude
-    Harness -- "Playwright MCP" --> Brave
-    Memory -.-> SM
+    Server --> Chat
+    Chat <--> DeepSeek
 ```
 
-- **The app starts the agent.** At launch, and again before a request if it has died, the app runs `uv run --project <checkout> robo-agent serve` and waits for `/health`. The service logs to `~/Library/Logs/Robo/agent.log`. The app also starts Robo's own headless Brave on `127.0.0.1:9333`, and the agent drives it through Playwright MCP over CDP.
-- **Agent protocol.** A request is `POST /v1/runs` with `Authorization: Bearer <server key>`. Robo follows the run's Server-Sent Events: text deltas, tool calls, approval requests, usage and the end of the run. `/approval` answers an ask, `/stop` cancels a run, and `/health` needs no key.
-- **Everything the agent keeps** is in `~/.local/share/robo/agent/` (folder 0700, key files 0600): `config.json` (written by `robo setup`), `api_key`, `supermemory_key`, `server_key`, `sessions.json`, `memory/`, `skills-learned/`, `learning.jsonl`, `activity.jsonl`.
-- **Pure core, thin shell.** Every decision in the app is a plain function given the current time that returns what to do: the face's mood, where the pet walks, which reminder fires, whether a card may interrupt you. Windows, audio and the network are a thin layer around them, so almost all behaviour is tested without a screen, a clock or a microphone.
+- **The app starts the service.** At launch, and again before a request if it has died, the app runs `uv run --project <checkout> robo-agent serve` and waits for `/health`. The service logs to `~/Library/Logs/Robo/agent.log`.
+- **API.** `POST /v1/runs` starts a reply, `GET /v1/runs/{id}/events` streams it as Server-Sent Events, `POST /v1/runs/{id}/stop` cancels it, and `GET /health` needs no key. Everything else needs `Authorization: Bearer <server key>`.
+- **Nothing is remembered for long.** History is kept per session in the service's memory, the last 100 messages, and is lost when the service restarts. The session id changes each day. The app's transcript is in memory too.
+- **The plug for a future harness** is `chat.execute` in `agent/robo_agent/chat.py`: anything that emits `message.delta` and ends a run the same way works with the app.
+- **Pure core, thin shell.** Every decision in the app is a plain function given the current time that returns what to do: the face's mood, where the pet walks, how fast the reply types. Windows, audio and the network are a thin layer around them, so most behaviour is tested without a screen, a clock or a microphone.
 
-## Setup for a new user
+## Setup
 
-You need an Apple silicon Mac on **macOS 26** or newer, the Swift 6.2 toolchain (Xcode 26 or its Command Line Tools), [uv](https://docs.astral.sh/uv/), Node.js (the agent starts Playwright MCP with `npx`), Brave Browser (for school sites) and an Anthropic API key.
+You need an Apple silicon Mac on **macOS 26** or newer, the Swift 6.2 toolchain (Xcode 26 or its Command Line Tools), [uv](https://docs.astral.sh/uv/) and a DeepSeek API key.
 
 ```bash
 git clone <this repo> robo && cd robo
@@ -56,93 +44,76 @@ git clone <this repo> robo && cd robo
 #    microphone and Screen Recording again after every rebuild (unsigned = ad hoc).
 ROBO_SIGN_IDENTITY="<your code-signing identity>" native/bundle.sh ~/Applications/Robo.app
 
-# 2. The agent's Python environment.
+# 2. The chat service's Python environment.
 uv sync
 
-# 3. Your DeepSeek key: pasted at a hidden prompt (or piped on stdin), saved 0600.
+# 3. The speech model, once. The app reads it from the Hugging Face cache and never downloads it.
+uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx
+
+# 4. Your DeepSeek key: pasted at a hidden prompt (or piped on stdin), saved 0600.
 ~/Applications/Robo.app/Contents/MacOS/robo key set deepseek
-~/Applications/Robo.app/Contents/MacOS/robo key set supermemory   # optional, set aside for now: without a key nothing is sent
 ~/Applications/Robo.app/Contents/MacOS/robo key status            # says only "set" / "not set"
 
-# 4. Agent settings, server key, login item and Obsidian vault.
-~/Applications/Robo.app/Contents/MacOS/robo setup --moodle https://moodle.your-school.edu
-
-# 5. Sign in to Outlook, Teams and Moodle once in Robo's Brave, then start Robo.
-~/Applications/Robo.app/Contents/MacOS/robo signin
+# 5. The service's settings, the server key and the login item, then start Robo.
+~/Applications/Robo.app/Contents/MacOS/robo setup
 open ~/Applications/Robo.app
 ```
 
-- **The speech model is not downloaded by the app.** It reads NVIDIA Parakeet TDT 0.6B v2 from the Hugging Face cache, `~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx` (the snapshot that `refs/main` names, with `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx` and `vocab.txt`). Download that repository into the cache once: `uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx`. Without it, voice input reports that the model is missing; typing still works.
-- **`robo setup`** must be run from the installed `.app` (it refuses a bare binary). It writes `~/.local/share/robo/agent/config.json` (port 8765, model `deepseek-flash`, `approvals`, vault, Moodle address, the path of this `robo` and of `uv`, `learn`), creates the server key, writes the `ai.robo` LaunchAgent that starts the app at login, and creates the vault in `~/Documents/Robo`. Running it again keeps what you set and changes nothing else.
-- **No install step for the agent.** The service reads `agent/SOUL.md` and `agent/skills/` from the checkout the app was built in and fills their placeholders from `config.json` on every run. Editing them changes the next run.
+- Without the speech model, voice input reports that it is missing and typing still works.
+- `robo setup` must be run from the installed `.app` (it refuses a bare binary). It writes `~/.local/share/robo/agent/config.json`, creates the server key and writes the `ai.robo` LaunchAgent that starts the app at login. Running it again keeps what you set.
+- The service reads `agent/SOUL.md`, the persona, from the checkout the app was built in, on every request. There is no install step.
+
+## Commands
+
+| Command | What |
+|---|---|
+| `robo` | The app |
+| `robo setup` | See above |
+| `robo key set deepseek`, `robo key status` | Store the API key, or say whether it is set |
+| `robo chat` | A text-only client for the same API; starts the service if it is not up |
+| `robo voice-eval` | Scores the voice pipeline with macOS voices or your own recordings |
 
 ## Features
 
-### Voice
-- Audio is captured at 16 kHz in 80 ms frames. A loudness gate (2.5× the room's noise floor, never below 0.008 RMS) decides which frames count as speech, and a short pre-roll keeps the start of a word.
-- **Push to talk** is Ctrl+Q, registered with Carbon `RegisterEventHotKey` (no Accessibility permission needed). Hold it to talk. A tap listens for one sentence, which ends after 3 s of silence. If the key can't be registered, Robo wakes when you say its name instead.
-- Speech becomes text on the Mac with Parakeet TDT 0.6B v2 (int8) on ONNX Runtime, on the CPU only, with ORT's telemetry turned off. No audio leaves the machine.
-- **Follow-up window.** For 15 s after a reply has finished typing you can answer without the key. Only a sentence that is clearly read-only (a question, or "show / read / explain ...") is taken there, and it needs two words or more. Anything else is refused with "Hold Ctrl+Q and say that again: without the key I only answer questions.", and the reply you were reading stays.
-
-### Chat and card
-- **Chat window.** Typed, spoken and menu-digest requests open a Liquid Glass chat (about 520×640, centred on the main display) with bubbles, an empty state, "jump to latest" and Copy on Robo's bubbles. The text box grows to 5 lines: Return sends, Shift+Return adds a line, and Send is disabled while the box is empty. It closes with its close button, on "close the chat", or Esc in its text box. The menu's Type opens it for typing (so does a click on the face when voice input is off).
-- **The pet's card** keeps the quick things: the menu, "Listening", Allow/Deny, nudges and the automatic digest. Its header shows the name, and an Agent or Mic light only when something is wrong (or Listening during the follow-up window).
-- **Typing.** Replies are typed at about 55 characters a second and never fall more than a few seconds behind the stream. Each tick renders the shown prefix as Markdown with open marks closed, so a half-typed `**` never flashes.
-- **Mood tags.** A hidden `[[feel:x]]` at the start of a reply sets the face's expression before the first word appears, even when the tag arrives split across chunks.
-- **LaTeX** (`$..$`, `$$..$$`, `\(..\)`, `\[..\]`) is taken out before the Markdown parse and typeset with SwiftMath, in two inks so it stays legible when the glass flips.
-- **Adaptive glass.** Robo samples a 16 px picture of the screen behind its glass (ScreenCaptureKit, its own windows left out) and turns the glass light over dark areas and dark over light ones, with hysteresis and easing. This needs the Screen Recording permission; without it the look is the system's.
-- **Accessibility.** VoiceOver labels and announcements, Allow/Deny reachable by keyboard (Tab between them), and Reduce Motion, Reduce Transparency and Increase Contrast honoured.
-
-### The pet
-- **Face.** A white disc (112 pt inside a 128×128 view) with soft graphite features; colour appears only for a strong mood (proud, concerned, playful, sad, error), at 4.5:1 or more. Features move on springs; blinks and glances come from a seeded random generator, so motion is reproducible in tests.
-- **Roaming.** It rests, drifts to a wall of the main display and bounces a little there. When called it walks to the middle of the nearest side or to a corner and waits. A mouse press beats Stay, Stay beats a call, a call beats a drop, a drop beats sleep, and sleep beats wandering.
-- **Window.** The panel never takes the keyboard, and its transparent margin passes clicks through.
-
-### The agent (`robo-agent`)
-- **Loop.** The Claude Agent SDK and its CLI, pointed at DeepSeek's Anthropic-format API, with `deepseek-flash`, the persona `agent/SOUL.md` and the 12 skills in `agent/skills/school/` (digest, mail, Teams, Moodle, posts, timetable, plan, quiz, ledger, notes, make, brain). Tools: Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, the browser (Playwright MCP) and Robo's memory.
-- **robo-guard** (`agent/robo_agent/guard.py`) is a PreToolUse hook on every tool call. It **blocks** the agent's own setup and keys, graded work (Moodle quiz attempts, assignment submissions, forum posts, raw JavaScript on school sites) and remote images or active HTML in notes. It **asks** before irreversible steps (`rm`, `sudo`, `git push`, Send/Reply/Delete clicks, Enter on a mail page, uploads). An error inside the hook denies the call. After each state-changing step it writes a receipt to `~/.local/share/robo/receipts.jsonl`, so the app can show "✓ sent · host" or "⚠ unverified" under a claim.
-- **Boundary.** The guard's patterns are a speed bump; the wall is the CLI's own: deny rules keep Read, Edit, Grep and Glob out of the runtime folder and `~/.hermes`, and on macOS Bash runs in a sandbox that cannot read them, write to the agent's code or reach anything on localhost (Brave's debugging port). Bash keeps the rest of the laptop and the internet. It costs `ps`, `top`, local dev servers, AppleScript to other apps, `git init` and `git clone`; `open` alone runs outside so that apps can start.
-- **Approvals.** `approvals` in `config.json` is `"off"` for a new setup: the guard's asks are allowed and only its blocks stop the agent. With `"manual"` each ask reaches the card as Allow/Deny (no answer in 120 s is Deny).
-- **Memory** (`memory.py`). Local facts in `memory/facts.jsonl`, ranked with BM25, plus a short profile; the most relevant ones go into each request's turn, marked as memory, not instructions (a resumed session keeps its first system prompt). A privacy filter refuses secrets, e-mail addresses and message bodies. Supermemory is an optional mirror: it gets vetted facts and the search words the agent chooses for `memory_search`; a request is not sent as such, and the counted habits stay on this Mac. `robo-agent memory list | forget ID` shows and removes facts.
-- **Learning** (`learn.py`). After a request of yours a cheaper model may extract up to 3 facts from your own words, and after a long, failed or corrected run it may write a reusable skill from the tool calls (arguments trimmed, secrets redacted). Automated runs (the digest, the LMS scan) teach nothing. `activity.jsonl` keeps when and what kind of thing you asked, never the words; once a day what repeats on enough distinct days becomes a counted `habit` fact, and goes when the pattern stops. A learned skill is vetted (no graded work, nothing that weakens safety, no HTML, remote content or inline shell, no secrets, at most 30) and kept in `skills-learned/`; every decision is logged to `learning.jsonl`, and the profile is rewritten once a day. `robo-agent skills list | remove NAME` manages them. Set `"learn": false` in `config.json` to turn it off.
-
-### Active mode
-- **Deadline nudges.** Calendar links (`robo calendar add URL`, kept in a 0600 file and never printed) and the study ledger feed a reminder ladder (T-5 d, T-1 d, T-3 h for a deadline). A nudge budget allows three cards a day at fixed slots, with quiet hours at night, and a card never interrupts a reply, a run or an idle Mac.
-- **Daily radar.** Once a morning Robo fetches papers, lab announcements, news, repositories, internships and contests from an exact HTTPS host allowlist, ranks them against your interest profile and writes an Obsidian note. No AI runs in this step, and nothing it fetches reaches the agent.
-- **Source checks.** An offline heuristic flags look-alike hosts, brands in the wrong place, hidden destinations and scam wording: a scam is dropped, a doubtful item is marked ⚠, a primary source ✓.
-- **LMS scan.** Once a day a read-only agent run (skill `school-posts`, its own session per course, every approval denied) reports new course posts with dates as one JSON block. Robo's strict decoder believes none of it until the links, dates and quotes pass.
+- **Push to talk.** Hold Ctrl+Q to talk. A tap listens for one sentence, which ends after 3 s of silence. If the key can't be registered, Robo wakes when you say its name instead.
+- **Speech recognition** on the Mac: Parakeet TDT 0.6B v2 (int8, English only) on ONNX Runtime, on the CPU, with ONNX Runtime's telemetry turned off.
+- **Follow-up window.** For 15 s after a reply has finished typing you can answer without the key, with a sentence of two words or more.
+- **Chat window.** Typed and spoken requests open a Liquid Glass chat (520×640, centred on the main display) with bubbles and Copy on Robo's replies. Return sends, Shift+Return adds a line. It closes with its close button, on "close the chat", or with Esc in its text box.
+- **Typed replies.** Markdown, tables and LaTeX (`$..$`, `$$..$$`, `\(..\)`, `\[..\]`, typeset with SwiftMath), about 55 characters a second, never far behind the stream.
+- **Mood tags.** A hidden `[[feel:x]]` at the start of a reply sets the face's expression.
+- **Adaptive glass.** Robo samples a small picture of the screen behind its glass, leaving out its own windows, and turns the glass light over dark areas and dark over light ones. This needs the Screen Recording permission; without it the look is the system's.
+- **The pet.** A white disc with soft graphite features. It rests, drifts to a wall of the main display and bounces a little there; when called it walks to the nearest side or corner and waits. The right-click menu has Type, Stay and Quit.
+- **Accessibility.** VoiceOver labels and announcements, and Reduce Motion, Reduce Transparency and Increase Contrast honoured.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `native/Sources/RoboCore` | Pure logic: the agent client and its event stream, the feeling filter, the mind, the roamer, the typewriter, Markdown and LaTeX extraction, intent, ICS, reminders, the nudge budget, radar ranking, source checks, the LMS decoder, usage and receipts |
+| `native/Sources/RoboCore` | Pure logic: the service client and its event stream, the feeling filter, the mind, the roamer, the typewriter, the shade, LaTeX extraction, the transcript |
 | `native/Sources/RoboVoice` | Microphone, resampling, endpointing, mel features, Parakeet on ONNX Runtime, `robo voice-eval` |
-| `native/Sources/RoboSystem` | The agent's files, keys and service (`Agent.swift`), `robo setup`, the browser profile, calendar and radar fetchers, state files, the vault |
+| `native/Sources/RoboSystem` | The service's files, keys and process (`Agent.swift`), `robo setup` (`Setup.swift`) |
 | `native/Sources/RoboUI` | The panel, face, card, chat, glass, backdrop sampling, hotkey, app launch (`Launch.swift`) |
-| `native/Sources/robo` | Entry point and command line: `setup`, `key`, `signin`, `chat`, `activity`, `plan`, `calendar`, `voice-eval` |
+| `native/Sources/robo` | Entry point and command line |
 | `native/Vendor` | Microsoft's ONNX Runtime Swift bindings, pinned to the 1.30.0 pod |
-| `agent/robo_agent` | The agent service: `server.py` (HTTP API), `harness.py` (SDK run), `guard.py`, `memory.py`, `learn.py`, `config.py`, `cli.py` |
-| `agent/SOUL.md`, `agent/skills/` | The persona and the skills, filled from `config.json` at load time |
-| `tests/` | pytest for the agent: server, guard, memory, learning, template pins, offline canaries (`tests/evals/`), the real SDK and CLI against a fake API (`test_e2e.py`) |
-| `scripts/eval_live.py` | Sends the read-only eval requests to your real agent (by hand only, never in CI) |
-| `docs/` | A newcomer's guide, a technical deep dive and backend recommendations |
+| `agent/robo_agent` | The chat service: `server.py` (HTTP API), `chat.py` (one reply), `config.py`, `cli.py` |
+| `agent/SOUL.md` | The persona |
+| `tests/` | pytest: the real service and client against a fake DeepSeek on loopback (`test_chat.py`) |
+| `docs/` | A newcomer's guide, a technical deep dive, and speech and motion notes |
 
 ## Build and test
 
 ```bash
-# Swift app (from native/)
+# Swift app
 native/test.sh                                      # Swift Testing suite; use this, not `swift test`
 native/test.sh -c release -Xswiftc -enable-testing  # also in release: some concurrency bugs only show there
-native/test.sh --filter FaceSheet                   # with ROBO_FACE_SHEET=<dir>: a contact sheet of every expression
+ROBO_FACE_SHEET=<dir> native/test.sh --filter FaceSheet   # a contact sheet of every expression
 
-# Agent (from the repo root)
+# Chat service (from the repo root)
 uv sync
-uv run pytest -q && uv run ruff check agent tests scripts
+uv run pytest -q && uv run ruff check agent tests
 ```
 
-- **Running a test copy without the live agent:** `open -n --env ROBO_AGENT_URL=http://127.0.0.1:9 --env ROBO_NO_VOICE=1 --env ROBO_NO_WATCH=1 ~/Applications/Robo.app`. With `ROBO_AGENT_URL` set the app starts neither its agent nor its Brave.
-- **A text-only client** for the same API: `robo chat` (it starts the agent and Robo's Brave if they are not up).
+- **A test copy away from the live service:** `open -n --env ROBO_AGENT_URL=http://127.0.0.1:9 --env ROBO_NO_VOICE=1 ~/Applications/Robo.app`. With `ROBO_AGENT_URL` set the app does not start its service.
 - **CI** (`.github/workflows/tests.yml`) runs `native/test.sh` on `macos-26` and `pytest` + `ruff` on Ubuntu, for pushes to and pull requests into `master`.
 
 ## Workflow
@@ -153,12 +124,10 @@ Work goes on `dev`. A pull request from `dev` into `master` runs CI, and it is m
 
 - [docs/newcomer-guide.md](docs/newcomer-guide.md): the project explained for someone new to Swift and app development.
 - [docs/technical-deep-dive.md](docs/technical-deep-dive.md): every technique used, why it was chosen and what it costs.
-- [docs/backend-recommendations.md](docs/backend-recommendations.md): ranked improvements to voice, interaction, motion and the agent.
+- [docs/backend-recommendations.md](docs/backend-recommendations.md): speech and motion measurements, and what to try next.
 
 ## Known limits
 
-- **Prompt injection.** Robo reads untrusted text (mail, chats, web pages) and acts on your accounts. The persona and the guard reduce the risk but do not remove it, and with approvals `off` the guard's blocks are the only hard stop.
-- **A slow failure when DeepSeek is unreachable.** The SDK retries for several minutes before the run fails with "Connection refused"; until then the app only shows "thinking".
-- **Offline source checks** catch impersonation and offer scams, not phishing in general (about three quarters of live phishing URLs were flagged).
-- **Spaces and full screen.** The app stays on the Space where it started and doesn't follow you into full-screen apps.
+- **Spaces and full screen** have not been checked on a real Mac.
 - **Hotkey clashes** with another app over Ctrl+Q are not detected.
+- **A noisy room** can fill the follow-up window, or keep a request open for up to 2 minutes, and that text goes to DeepSeek too.
