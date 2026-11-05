@@ -485,6 +485,7 @@ private extension MicroLabel {
 
     @Test func theDotsOwnATimerOnlyWhileTheyAreShown() {
         let card = makeCard()
+        card.statusRow.dots.reduceMotion = { false }  // under the machine's Reduce Motion there is rightly no timer
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 200), styleMask: .borderless, backing: .buffered, defer: true)
         window.contentView = card
         #expect(!(card.statusRow.dots.timer != nil))  // hidden: no timer

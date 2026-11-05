@@ -373,7 +373,13 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
                     }.count
                     if wide > rep.pixelsWide * 9 / 10 { rows.append(y) }
                 }
-                #expect(!rows.isEmpty && rows.count <= 2, "\(source.debugDescription): a line of the text colour across the box: rows \(rows)")
+                let mid = rep.pixelsWide / 2
+                let seen: [String] = (0..<rep.pixelsHigh).compactMap { (y: Int) -> String? in
+                    guard let c = rep.colorAt(x: mid, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.05 else { return nil }
+                    return "\(y):\(Int(c.redComponent * 255)),\(Int(c.blueComponent * 255)),\(Int(c.alphaComponent * 255))"
+                }
+                let context = "want \(Int(want.redComponent * 255)),\(Int(want.blueComponent * 255)),\(Int(want.alphaComponent * 255)); \(rep.pixelsWide)x\(rep.pixelsHigh) px for \(box.bounds.size); scroller \(NSScroller.preferredScrollerStyle.rawValue); mid column \(seen)"
+                #expect(!rows.isEmpty && rows.count <= 2, "\(source.debugDescription): a line of the text colour across the box: rows \(rows); \(context)")
             }
         }
     }
