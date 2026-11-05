@@ -78,6 +78,7 @@ INSTALLED = re.compile(r"^\s*open\s+-a\s+(?:/System)?/Applications/[^/]+\.app/?\
 # Robo's own setup named in a command or path: the runtime folder, its keys, its code, its logs.
 OWN_WORDS = re.compile(
     r"\.local/share/robo/agent|robo[-_]agent|server_key|supermemory_key|ANTHROPIC_API_KEY"
+    r"|ANTHROPIC_AUTH_TOKEN|DEEPSEEK_API_KEY"
     r"|SUPERMEMORY_API_KEY|receipts\.jsonl|usage\.jsonl|\.hermes\b", re.IGNORECASE)
 
 BAD_URL = re.compile(

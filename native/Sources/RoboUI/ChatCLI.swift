@@ -74,7 +74,7 @@ public func chatMain(environment: [String: String] = ProcessInfo.processInfo.env
         let service = agent.service()
         defer { service?.stop() }
         let session = "robo-chat-\(CalendarDay().iso)-\(agent.personaStamp())"
-        return await runChat(AgentKeeper(AgentClient(baseURL: c.url, key: c.key), service: service, hasKey: { agent.hasAnthropicKey }),
+        return await runChat(AgentKeeper(AgentClient(baseURL: c.url, key: c.key), service: service, hasKey: { agent.hasDeepSeekKey }),
                              session: session)
     } catch {
         Host.warn("robo: \(error)")

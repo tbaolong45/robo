@@ -44,7 +44,7 @@ final class RoboAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// The agent's client with the service made sure of before each request: started again if it died (off the main thread, bounded
-/// by `AgentService.ensure`), and with no Anthropic key the request fails at once with the one line that says how to add it. With no
+/// by `AgentService.ensure`), and with no DeepSeek key the request fails at once with the one line that says how to add it. With no
 /// service (ROBO_AGENT_URL) it is the client itself.
 final class AgentKeeper: AgentAPI {
     let client: AgentAPI
@@ -125,7 +125,7 @@ public enum RoboApp {
         let byKey = !dev.noVoice && hotkey.register()
         let window = RoboWindow(
             agent: AgentKeeper(AgentClient(baseURL: connection.url, key: connection.key), service: service,
-                                hasKey: { agent.hasAnthropicKey }),
+                                hasKey: { agent.hasDeepSeekKey }),
             digest: DigestClock(path: dataDir.appendingPathComponent("robo_state.json")),
             persona: agent.personaStamp(),
             listener: dev.noVoice ? nil : { onWake, onText, onNote in

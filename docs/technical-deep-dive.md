@@ -79,7 +79,7 @@ The UI calls them on a timer and shows the result.
 no waiting and no real clock. That's how ~1,500 Swift tests run in seconds.
 
 The agent follows the same idea: `server.make_app` and `harness.execute` take the SDK client as a
-parameter (`connect`), so the pytest suite drives whole runs with a fake and never calls Claude.
+parameter (`connect`), so the pytest suite drives whole runs with a fake and never calls the model.
 
 ### 1.4 Dependency injection with protocols ("seams")
 **The idea.** A *protocol* (Swift's word for an *interface*) lists what something must be able
@@ -306,7 +306,7 @@ from the checkout on every run and fills their placeholders from `config.json`.
 3. the program runs the tool and feeds the result back;
 4. repeat until the model writes a final answer.
 
-**In Robo.** `agent/robo_agent/harness.py` runs that loop with Anthropic's **Claude Agent SDK**
+**In Robo.** `agent/robo_agent/harness.py` runs that loop with Anthropic's **Claude Agent SDK**, pointed at DeepSeek's Anthropic-format API,
 and the model `claude-sonnet-5-5` (the default in `config.json`). The tools are Bash, Read,
 Write, Edit, Glob, Grep, WebSearch, WebFetch and Skill, plus two *MCP servers* (MCP, the Model
 Context Protocol, is a standard way to plug extra tools into an agent):

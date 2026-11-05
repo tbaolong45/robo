@@ -23,7 +23,7 @@ flowchart LR
         Memory["memory: facts + BM25, profile<br/>(memory.py)"]
         Learn["learning after each run<br/>(learn.py)"]
     end
-    Claude["Claude API<br/>(Anthropic)"]
+    Claude["DeepSeek API<br/>(Anthropic format)"]
     Brave["Robo's Brave<br/>(headless, CDP on 127.0.0.1:9333)"]
     SM["Supermemory<br/>(optional mirror)"]
 
@@ -59,8 +59,8 @@ ROBO_SIGN_IDENTITY="<your code-signing identity>" native/bundle.sh ~/Application
 # 2. The agent's Python environment.
 uv sync
 
-# 3. Your Anthropic key: pasted at a hidden prompt (or piped on stdin), saved 0600.
-~/Applications/Robo.app/Contents/MacOS/robo key set anthropic
+# 3. Your DeepSeek key: pasted at a hidden prompt (or piped on stdin), saved 0600.
+~/Applications/Robo.app/Contents/MacOS/robo key set deepseek
 ~/Applications/Robo.app/Contents/MacOS/robo key set supermemory   # optional, set aside for now: without a key nothing is sent
 ~/Applications/Robo.app/Contents/MacOS/robo key status            # says only "set" / "not set"
 
@@ -73,7 +73,7 @@ open ~/Applications/Robo.app
 ```
 
 - **The speech model is not downloaded by the app.** It reads NVIDIA Parakeet TDT 0.6B v2 from the Hugging Face cache, `~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx` (the snapshot that `refs/main` names, with `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx` and `vocab.txt`). Download that repository into the cache once: `uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx`. Without it, voice input reports that the model is missing; typing still works.
-- **`robo setup`** must be run from the installed `.app` (it refuses a bare binary). It writes `~/.local/share/robo/agent/config.json` (port 8765, model `claude-sonnet-5-5`, `approvals`, vault, Moodle address, the path of this `robo` and of `uv`, `learn`), creates the server key, writes the `ai.robo` LaunchAgent that starts the app at login, and creates the vault in `~/Documents/Robo`. Running it again keeps what you set and changes nothing else.
+- **`robo setup`** must be run from the installed `.app` (it refuses a bare binary). It writes `~/.local/share/robo/agent/config.json` (port 8765, model `deepseek-flash`, `approvals`, vault, Moodle address, the path of this `robo` and of `uv`, `learn`), creates the server key, writes the `ai.robo` LaunchAgent that starts the app at login, and creates the vault in `~/Documents/Robo`. Running it again keeps what you set and changes nothing else.
 - **No install step for the agent.** The service reads `agent/SOUL.md` and `agent/skills/` from the checkout the app was built in and fills their placeholders from `config.json` on every run. Editing them changes the next run.
 
 ## Features
@@ -99,7 +99,7 @@ open ~/Applications/Robo.app
 - **Window.** The panel never takes the keyboard, and its transparent margin passes clicks through.
 
 ### The agent (`robo-agent`)
-- **Loop.** The Claude Agent SDK with `claude-sonnet-5-5`, the persona `agent/SOUL.md` and the 12 skills in `agent/skills/school/` (digest, mail, Teams, Moodle, posts, timetable, plan, quiz, ledger, notes, make, brain). Tools: Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, the browser (Playwright MCP) and Robo's memory.
+- **Loop.** The Claude Agent SDK and its CLI, pointed at DeepSeek's Anthropic-format API, with `deepseek-flash`, the persona `agent/SOUL.md` and the 12 skills in `agent/skills/school/` (digest, mail, Teams, Moodle, posts, timetable, plan, quiz, ledger, notes, make, brain). Tools: Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, the browser (Playwright MCP) and Robo's memory.
 - **robo-guard** (`agent/robo_agent/guard.py`) is a PreToolUse hook on every tool call. It **blocks** the agent's own setup and keys, graded work (Moodle quiz attempts, assignment submissions, forum posts, raw JavaScript on school sites) and remote images or active HTML in notes. It **asks** before irreversible steps (`rm`, `sudo`, `git push`, Send/Reply/Delete clicks, Enter on a mail page, uploads). An error inside the hook denies the call. After each state-changing step it writes a receipt to `~/.local/share/robo/receipts.jsonl`, so the app can show "✓ sent · host" or "⚠ unverified" under a claim.
 - **Boundary.** The guard's patterns are a speed bump; the wall is the CLI's own: deny rules keep Read, Edit, Grep and Glob out of the runtime folder and `~/.hermes`, and on macOS Bash runs in a sandbox that cannot read them, write to the agent's code or reach anything on localhost (Brave's debugging port). Bash keeps the rest of the laptop and the internet. It costs `ps`, `top`, local dev servers, AppleScript to other apps, `git init` and `git clone`; `open` alone runs outside so that apps can start.
 - **Approvals.** `approvals` in `config.json` is `"off"` for a new setup: the guard's asks are allowed and only its blocks stop the agent. With `"manual"` each ask reaches the card as Allow/Deny (no answer in 120 s is Deny).
@@ -158,7 +158,7 @@ Work goes on `dev`. A pull request from `dev` into `master` runs CI, and it is m
 ## Known limits
 
 - **Prompt injection.** Robo reads untrusted text (mail, chats, web pages) and acts on your accounts. The persona and the guard reduce the risk but do not remove it, and with approvals `off` the guard's blocks are the only hard stop.
-- **A slow failure when Anthropic is unreachable.** The SDK retries for several minutes before the run fails with "Connection refused"; until then the app only shows "thinking".
+- **A slow failure when DeepSeek is unreachable.** The SDK retries for several minutes before the run fails with "Connection refused"; until then the app only shows "thinking".
 - **Offline source checks** catch impersonation and offer scams, not phishing in general (about three quarters of live phishing URLs were flagged).
 - **Spaces and full screen.** The app stays on the Space where it started and doesn't follow you into full-screen apps.
 - **Hotkey clashes** with another app over Ctrl+Q are not detected.

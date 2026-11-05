@@ -13,7 +13,7 @@ let usage = """
                 [{setup,key,signin,chat,activity,plan,calendar,voice-eval}]
 
     `robo` opens the floating robo. `robo setup` prepares robo's agent and the login item, `robo key`
-    stores the agent's API keys (`set anthropic`, `set supermemory`: the key is read from the terminal,
+    stores the agent's API keys (`set deepseek`, `set supermemory`: the key is read from the terminal,
     not shown, or from stdin; `status` says only set or not set), `robo signin` opens robo's Brave
     for school sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on
     this laptop, `robo plan` packs study blocks into free time (JSON in, JSON out), `robo calendar`

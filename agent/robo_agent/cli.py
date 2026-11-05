@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     if not store.forget(args.id):
         print(f"no memory {args.id}", file=sys.stderr)
         return 1
-    key = cfg.key("api_key", "ANTHROPIC_API_KEY")
+    key = cfg.key("api_key", "DEEPSEEK_API_KEY")
     if key:  # rewrite the profile without the forgotten fact (without a key: the plain summary)
         from .harness import make_llm
 

@@ -2,7 +2,7 @@
 // how the app reaches it, `robo key`, and keeping the service running while the app runs.
 //
 // Everything is in `R = ~/.local/share/robo/agent/` (0700): `config.json` (written by `robo setup`, see `Setup.writeConfig`) and
-// one-line key files (0600): `api_key` (Anthropic), `supermemory_key` (optional) and `server_key` (the bearer the app sends).
+// one-line key files (0600): `api_key` (DeepSeek), `supermemory_key` (optional) and `server_key` (the bearer the app sends).
 // No key is ever printed, logged or put in an error.
 import CryptoKit
 import Foundation
@@ -12,12 +12,12 @@ import Security
 /// only the CLI entry points and the app use the real one.
 public struct AgentHome {
     public static let defaultPort = 8765
-    public static let defaultModel = "claude-sonnet-5-5"
+    public static let defaultModel = "deepseek-flash"
     /// What `robo key set <name>` writes, by name.
-    public static let keyFiles = ["anthropic": "api_key", "supermemory": "supermemory_key"]
+    public static let keyFiles = ["deepseek": "api_key", "supermemory": "supermemory_key"]
     public static let serverKeyFile = "server_key"
-    /// The one line the card or the chat shows when the agent cannot work without the user's Anthropic key.
-    public static let noKeyMessage = "Robo's agent has no Anthropic API key yet: run `robo key set anthropic` in Terminal."
+    /// The one line the card or the chat shows when the agent cannot work without the user's DeepSeek key.
+    public static let noKeyMessage = "Robo's agent has no DeepSeek API key yet: run `robo key set deepseek` in Terminal."
 
     public var home: URL
     public var env: [String: String]
@@ -145,8 +145,8 @@ public struct AgentHome {
                             healthy: { Host.httpStatus(health, timeout: 1.5) == 200 }, launch: launch)
     }
 
-    /// Is the user's Anthropic key there?
-    public var hasAnthropicKey: Bool { readKey(Self.keyFiles["anthropic"]!) != nil }
+    /// Is the user's DeepSeek key there?
+    public var hasDeepSeekKey: Bool { readKey(Self.keyFiles["deepseek"]!) != nil }
 }
 
 /// A running service process: `Process`, or a fake in tests.
@@ -241,7 +241,7 @@ public final class AgentService: @unchecked Sendable {
 // MARK: - `robo key`
 
 public enum Keys {
-    static let usage = "usage: robo key set {anthropic,supermemory} | robo key status\n"
+    static let usage = "usage: robo key set {deepseek,supermemory} | robo key status\n"
         + "  set: reads the key from the terminal (not shown) or from stdin, never from the command line"
 
     /// A key as typed or piped: trimmed, then one run of printable non-space ASCII of at most 1024 characters; nil otherwise.

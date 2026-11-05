@@ -31,12 +31,12 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   real `robo-agent serve`): a throwaway `HOME=<dir>` holding `<dir>/.local/share/robo/agent/` (0700) with a
   `config.json` (e.g. `{"port": 8799, "approvals": "manual", "learn": false, "vault": "<dir>/vault"}`), a
   `server_key` and a dummy `api_key` (0600 each), and `ANTHROPIC_BASE_URL=http://127.0.0.1:9` in the environment
-  (the SDK passes the inherited environment to its CLI), so no request reaches Anthropic. Start
+  (the SDK passes the inherited environment to its CLI), so no request reaches DeepSeek. Start
   `HOME=<dir> ANTHROPIC_BASE_URL=http://127.0.0.1:9 uv run robo-agent serve` and talk to it with curl
   (`/health` needs no key; everything else `Authorization: Bearer <server_key>`), or point the app's client at it.
   `robo chat` (with `HOME=<dir>`) starts the service AND Robo's Brave with the throwaway profile
   `<dir>/.hermes/profiles/robo/brave`: kill that Brave afterwards (it listens on 9333, where the live one would).
-  The first run also fetches `@playwright/mcp` with `npx`. **Slow failure, known**: with Anthropic unreachable the
+  The first run also fetches `@playwright/mcp` with `npx`. **Slow failure, known**: with the API unreachable the
   SDK's CLI retries for several minutes before the run fails with a clear "Connection refused"; the app shows only
   "thinking" until then. Don't mistake that for a hang.
 - `tests/test_e2e.py` runs the real SDK and bundled CLI against a fake API with a fake `npx`: no key, no network (it skips
@@ -65,7 +65,7 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   resumed; a lost transcript drops the mapping and the run retries once as a new session), `activity.jsonl`, `memory/`, `skills-learned/`, `learning.jsonl`, `consolidated` (the day of the last profile rewrite) and
   `claude/` (the SDK CLI's `CLAUDE_CONFIG_DIR`). The service logs to `~/Library/Logs/Robo/agent.log`.
 - `config.json` is read ONCE when the service starts (`cli.main`); the keys are read again on every run or request
-  (an env var `ANTHROPIC_API_KEY` / `SUPERMEMORY_API_KEY` / `ROBO_SERVER_KEY` wins over the file). After editing the
+  (an env var `DEEPSEEK_API_KEY` / `SUPERMEMORY_API_KEY` / `ROBO_SERVER_KEY` wins over the file). After editing the
   config, restart the service: the app stops the one it started when it quits (`applicationWillTerminate`) and
   `AgentKeeper` starts a new one before the next request; a service the app did not start is left alone.
 - **Approvals**: `Setup.defaultApprovals` = `"off"` (the user asked for "all permission" on 2026-10-23); only a NEW
@@ -79,6 +79,11 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   harmless prompt if a live check is needed.
 
 ## The agent (`agent/robo_agent`)
+- **Provider: DeepSeek (owner, 2026-11-05)**. The SDK and CLI stay and talk to `https://api.deepseek.com/anthropic`
+  (`config.API_BASE`; `ANTHROPIC_BASE_URL` overrides it, which is the test seam). The key is `R/api_key` or `DEEPSEEK_API_KEY`, and
+  `options()`/`make_llm` set BOTH `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` to it: DeepSeek prefers Bearer, and the CLI and the
+  `anthropic` client would otherwise fill the other one from a real Anthropic key in the environment. DeepSeek's docs list no
+  `document` blocks, so Read of a PDF may fail. **Not verified**: anything against the real DeepSeek API (no key on this Mac).
 - **Tools** (a new tool is a CLI plus a skill unless it needs what Bash's sandbox refuses: loopback, as the browser does, or R,
   as memory does; Playwright's 25 tools are about 5.3k tokens of schema per turn, measured 2026-11-05) (`harness.TOOLS`): Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Skill, plus the MCP servers
   `playwright` (`npx -y @playwright/mcp@0.0.83 --cdp-endpoint http://127.0.0.1:9333`, snapshots in
@@ -136,7 +141,7 @@ Claude Agent SDK, which replaced Hermes Agent in the same revamp). macOS 26 is t
   fallback, the user's raw words, is `mirror=False`: the row's `local` flag keeps every later forget off the wire too, since a DELETE carries the text), no `/v4/conversations`, no `/v4/profile` read, and counted habits
   stay local (`habit_key`: `_sm_add` skips them, nothing is forgotten there for them, and `add` never merges into them).
 - **Learning** (`learn.py`, after every run that was not cancelled and not automated, in one background job, `CHEAP_MODEL` =
-  `claude-haiku-5-5`, 60 s, unless `"learn": false`): up to 3 facts per run; a skill is considered only after ≥ 5 tool
+  `deepseek-flash`, 60 s, unless `"learn": false`): up to 3 facts per run; a skill is considered only after ≥ 5 tool
   calls, a failed run or a correction ("no, I meant..."). The model's reply must be strict JSON; `vet_skill` refuses
   reserved names (`school-`, `study-`, `robo-`, any built-in), graded-work words, anything that weakens safety
   (guard/approvals/SOUL.md/sudo...), HTML/images/remote scripts, secrets, > 4096 bytes, > 30 skills. An updated skill

@@ -95,7 +95,8 @@ def test_an_ordinary_command_runs(g, command):
 
 @pytest.mark.parametrize("command", [
     "cat ~/.local/share/robo/agent/api_key", "ls .local/share/robo/agent",
-    "echo $ANTHROPIC_API_KEY", "cat server_key", "cat supermemory_key",
+    "echo $ANTHROPIC_API_KEY", "echo $ANTHROPIC_AUTH_TOKEN",
+    "echo $DEEPSEEK_API_KEY", "cat server_key", "cat supermemory_key",
     "uv run robo-agent memory list",
     "python3 -m robo_agent", "tail ~/.local/share/robo/receipts.jsonl", "rm usage.jsonl",
     "ls ~/.hermes/profiles/robo/brave", "cat ~/.hermes/profiles/robo/.env", "cat ~/.her''mes/x",

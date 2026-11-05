@@ -240,7 +240,7 @@ def test_without_an_api_key_the_run_fails_clearly_and_no_client_starts(cfg):
         finally:
             await client.close()
         assert [e["event"] for _, e in got] == ["run.failed"]
-        assert "no Anthropic API key" in got[0][1]["error"]
+        assert "no DeepSeek API key" in got[0][1]["error"]
     run(go())
     assert Fake.made == []
 
@@ -463,7 +463,7 @@ def test_approvals_off_allows_asks_but_blocks_still_hold(cfg):
 def test_config_defaults_to_approvals_off(tmp_path):
     cfg = config.load(tmp_path / "missing")
     assert (cfg.approvals, cfg.port, cfg.learn) == ("off", 8765, True)
-    assert cfg.model == "claude-sonnet-5-5"
+    assert cfg.model == "deepseek-flash"
     (tmp_path / "config.json").write_text('{"approvals": "manual", "port": 9000, "extra": 1}')
     assert (config.load(tmp_path).approvals, config.load(tmp_path).port) == ("manual", 9000)
     (tmp_path / "config.json").write_text('{"approvals": "sometimes"}')

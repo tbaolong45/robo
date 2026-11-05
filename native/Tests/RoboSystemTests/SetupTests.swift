@@ -91,7 +91,7 @@ private let uv = "/opt/fake/uv"
     @Test func theModelAndTheMoodleAddressComeFromTheConfig() throws {
         try scratch { tmp throws in
             let a = agent(tmp)
-            #expect(a.model == "claude-sonnet-5-5" && a.moodle == nil && Setup.postsMoodle(a) == nil)
+            #expect(a.model == "deepseek-flash" && a.moodle == nil && Setup.postsMoodle(a) == nil)
             try write("{\"model\": \"claude-opus-5-5\", \"moodle_url\": \"https://lms.uni.example/my/\"}", to: a.configFile)
             #expect(a.model == "claude-opus-5-5" && Setup.postsMoodle(a) == "https://lms.uni.example")
             for bad in ["\"http://lms.uni.example\"", "\"--remote-debugging-port=1\"", "\"\"", "null"] {
@@ -99,7 +99,7 @@ private let uv = "/opt/fake/uv"
                 #expect(Setup.postsMoodle(a) == nil, "\(bad)")  // the scan stays off
             }
             try write("not json", to: a.configFile)
-            #expect(a.model == "claude-sonnet-5-5" && a.port == 8765)
+            #expect(a.model == "deepseek-flash" && a.port == 8765)
         }
     }
 
@@ -226,14 +226,14 @@ private let uv = "/opt/fake/uv"
             let a = agent(tmp)
             var out: [String] = [], err: [String] = []
             let secret = "sk-ant-api03-SECRETVALUE"
-            #expect(runKey(["set", "anthropic"], agent: a, readSecret: { "  \(secret)\n" }, out: { out.append($0) }, err: { err.append($0) }) == 0)
+            #expect(runKey(["set", "deepseek"], agent: a, readSecret: { "  \(secret)\n" }, out: { out.append($0) }, err: { err.append($0) }) == 0)
             let file = a.keyFile("api_key")
             #expect(try read(file) == secret + "\n" && mode(file) == 0o600 && mode(a.dir) == 0o700)
-            #expect(a.hasAnthropicKey)
+            #expect(a.hasDeepSeekKey)
             #expect(runKey(["set", "supermemory"], agent: a, readSecret: { "sm_x" }, out: { out.append($0) }, err: { err.append($0) }) == 0)
             #expect(try read(a.keyFile("supermemory_key")) == "sm_x\n")
             #expect(runKey(["status"], agent: a, readSecret: { nil }, out: { out.append($0) }, err: { err.append($0) }) == 0)
-            #expect(out.suffix(3) == ["anthropic: set", "supermemory: set", "server: not set"])
+            #expect(out.suffix(3) == ["deepseek: set", "supermemory: set", "server: not set"])
             #expect(!(out + err).joined().contains(secret) && !(out + err).joined().contains("sm_x"))
             #expect(try fm.contentsOfDirectory(atPath: a.dir.path).sorted() == ["api_key", "supermemory_key"])  // no temp file left
         }
@@ -244,10 +244,10 @@ private let uv = "/opt/fake/uv"
             let a = agent(tmp)
             var err: [String] = []
             for bad in [nil, "", "   \n", "two words", "tab\there", "caf\u{E9}", String(repeating: "k", count: 1025)] as [String?] {
-                #expect(runKey(["set", "anthropic"], agent: a, readSecret: { bad }, out: { _ in }, err: { err.append($0) }) == 1)
+                #expect(runKey(["set", "deepseek"], agent: a, readSecret: { bad }, out: { _ in }, err: { err.append($0) }) == 1)
             }
             #expect(!fm.fileExists(atPath: a.keyFile("api_key").path))
-            for args in [[], ["set"], ["set", "openai"], ["set", "anthropic", "sk-in-argv"], ["show"]] {
+            for args in [[], ["set"], ["set", "anthropic"], ["set", "deepseek", "sk-in-argv"], ["show"]] {
                 #expect(runKey(args, agent: a, readSecret: { Issue.record("read"); return nil }, out: { _ in }, err: { err.append($0) }) == 2)
             }
             #expect(!err.joined().contains("sk-in-argv"))
@@ -261,7 +261,7 @@ private let uv = "/opt/fake/uv"
             let a = agent(tmp)
             let lines = try Setup.report(moodle: nil, agent: a, executable: exe, project: try project(tmp), uv: { _ in uv }, running: { true })
             let c = try config(a)
-            #expect(c["port"] as? Int == 8765 && c["model"] as? String == "claude-sonnet-5-5" && c["approvals"] as? String == "off")
+            #expect(c["port"] as? Int == 8765 && c["model"] as? String == "deepseek-flash" && c["approvals"] as? String == "off")
             #expect(c["vault"] as? String == Vault.dir(home: a.home).path && c["learn"] as? Bool == true)
             #expect(c["moodle_url"] is NSNull && c["robo_cmd"] as? String == exe.path && c["uv_path"] as? String == uv)
             #expect(try mode(a.configFile) == 0o600 && mode(a.dir) == 0o700)
@@ -270,7 +270,7 @@ private let uv = "/opt/fake/uv"
             #expect(!lines.joined().contains(key))
             #expect(lines.first == "- wrote robo's agent settings (\(a.configFile.path))")
             #expect(lines.contains("- made the key the app uses with robo's agent"))
-            #expect(lines.last == "- next: run `robo key set anthropic` (robo's agent needs your Anthropic API key)")
+            #expect(lines.last == "- next: run `robo key set deepseek` (robo's agent needs your DeepSeek API key)")
             _ = try Setup.report(moodle: nil, agent: a, executable: exe, project: try project(tmp), uv: { _ in uv }, running: { true })
             #expect(a.readKey("server_key") == key)  // kept
         }

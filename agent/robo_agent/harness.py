@@ -1,4 +1,4 @@
-"""One run of the agent: the Claude Agent SDK with robo's persona, skills, memory and guard.
+"""One run of the agent: the Claude Agent SDK on DeepSeek, with persona, skills, memory and guard.
 
 The app's events come out of `Run.emit` in the shape Brain.swift reads (see server.py). Every tool
 call passes robo-guard first: the PreToolUse hook answers allow or deny for every call (robo has
@@ -21,7 +21,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-from .config import AGENT, Config, builtin_skills, render_skills, soul
+from .config import AGENT, API_BASE, Config, builtin_skills, render_skills, soul
 from .guard import Guard
 from .memory import private_reason
 
@@ -30,7 +30,7 @@ PLAYWRIGHT = "@playwright/mcp@0.0.83"
 CDP = "http://127.0.0.1:9333"  # robo's own Brave, started by the app
 PREFIXES = ("mcp__playwright__", "mcp__robo__")
 APPROVAL_S = 120
-CHEAP_MODEL = "claude-haiku-5-5"
+CHEAP_MODEL = "deepseek-flash"
 LLM_S = 60
 TERMINAL = {"run.completed", "run.failed", "run.cancelled"}
 DENIED = ("BLOCKED: the user denied this. Do NOT retry it or try another way; tell the user what "
@@ -165,17 +165,24 @@ def consolidate_due(cfg: Config) -> bool:
 
 # --- the SDK side ------------------------------------------------------------------------
 
+def api_base() -> str:
+    """DeepSeek; the tests and CLAUDE.md's offline recipe reroute it with ANTHROPIC_BASE_URL."""
+    return os.environ.get("ANTHROPIC_BASE_URL") or API_BASE
+
+
 def make_llm(key: str):
     """The cheap model for learning: (system, prompt) -> text, bounded in time and length."""
     import anthropic
 
-    client = anthropic.AsyncAnthropic(api_key=key, max_retries=1, timeout=LLM_S)
+    # Both credentials, or the client fills the other from a real Anthropic key in the environment.
+    client = anthropic.AsyncAnthropic(api_key=key, auth_token=key, base_url=api_base(),
+                                      max_retries=1, timeout=LLM_S)
 
     async def llm(system: str, prompt: str) -> str:
         message = await asyncio.wait_for(client.messages.create(
             model=CHEAP_MODEL, max_tokens=2000, system=system,
             messages=[{"role": "user", "content": prompt}],
-            output_config={"effort": "low"}), LLM_S)
+            thinking={"type": "disabled"}), LLM_S)  # thinking could use up the 2000 tokens
         return "".join(block.text for block in message.content if block.type == "text")
 
     return llm
@@ -314,7 +321,10 @@ def options(run: Run, cfg: Config, key: str, store, plugin: Path, guard: Guard,
                 "-y", PLAYWRIGHT, "--cdp-endpoint", CDP, "--output-dir", str(shared / "browser")]},
             "robo": memory_server(store)},
         hooks=hooks(run, cfg, guard, used),
-        env={"ANTHROPIC_API_KEY": key, "CLAUDE_CONFIG_DIR": str(cfg.root / "claude"),
+        # Both credentials, so a real Anthropic key in the environment can't reach DeepSeek.
+        env={"ANTHROPIC_API_KEY": key, "ANTHROPIC_AUTH_TOKEN": key,
+             "ANTHROPIC_BASE_URL": api_base(), "ANTHROPIC_DEFAULT_HAIKU_MODEL": CHEAP_MODEL,
+             "CLAUDE_CONFIG_DIR": str(cfg.root / "claude"),
              "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",  # the key stays out of Bash's environment
              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
 
@@ -379,10 +389,10 @@ async def stream(run: Run, client, used) -> tuple[str, bool]:
 
 async def execute(run: Run, cfg: Config, store, connect=None, previous: dict | None = None):
     """Run one request to its end event. `connect(options)` makes the SDK client (tests fake it)."""
-    key = cfg.key("api_key", "ANTHROPIC_API_KEY")
+    key = cfg.key("api_key", "DEEPSEEK_API_KEY")
     if not key:
-        run.emit("run.failed", error="no Anthropic API key: add one in Robo (or put it in "
-                 f"{cfg.root / 'api_key'}) and ask again.")
+        run.emit("run.failed", error="no DeepSeek API key: run `robo key set deepseek` in "
+                 "Terminal and ask again.")
         return
     if connect is None:
         from claude_agent_sdk import ClaudeSDKClient as connect

@@ -1,4 +1,4 @@
-"""The real SDK and its real CLI against a fake Anthropic API on loopback: no key, no network.
+"""The real SDK and CLI against a fake Anthropic-format API on loopback: no key, no network.
 
 The tests in test_server.py fake the client, so they cannot see what the CLI really does with the
 options (it keeps a resumed session's first system prompt, for one). These can: the fake API plays
@@ -7,6 +7,7 @@ the learner's calls too. `npx` is a fake Playwright MCP server.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -87,7 +88,8 @@ class FakeApi:
                 body = json.loads(self.rfile.read(int(self.headers["content-length"])) or b"{}")
                 if "count_tokens" in self.path:
                     return self.send_json(200, {"input_tokens": 1})
-                api.requests.append({"key": self.headers.get("x-api-key"), "body": body})
+                api.requests.append({"key": self.headers.get("x-api-key"),
+                                     "bearer": self.headers.get("authorization"), "body": body})
                 return api.answer(self, body)
 
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -262,6 +264,26 @@ def last_user_text(body):
 
 
 # --- the run itself -------------------------------------------------------------------------
+
+def test_a_real_anthropic_key_in_the_environment_never_reaches_the_provider(api, cfg, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ANTHROPIC-KEY-CANARY")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC-TOKEN-CANARY")
+    session(cfg, script(bash("echo hi")))
+    assert api.requests and {r["body"]["model"] for r in api.requests} == {"deepseek-flash"}
+    assert {r["key"] for r in api.requests} == {KEY}
+    assert {r["bearer"] for r in api.requests} == {f"Bearer {KEY}"}
+
+
+def test_the_learners_model_sends_only_the_deepseek_key(api, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ANTHROPIC-KEY-CANARY")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC-TOKEN-CANARY")
+    with contextlib.suppress(Exception):  # the fake's answer is not the point
+        asyncio.run(harness.make_llm(KEY)("system", "hi"))
+    [request] = api.requests[:1]
+    assert (request["key"], request["bearer"]) == (KEY, f"Bearer {KEY}")
+    assert request["body"]["model"] == "deepseek-flash"
+    assert request["body"]["thinking"] == {"type": "disabled"}
+
 
 def test_a_run_uses_the_plain_key_and_streams_the_events_brain_swift_reads(api, cfg):
     [events] = session(cfg, script(bash("echo hi")))

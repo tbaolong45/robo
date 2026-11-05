@@ -148,7 +148,7 @@ public enum Setup {
             done.append("made the key the app uses with robo's agent")
         }
         done += try launchAgent(home: a.home, executable: executable) + Vault.ensure(home: a.home, running: running)
-        if !a.hasAnthropicKey { done.append("next: run `robo key set anthropic` (robo's agent needs your Anthropic API key)") }
+        if !a.hasDeepSeekKey { done.append("next: run `robo key set deepseek` (robo's agent needs your DeepSeek API key)") }
         return (done.isEmpty ? ["already set up, nothing changed"] : done).map { "- \($0)" }
     }
 

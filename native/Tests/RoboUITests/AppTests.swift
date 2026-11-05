@@ -949,7 +949,7 @@ extension Thread {
         #expect(DevSwitches(environment: ["ROBO_NO_VOICE": "1"]).noWatch == false)  // each on its own
     }
 
-    /// The app's client: no Anthropic key = one clear line and nothing started; else the service is made sure of before the request.
+    /// The app's client: no DeepSeek key = one clear line and nothing started; else the service is made sure of before the request.
     @Test func theKeeperSaysWhenTheKeyIsMissingAndStartsTheAgentBeforeAsking() async throws {
         final class Box: @unchecked Sendable { var launches = 0, up = false }
         let box = Box()
@@ -962,7 +962,7 @@ extension Thread {
             for try await _ in keeper.ask("hello", sessionId: "s", started: nil) {}
             Issue.record("expected the key error")
         } catch let e as BrainError {
-            #expect(e.message == AgentHome.noKeyMessage && e.message.contains("robo key set anthropic"))
+            #expect(e.message == AgentHome.noKeyMessage && e.message.contains("robo key set deepseek"))
         }
         #expect(box.launches == 0 && fake.asked.isEmpty)
         hasKey = true

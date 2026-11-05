@@ -16,7 +16,8 @@ from pathlib import Path
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 AGENT = CHECKOUT / "agent"  # SOUL.md, skills/ and this package: robo's own setup
-DEFAULT_MODEL = "claude-sonnet-5-5"
+DEFAULT_MODEL = "deepseek-flash"
+API_BASE = "https://api.deepseek.com/anthropic"  # DeepSeek's Anthropic-format API
 DESKTOP_APPS = ("Open GUI apps on this Mac with `open -a \"<App>\"` from Bash, as a command of its "
                 "own. Bash runs in a sandbox: `ps`, `top`, AppleScript to other apps, anything on "
                 "localhost, `git init` and `git clone` don't work there (commits in an existing "

@@ -9,6 +9,6 @@ def throwaway_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    for name in ("ANTHROPIC_API_KEY", "SUPERMEMORY_API_KEY", "ROBO_SERVER_KEY"):
+    for name in ("DEEPSEEK_API_KEY", "SUPERMEMORY_API_KEY", "ROBO_SERVER_KEY"):
         monkeypatch.delenv(name, raising=False)
     return home
