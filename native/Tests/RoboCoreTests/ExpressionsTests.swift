@@ -1,10 +1,6 @@
-// Port of the non-Qt parts of tests/test_face.py (expression table and animator), plus golden
-// parity with the Python implementation. The golden numbers come from the Python code itself
-// (scratch script: import robo.face.{expressions,animator}, run `Animator(seed)` over the same
-// frames and print "%.13g"); the Swift animator reuses Python's Mersenne Twister, so one seed gives
+// The expression table and the animator. The golden numbers were generated once by the retired Python
+// build (`Animator(seed)` over the same frames, printed "%.13g"); the Swift animator reuses Python's Mersenne Twister, so one seed gives
 // the same blinks and glances.
-// Not ported (they need QPainter/QWidget, so they belong to the UI port): widget renders
-// offscreen, frame interval follows activity, set_state timer, glow antialiasing, theme hooks.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -46,6 +42,9 @@ struct GoldenFrame {
     var look: Vec?
 }
 
+/// The face's colours left the Python table on 2026-11-04 (graphite at rest): `theColourTableIsGraphiteUnlessTheMoodIsStrong`.
+let colourFields: Set<String> = ["hue", "sat"]
+
 /// Frames `1...n` at `t0 + i * dt`, the way the Python script built them.
 func goldenFrames(_ n: Int, dt: Double, t0: Double = 0, target: (Int) -> FaceParams,
                   talking: (Int) -> Bool = { _ in false }, look: (Int) -> Vec? = { _ in nil }) -> [GoldenFrame] {
@@ -63,12 +62,12 @@ func expectTrace(_ name: String, _ anim: Animator, _ frames: [GoldenFrame], _ ro
         let got = numbers.map { p[keyPath: $0] }
         for (k, v) in got.enumerated() { total[k] += v }
         guard let row = want[i + 1] else { continue }
-        for k in got.indices {
+        for k in got.indices where !colourFields.contains(names[k]) {
             #expect(abs(got[k] - row.values[k]) <= 1e-9, "\(name) frame \(row.frame) \(names[k]): \(got[k]) vs \(row.values[k])")
         }
         #expect(p.effects.sorted().joined(separator: " ") == row.fx, "\(name) frame \(row.frame) effects")
     }
-    for k in total.indices {
+    for k in total.indices where !colourFields.contains(names[k]) {
         #expect(abs(total[k] - sums[k]) <= 1e-9 * max(1, abs(sums[k])), "\(name) sum of \(names[k]): \(total[k]) vs \(sums[k])")
     }
 }
@@ -229,9 +228,9 @@ struct ExpressionsTests {
         #expect(got == b.step(goal, dt: 0, talking: talking, now: 1))
     }
 
-    // MARK: golden parity with Python
+    // MARK: goldens
 
-    @Test func pythonRandomMatches() {
+    @Test func mersenneTwisterMatchesItsGoldens() {
         let golden: [(UInt64, [Double], Double)] = [  // (seed, first three random(), uniform(2, 6) after them)
             (0, [0.8444218515250481, 0.7579544029403025, 0.420571580830845], 3.0356670011718534),
             (1, [0.13436424411240122, 0.8474337369372327, 0.763774618976614], 3.020276102957687),
@@ -239,19 +238,35 @@ struct ExpressionsTests {
             (1099511627781, [0.5043802970418443, 0.2686044399723282, 0.9257865475671585], 4.123836957169808),  // 2**40 + 5: two key words
         ]
         for (seed, firsts, u) in golden {
-            var r = PyRandom(seed: seed)
+            var r = MersenneTwister(seed: seed)
             #expect(firsts.map { _ in r.random() } == firsts)
             #expect(r.uniform(2, 6) == u)
         }
-        var r = PyRandom(seed: 1)
+        var r = MersenneTwister(seed: 1)
         #expect((0..<3).map { _ in r.next32() } == [577090037, 2444712010, 3639700191])  // getrandbits(32)
     }
 
-    @Test func targetTableMatchesPython() {
+    @Test func theColourTableIsGraphiteUnlessTheMoodIsStrong() {
+        let rest = FaceParams()
+        for activity in Activity.allCases where activity != .error {
+            for emotion in ["neutral", "happy", "curious", "confused", "calm"] {
+                let p = FaceParams.target(activity, emotion)
+                #expect(p.hue == rest.hue && p.sat == rest.sat, "\(activity)/\(emotion)")
+            }
+        }
+        let strong: [(String, Double, Double)] = [("proud", 44, 0.7), ("concerned", 34, 0.8), ("playful", 318, 0.45), ("sad", 258, 0.3)]
+        for (emotion, hue, sat) in strong {
+            let p = FaceParams.target(.idle, emotion)
+            #expect(p.hue == hue && p.sat == sat, "\(emotion)")
+        }
+        #expect(FaceParams.target(.error, "neutral").hue == 356)
+    }
+
+    @Test func targetTableMatchesItsGolden() {
         #expect(goldenTargets.count == Activity.allCases.count * emotions.count)
         for (activity, emotion, fx, values) in goldenTargets {
             let p = FaceParams.target(activity, emotion)
-            for (k, v) in zip(FaceParams.floats, values) {
+            for (k, v) in zip(FaceParams.floats, values) where k != \FaceParams.hue && k != \FaceParams.sat {
                 #expect(abs(p[keyPath: k] - v) <= 1e-9, "\(activity)/\(emotion) \(k)")
             }
             #expect(p.effects.sorted().joined(separator: " ") == fx, "\(activity)/\(emotion) effects")
@@ -259,7 +274,7 @@ struct ExpressionsTests {
         }
     }
 
-    @Test func idleTraceMatchesPython() {
+    @Test func idleTraceMatchesItsGolden() {
         let idle = FaceParams.target(.idle, "neutral")
         expectTrace("idle", Animator(seed: 1), goldenFrames(600, dt: 1.0 / 60) { _ in idle }, [
             (1, [1, 1, 0.55, 0.004308848364635, -0.002286303429335, 0, 0, 0, 0, 0, 0.15, 0, 1, 188, 0.85, 0.8, 1, 0.02617694830787], ""),
@@ -273,7 +288,7 @@ struct ExpressionsTests {
     }
 
     /// Talking (mouth chatter draws from the generator) for a second, then a different expression.
-    @Test func expressionSwapTraceMatchesPython() {
+    @Test func expressionSwapTraceMatchesItsGolden() {
         let happy = FaceParams.target(.talking, "happy"), sad = FaceParams.target(.idle, "sad")
         let dt = 1.0 / 60
         let frames = goldenFrames(60, dt: dt, target: { _ in happy }, talking: { _ in true })
@@ -291,7 +306,7 @@ struct ExpressionsTests {
         ], sums: [120, 117.252707569684, 65.9999999999999, -18.2911026442941, 26.5004568663151, 12.1, -33, 35.75, 0, 0, 26.4999999999999, 24.3328641118277, 126.632135741713, 22652.5721875506, 99.4035706379681, 85.6142825518723, 72.3500110684468, 76.390009311136])
     }
 
-    @Test func asleepTraceMatchesPython() {
+    @Test func asleepTraceMatchesItsGolden() {
         let asleep = FaceParams.target(.asleep, "neutral")
         expectTrace("asleep", Animator(seed: 3), goldenFrames(400, dt: 1.0 / 60) { _ in asleep }, [
             (1, [1, 0.1, 1, 0, 0.45, 0, 0, 0, 0, 0, 0, 0, 0.45, 188, 0.55, 0.35, 0, 0.01745240643728], "zzz"),
@@ -301,7 +316,7 @@ struct ExpressionsTests {
     }
 
     /// Five-second frames cycling through the activities and emotions: the spring must stay exact.
-    @Test func largeDtTraceMatchesPython() {
+    @Test func largeDtTraceMatchesItsGolden() {
         let frames = (0..<50).map { i in
             GoldenFrame(target: FaceParams.target(Activity.allCases[i % 9], emotions[i % 9]), dt: 5.0,
                         talking: i % 2 == 0, now: Double(i + 1) * 5.0)  // exact in binary: equals Python's running t += 5.0
@@ -315,7 +330,7 @@ struct ExpressionsTests {
     }
 
     /// Every (activity, emotion) target for 1.5 s each, with talking and a look switching on and off.
-    @Test func everyTargetTraceMatchesPython() {
+    @Test func everyTargetTraceMatchesItsGolden() {
         let combos = Activity.allCases.flatMap { a in emotions.map { FaceParams.target(a, $0) } }
         let frames = goldenFrames(3645, dt: 1.0 / 30, target: { combos[($0 - 1) / 45] }, talking: { ($0 / 20) % 2 == 0 },
                                   look: { ($0 / 90) % 3 == 1 ? Vec(0.5, -0.5) : nil })

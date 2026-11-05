@@ -1,5 +1,5 @@
 // The window: the displays and their coordinates, layout, dragging across displays, the Type window, the
-// menu and leaving. The rig (fake Hermes, ear, displays, clock, openers) is in TestRig.swift.
+// menu and leaving. The rig (fake agent, ear, displays, clock, openers) is in TestRig.swift.
 import AppKit
 import Foundation
 import Testing
@@ -365,8 +365,8 @@ import RoboVoice
         r.window.ask("story")
         #expect(await pump(r.window.mind.activity == .talking))
         r.window.clicked()
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped == ["run_1"]))
+        r.agent.gate.signal()
     }
 
     // MARK: the screens come and go
@@ -465,8 +465,8 @@ import RoboVoice
         r.window.menu(.type)
         #expect(r.chatFocuses == 1)
         r.window.menu(.digest)
-        #expect(await pump(!r.hermes.asked.isEmpty && !r.window.busy))
-        #expect(r.hermes.asked[0].text == RoboWindow.digestPrompt)
+        #expect(await pump(!r.agent.asked.isEmpty && !r.window.busy))
+        #expect(r.agent.asked[0].text == RoboWindow.digestPrompt)
         r.window.menu(.quit)
         #expect(await pump(r.terminated))
     }
@@ -528,7 +528,7 @@ import RoboVoice
         #expect(!r.window.panel.isVisible)  // the pet is gone at once
         #expect(!r.terminated)  // the process ends when the cleanup is done
         #expect(await pump(r.terminated))
-        #expect(r.hermes.stopped.isEmpty && r.ear.stops == 1)
+        #expect(r.agent.stopped.isEmpty && r.ear.stops == 1)
     }
 
     @Test func aSystemQuitRunsTheCleanupAndWaitsForIt() async {
@@ -544,10 +544,10 @@ import RoboVoice
         #expect(answer == .terminateLater && Date().timeIntervalSince(begun) < 0.15)
         #expect(!r.window.panel.isVisible && !replied)
         #expect(await pump(replied))
-        #expect(r.hermes.stopped == ["run_1"], "the running request is stopped before the app ends")
+        #expect(r.agent.stopped == ["run_1"], "the running request is stopped before the app ends")
         #expect(r.ear.stops == 1 && watcher.stopped && r.pollers[0].stopped == 1)
         #expect(r.window.shouldTerminate(reply: {}) == .terminateNow)  // done: nothing more to wait for
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
     }
 
     @Test func quitFromTheMenuAndTheTerminateItAsksForRunTheCleanupOnce() async {

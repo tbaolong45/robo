@@ -1,4 +1,4 @@
-// Port of tests/test_listen.py: the name matcher, the endpointer and the Listener state machine, driven
+// The name matcher, the endpointer and the Listener state machine, driven
 // with synthetic sample arrays. No test opens the microphone or loads the speech model.
 import Foundation
 import Testing
@@ -140,6 +140,10 @@ final class Events {
     enum Heard: Equatable { case wake, text(String), note(String) }
     private let cond = NSCondition()
     private var items: [Heard] = []
+    private var flag = false
+
+    /// Whether the text delivered last came flagged as hands-free.
+    var handsFree: Bool { get { cond.withLock { flag } } set { cond.withLock { flag = newValue } } }
 
     func put(_ h: Heard) { cond.withLock { items.append(h); cond.broadcast() } }
     var isEmpty: Bool { cond.withLock { items.isEmpty } }
@@ -216,7 +220,7 @@ final class Log<T> {
 func listener(_ events: Events, mic: @escaping () throws -> AudioSource, stt: @escaping () throws -> Transcribe,
               quick: (() throws -> Transcribe)? = nil, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
               nameWake: Bool = true) -> Listener {
-    Listener(onWake: { events.put(.wake) }, onText: { events.put(.text($0)) }, onNote: { events.put(.note($0)) },
+    Listener(onWake: { events.put(.wake) }, onText: { events.handsFree = $1; events.put(.text($0)) }, onNote: { events.put(.note($0)) },
              mic: mic, transcriber: stt, quick: quick, clock: clock, nameWake: nameWake)
 }
 
@@ -229,7 +233,7 @@ func start(_ mic: FakeMic, _ stt: FakeStt, clock: Clock? = nil, quick: FakeStt? 
     let lis = listener(events, mic: { mic }, stt: { stt.callAsFunction }, quick: { quick.callAsFunction },
                        clock: clock.map { c in { c.t } } ?? { ProcessInfo.processInfo.systemUptime }, nameWake: nameWake)
     if noStall { lis.micStallS = 1e9 }
-    #expect(lis.start())
+    lis.start()
     return (lis, events)
 }
 
@@ -288,7 +292,7 @@ func eventually(_ timeout: TimeInterval = 10, _ done: () -> Bool) -> Bool {
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
     #expect(events.get() == .text("and tomorrow?"))  // no wake: the app wakes itself if it takes it
-    #expect(lis.handsFree)  // said in the window, with no key, click or name
+    #expect(events.handsFree)  // said in the window, with no key, click or name
     clock.t = 30  // the window closed (and it was used once anyway)
     mic.feed(sentence(100))
     drained(mic)
@@ -322,7 +326,7 @@ func aFollowUpWindowTakesOnlyRealSpeech(loud: Int, wakes: Bool) {
     #expect(events.isEmpty)
     mic.feed(sentence(100))
     #expect(events.get() == .text("and tomorrow?"))
-    #expect(lis.handsFree)
+    #expect(events.handsFree)
     lis.stop()
 }
 
@@ -337,7 +341,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     drained(mic)  // that recording is over before the next sentence starts (else they would be one)
     mic.feed(sentence(100))  // the window is still open for the real sentence
     #expect(events.get() == .text("and tomorrow?"))  // so the first one changed nothing
-    #expect(lis.handsFree && stt.heard.count == 2)
+    #expect(events.handsFree && stt.heard.count == 2)
     lis.stop()
 }
 
@@ -387,22 +391,22 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     let mic = FakeMic()
     let (lis, events) = start(mic, FakeStt("and tomorrow?", "what time is it in Tokyo", "what's due"), clock: clock, noStall: true,
                               nameWake: false)
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
     #expect(events.get() == .text("and tomorrow?"))
-    #expect(lis.handsFree)
+    #expect(events.handsFree)
     lis.hold()  // a held key
     clock.t = 5
     mic.feed(frames(100, 108) + frames(108, 114, speech) + frames(114, 120))
     drained(mic)
     lis.release()
     #expect(events.get() == .text("what time is it in Tokyo"))
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.listenNow()  // a click
     mic.feed(sentence(200))
     #expect([events.get(), events.get()] == [.wake, .text("what's due")])
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.stop()
 }
 
@@ -413,11 +417,11 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
     #expect(events.get() == .text("and tomorrow?"))
-    #expect(lis.handsFree)
+    #expect(events.handsFree)
     clock.t = 30  // the window closed
     mic.feed(sentence(100))
     #expect([events.get(), events.get()] == [.wake, .text("what time is it?")])
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.stop()
 }
 
@@ -428,11 +432,11 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     lis.listenNow()
     mic.feed(sentence(0))
     #expect([events.get(), events.get()] == [.wake, .text("what's due")])
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.listenNow()
     clock.t = Listen.noSpeechS + 1
     #expect(events.get() == .text(""))
-    #expect(!lis.handsFree)
+    #expect(!events.handsFree)
     lis.stop()
 }
 
@@ -490,6 +494,119 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     #expect(events.isEmpty && stt.heard.isEmpty)
 }
 
+/// A mic whose quiet is a wait, not silence: frames keep coming from a real mic, while `FakeMic`'s empty reads count as silence and
+/// end a recording within milliseconds. For tests that act in the middle of a recording.
+final class Steady: FakeMic {
+    override func read(timeout: TimeInterval) throws -> [Float]? {
+        let end = Date(timeIntervalSinceNow: 1)
+        while Date() < end { if let f = try super.read(timeout: timeout) { return f } }
+        return nil
+    }
+}
+
+/// A sound had started a recording in the follow-up window when the key went down: the key's request is the user's own, so it is
+/// not filtered as hands-free, and what the room said before the press is not part of it.
+@Test func aKeyPressedDuringAFollowUpRecordingIsNotHandsFree() {
+    let clock = Clock()
+    let mic = Steady()
+    let stt = FakeStt("email the professor")
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    mic.feed(frames(0, 8) + frames(8, 12, speech))  // a noise opens a recording in the window
+    drained(mic)
+    lis.hold()
+    clock.t = 5  // a real press, not a tap
+    mic.feed(frames(12, 30, speech))
+    drained(mic)
+    lis.release()
+    mic.feed(frames(30, 80))  // the key's tail, and 3 s of quiet for the recording it interrupted
+    #expect(events.get() == .text("email the professor"))
+    #expect(!events.handsFree)
+    lis.stop()
+    #expect(stt.heard.count == 1 && tags(stt.heard[0]).first! >= 12 && tags(stt.heard[0]).contains(29))
+}
+
+/// The same for a click on the face: a click is never filtered either.
+@Test func aClickDuringAFollowUpRecordingIsNotHandsFree() {
+    let clock = Clock()
+    let mic = Steady()
+    let stt = FakeStt("email the professor")
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.followUp(seconds: 10)
+    mic.feed(frames(0, 8) + frames(8, 12, speech))
+    drained(mic)
+    lis.listenNow()
+    drained(mic)
+    mic.feed(frames(12, 30, speech) + frames(30, 80))
+    #expect([events.get(3), events.get(3)] == [.wake, .text("email the professor")])
+    #expect(!events.handsFree)
+    lis.stop()
+    #expect(stt.heard.count == 1 && tags(stt.heard[0]).first! >= 12 && tags(stt.heard[0]).contains(29))
+}
+
+/// A key pressed in the middle of a sentence after a click: the sentence goes on under the key, and the key's release ends it.
+@Test func aKeyPressedDuringAClickRecordingKeepsTheWordsAndEndsAtTheRelease() {
+    let clock = Clock()
+    let mic = Steady()
+    let stt = FakeStt("what is due")
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.listenNow()
+    mic.feed(frames(0, 8) + frames(8, 14, speech))
+    #expect(events.get(3) == .wake)
+    drained(mic)
+    lis.hold()
+    clock.t = 5
+    mic.feed(frames(14, 20, speech))
+    drained(mic)
+    lis.release()
+    mic.feed(frames(20, 26))  // only the key's tail: no 3 s of quiet
+    #expect(events.get(3) == .text("what is due"))
+    lis.stop()
+    #expect(stt.heard.count == 1 && tags(stt.heard[0]).contains(8) && tags(stt.heard[0]).contains(19))
+}
+
+/// `Listener.running` is true while the model loads, so the key works and the face says "listening". A press that ends before the
+/// model is there has no audio that can be told apart, and it must still end the "listening" (and the blur) with an answer.
+@Test func aLongPressWhileTheModelLoadsStillGetsAnAnswer() {
+    let clock = Clock(), loaded = Flag(), events = Events(), mic = FakeMic(), stt = FakeStt("never said")
+    let lis = listener(events, mic: { mic }, stt: { loaded.wait(5); return stt.callAsFunction }, quick: { FakeStt().callAsFunction },
+                       clock: { clock.t }, nameWake: false)
+    lis.micStallS = 1e9
+    lis.start()
+    #expect(eventually { lis.running })
+    #expect(!lis.ready)
+    lis.hold()
+    clock.t = 5
+    lis.release()
+    loaded.set()
+    mic.feed(frames(0, 3))
+    #expect(events.get(2) == .text(""))
+    lis.stop()
+    #expect(stt.heard.isEmpty)
+}
+
+/// The loop can wait for a transcription with a loud frame in hand, without looking at the key: such a press is owed an answer too.
+@Test func aPressThatCameAndWentDuringATranscriptionStillGetsAnAnswer() {
+    let clock = Clock(), go = Flag(), mic = FakeMic()
+    let stt = FakeStt("what's due", onCall: { _ in go.wait(5) })
+    let (lis, events) = start(mic, stt, clock: clock, noStall: true, nameWake: false)
+    lis.listenNow()
+    mic.feed(sentence(0, 5) + frames(30, 70))  // ends the click's recording: its transcription now waits for `go`
+    #expect(events.get(3) == .wake)
+    #expect(eventually { mic.unread == 0 })
+    mic.feed(frames(70, 72, speech))  // a loud frame: the loop waits for the transcription before it reads the next
+    #expect(eventually { mic.unread <= 1 })
+    Thread.sleep(forTimeInterval: 0.05)
+    lis.hold()
+    clock.t = 5
+    lis.release()
+    go.set()
+    #expect(events.get(3) == .text("what's due"))
+    mic.feed(frames(72, 75))
+    #expect(events.get(2) == .text(""))
+    lis.stop()
+}
+
 @Test func bareNameThenTheRequest() {
     let mic = FakeMic(sentence(0) + sentence(30))
     let (lis, events) = start(mic, FakeStt("Hey robo.", "open Moodle"))
@@ -517,7 +634,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
     let mic = FakeMic(sentence(0))
     let events = Events()
     let lis = listener(events, mic: { mic }, stt: { { _ in Thread.sleep(forTimeInterval: 3); return "x" } })
-    #expect(lis.start())
+    lis.start()
     drained(mic)
     let t = Date()
     lis.stop(wait: 0.2)
@@ -527,7 +644,7 @@ func soundThatIsNotWordsNeitherWakesNorClosesAFollowUpWindow(noise: String) {
 @Test func aMicThatWillNotOpenIsReportedLaterNotByStart() {
     let events = Events()
     let lis = listener(events, mic: { throw VoiceError("no input device") }, stt: { { _ in "" } })
-    #expect(lis.start())  // the mic opens on the listener thread, so start() cannot know yet
+    lis.start()  // the mic opens on the listener thread, so start() cannot know yet
     #expect(events.get() == .note("I can't open the microphone: no input device"))
     #expect(eventually { !lis.running } && !lis.ready)
     Thread.sleep(forTimeInterval: 0.05)
@@ -547,7 +664,7 @@ final class Gate {
     let lis = listener(events, mic: gate.through(mic as AudioSource), stt: { FakeStt("Robo, what time is it?").callAsFunction },
                        quick: { FakeStt().callAsFunction })
     let t = Date()
-    #expect(lis.start())
+    lis.start()
     lis.listenNow(); lis.followUp(seconds: 1)  // what the UI does meanwhile
     #expect(!lis.running && !lis.ready)
     #expect(Date().timeIntervalSince(t) < 5 && events.isEmpty)  // a start() that waited would take the gate's 10 s
@@ -561,7 +678,7 @@ final class Gate {
 @Test func stopWhileTheMicrophoneIsOpeningReturnsAtOnceAndClosesItWhenItOpens() {
     let gate = Gate(), events = Events(), mic = FakeMic(sentence(0)), loads = Log<Int>()
     let lis = listener(events, mic: gate.through(mic as AudioSource), stt: { loads.append(1); return FakeStt("Robo, hi").callAsFunction })
-    #expect(lis.start())
+    lis.start()
     let t = Date()
     #expect(eventually { gate.waiting.all.count == 1 })  // the thread is inside the blocked open
     lis.stop()  // its default wait is 5.5 s: it must not use it
@@ -580,10 +697,11 @@ final class Gate {
         if opened.all.count == 1 { _ = gate.open.wait(timeout: .now() + 10); return stale }
         return fresh
     }, stt: { FakeStt("Robo, hi").callAsFunction })
-    #expect(lis.start())
+    lis.start()
     #expect(eventually { opened.all.count == 1 })  // the first thread is the one inside the blocked open (which thread
     lis.stop()                                      // reaches the factory first is up to the scheduler, so wait for it)
-    #expect(lis.start() && eventually { lis.ready })  // the second start is the one that counts
+    lis.start()
+    #expect(eventually { lis.ready })  // the second start is the one that counts
     gate.open.signal()
     #expect(eventually { stale.closed })
     Thread.sleep(forTimeInterval: 0.05)
@@ -595,7 +713,7 @@ final class Gate {
 @Test func aSpeechModelThatWillNotLoadIsReportedLaterAndFreesTheMic() {
     let events = Events(), mic = FakeMic()
     let lis = listener(events, mic: { mic }, stt: { throw VoiceError("model missing") })
-    #expect(lis.start())  // the model loads on the listener thread, so start() cannot know yet
+    lis.start()  // the model loads on the listener thread, so start() cannot know yet
     #expect(events.get() == .note("I can't load speech recognition: model missing"))
     #expect(mic.closed)
     #expect(eventually { !lis.running })
@@ -608,7 +726,8 @@ final class Gate {
                        quick: { FakeStt().callAsFunction })
     #expect(!lis.running)
     let t = Date()
-    #expect(lis.start() && eventually { lis.running })
+    lis.start()
+    #expect(eventually { lis.running })
     #expect(Date().timeIntervalSince(t) < 1.0 && events.isEmpty && mic.unread > 0)
     #expect(!lis.ready)  // alive, but the model has not loaded
     release.set()
@@ -636,16 +755,16 @@ final class Gate {
 
 @Test func aFollowUpSentenceIsDeliveredWithoutAWake() {
     let order = Log<String>(), done = Events(), mic = FakeMic()
-    let lis = Listener(onWake: { order.append("wake") }, onText: { done.put(.text($0)) }, onNote: { _ in },
+    let lis = Listener(onWake: { order.append("wake") }, onText: { done.handsFree = $1; done.put(.text($0)) }, onNote: { _ in },
                        mic: { mic }, transcriber: { { _ in order.append("final"); return "and tomorrow?" } },
                        quick: { FakeStt().callAsFunction })
-    #expect(lis.start())
+    lis.start()
     lis.followUp(seconds: 10)
     mic.feed(sentence(0))
     #expect(done.get() == .text("and tomorrow?"))
     lis.stop()
     #expect(order.all == ["final"])  // the listener never wakes robo here: the app does once it takes the words (it may refuse them)
-    #expect(lis.handsFree)
+    #expect(done.handsFree)
 }
 
 @Test func otherSpeechGetsOnlyTheQuickCheck() {
@@ -674,9 +793,10 @@ final class Gate {
 @Test func oneModelServesTheQuickChecksByDefault() {
     let loads = Log<Int>()
     let events = Events()
-    let lis = Listener(onWake: {}, onText: { _ in }, onNote: { events.put(.note($0)) }, mic: { FakeMic() },
+    let lis = Listener(onWake: {}, onText: { _, _ in }, onNote: { events.put(.note($0)) }, mic: { FakeMic() },
                        transcriber: { loads.append(1); return { _ in "" } })  // Parakeet is fast enough for both
-    #expect(lis.start() && eventually { lis.ready })
+    lis.start()
+    #expect(eventually { lis.ready })
     lis.stop()
     #expect(loads.all.count == 1)
 }
@@ -728,7 +848,7 @@ final class Ticking: FakeMic {
         }
     }, stt: { { _ in "Robo, what time is it?" } }, quick: { FakeStt().callAsFunction }, clock: { clock.t })
     lis.micRetryS = 0.01
-    #expect(lis.start())
+    lis.start()
     #expect(events.get() == .note("I lost the microphone, reconnecting..."))
     #expect([events.get(), events.get()] == [.wake, .text("what time is it?")])
     #expect(Events.note(events.get()) != nil)  // the fresh mic died too: reported again
@@ -761,7 +881,7 @@ func onlyAGapOfMicStallSecondsIsAnOutage(timeouts: Int, reported: Bool) {
     let script: [[Float]?] = frames(0, 4) + [[Float]?](repeating: nil, count: timeouts) + frames(4, 6)
     let mic = Scripted(clock, script)
     let lis = listener(events, mic: { mic }, stt: { { _ in "" } }, clock: { clock.t })
-    #expect(lis.start())
+    lis.start()
     _ = eventually(5) { mic.remaining == 0 }
     Thread.sleep(forTimeInterval: 0.05)
     lis.stop()

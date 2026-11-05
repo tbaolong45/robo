@@ -1,5 +1,5 @@
 // The footer's receipts: what the reply claims against what robo-guard recorded (a labelled click, a send key, a file
-// write). The record format is the guard's `_receipt` in hermes/plugins/robo-guard/__init__.py.
+// write). The record format is `receipt` in agent/robo_agent/guard.py.
 import Foundation
 import Testing
 @testable import RoboCore

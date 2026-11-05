@@ -1,5 +1,4 @@
-// Port of tests/test_browser.py (macOS only: the /proc lookup and the Linux find_brave path are not ported),
-// plus tests of the process and HTTP helpers every module shares. No test starts a real Brave, kills a real
+// Robo's Brave, plus tests of the process and HTTP helpers every module shares. No test starts a real Brave, kills a real
 // process or asks the machine's port 9333: `up` and `spawn` are fakes, and HTTP goes to a throwaway local server.
 import Foundation
 import Testing
@@ -78,7 +77,7 @@ private let app = "/Applications/Brave Browser.app/Contents"
             var answers = [false, false, true][...]
             let d = tmp.appendingPathComponent("b")
             #expect(try Browser.ensure(d, up: { answers.popFirst()! }, spawn: { started.append($0) }, sleep: { _ in }) == true)
-            // The command line Python builds, in its order.
+            // The command line, in its order.
             #expect(started == [[Browser.binary, "--user-data-dir=\(d.path)", "--remote-debugging-port=9333",
                                  "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check",
                                  "--headless=new"]])
@@ -193,7 +192,7 @@ private let app = "/Applications/Brave Browser.app/Contents"
         #expect(Browser.pids(d, ps: { ps(d) }) == [101, 102])  // not 103, whose dir only starts the same
     }
 
-    @Test func pidsMatchesPythonsPartitionOfTheLines() {
+    @Test func pidsPartitionTheLines() {
         // Python's answer for these extra lines: a pid with a short line matches, "x 5 ..." is not a pid.
         let d = URL(fileURLWithPath: "/Users/Jane Doe/brave")
         let extra = ps(d) + "   99 x --user-data-dir=\(d.path)\nx 5 --user-data-dir=\(d.path)\n"

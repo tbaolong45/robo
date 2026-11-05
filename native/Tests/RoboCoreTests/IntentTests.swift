@@ -48,14 +48,12 @@ import Testing
     "find a time and book it", "check my mail and delete the spam", "open the form and fill it in", "check me in for the lab",
     "check it off my list", "have it done by five", "do my homework", "do the reading for me", "tell Ben what's due",
     "give Anna the notes",
+    // what it cannot read, such as another language
+    "gửi cho cô Lan", "hôm nay có gì",
     // a question with a write verb: the agent may act on "how do I cancel" as well as answer it
     "can I submit late", "how do I cancel the meeting", "did Anna reply", "what happens if I delete it", "is it too late to apply",
-    // Vietnamese, composed and decomposed (g + u + horn + hook above + i)
-    "gửi cho cô Lan", "g\u{75}\u{31B}\u{309}i cho cô Lan", "trả lời thư này", "Trả  lời Anna", "xóa email đó", "XÓA nó đi",
-    "xoá nó đi", "hủy cuộc họp", "nộp bài tập", "đăng câu hỏi lên diễn đàn", "thêm vào lịch", "vâng, hôm nay có gì",
     // a confirmation answers something robo proposed, alone or before a question
     "yes", "Yes, please.", "ok", "Okay!", "go ahead", "do it", "yeah sure", "Yep, do it please", "confirm", "proceed",
-    "có", "ừ", "đồng ý", "vâng", "u\u{31B}\u{300}",  // the last is a decomposed ừ
     "yes what is due tomorrow", "ok what's the time", "sure, read my mail", "sounds good", "that works", "alright then",
     "yes yes yes yes yes yes", "do it later today then please wait here", "go ahead and read my mail",
     // what is not clearly a question or a "show me" is not read-only
@@ -111,9 +109,6 @@ func sentencesThatChangeThings(text: String) {
     "thanks", "thank you", "thanks robo", "thank you so much", "good morning", "hello",
     // closing the chat is not a request for the agent
     "close the chat",
-    // Vietnamese
-    "hôm nay có gì", "đọc thư mới nhất", "đọc thư gửia",  // a word that only starts like gửi
-    "bài tập nào sắp hết hạn", "khi nào thi", "lịch học ở đâu", "xem lịch hôm nay", "có bài tập mới không", "tóm tắt bài giảng",
 ])
 func sentencesThatChangeNothing(text: String) {
     #expect(!Intent.changesThings(text), "\(text)")

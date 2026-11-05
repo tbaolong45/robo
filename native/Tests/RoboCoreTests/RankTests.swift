@@ -223,13 +223,6 @@ private func ids(_ items: [RadarItem]) -> [String] { items.map(\.id) }
         let liked = item("liked", "Vision study", "vision of cameras"), disliked = item("disliked", "Vision survey", "vision of chemistry")
         #expect(Rank.rank([disliked, liked], profile: p, now: now).map(\.item.id) == ["liked", "disliked"])
     }
-
-    @Test func notForMeKeywordsSkipTheWordsOfYourInterests() {
-        let robot = item("g", "Learning to grasp objects", tags: ["robotics", "grasping"])
-        #expect(Rank.dislikeKeywords(for: robot, profile: vision, limit: 3) == ["grasping", "learning", "grasp"])
-        #expect(Rank.dislikeKeywords(for: robot, profile: Profile(), limit: 2) == ["robotic", "grasping"])
-        #expect(Rank.dislikeKeywords(for: robot, profile: vision, limit: 0).isEmpty)
-    }
 }
 
 // MARK: MMR

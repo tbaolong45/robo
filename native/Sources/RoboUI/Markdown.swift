@@ -1,5 +1,5 @@
-// A reply's Markdown as styled rich text, and the text boxes that show it. Port of widgets.style_markdown, hud.md_look
-// and widgets._text_height. Foundation parses the Markdown (`AttributedString(markdown:)`, full syntax); this file turns
+// A reply's Markdown as styled rich text, and the text boxes that show it.
+// Foundation parses the Markdown (`AttributedString(markdown:)`, full syntax); this file turns
 // the blocks into an NSAttributedString with the spacing and colours Qt's QTextDocument got from `style_markdown`:
 // paragraph gap 8, list gap 3, heading gap 4, list indent 18 (+6 when the body is monospace), headings bold in the head colour,
 // the theme's line height as a percent, code lines forming one full-width box with an 8 px indent, inline code and links
@@ -39,7 +39,7 @@ final class InlineBox: NSObject {
 
 enum Markdown {
     static let gap: CGFloat = 8, listGap: CGFloat = 3, headingGap: CGFloat = 4  // px below a paragraph / between list items / under a heading
-    static let headPx: [Int: CGFloat] = [1: 17, 2: 16, 3: 15]  // widgets.HEAD_PX: heading sizes, 14 below
+    static let headPx: [Int: CGFloat] = [1: 17, 2: 16, 3: 15]  // heading sizes, 14 below
     static let indent: CGFloat = 18  // px per list level (Qt's 40 px wastes a sixth of the bubble)
     static let quoteIndent: CGFloat = 40  // Qt's block quote margin, on both sides
 
@@ -190,8 +190,8 @@ enum Markdown {
         let indent: CGFloat
 
         init(_ t: Theme, ink: Double?) {  // the system's colours: they follow light and dark and the glass behind the card
-            text = Chrome.text(ink); head = Chrome.text(ink); link = .linkColor
-            codeBg = Chrome.wash(0.07, ink); codeFg = Chrome.text(ink); inlineBg = Chrome.wash(0.10, ink); grid = Chrome.textDim(ink)
+            text = Chrome.text(ink); head = Chrome.text(ink); link = Chrome.text(ink)  // a link is told by its underline
+            codeBg = Chrome.wash(0.07, ink); codeFg = Chrome.text(ink); inlineBg = Chrome.wash(0.10, ink); grid = Chrome.hairline(ink)
             body = .systemFont(ofSize: CGFloat(t.textPx))
             lineH = CGFloat(t.lineH) / 100
             indent = Markdown.indent
@@ -233,12 +233,7 @@ enum Markdown {
         let (source, formulas) = Latex.extract(markdown)
         let look = Look(t, ink: ink), blocks = parse(source), out = NSMutableAttributedString()
         var tables: [Int: NSTextTable] = [:]
-        // Qt's table is as wide as its cells need (text, 4 px of padding each side, 1 px lines); AppKit's would fill the line
-        var needs: [Int: [Int: CGFloat]] = [:]
-        for b in blocks where b.kind == .cell {
-            let text = NSAttributedString(string: b.inlines.map(\.text).joined(), attributes: [.font: face(look.body, bold: b.inlines.first?.bold ?? false, italic: false), .kern: look.body.isFixedPitch ? 0 : Chrome.qtKern(look.body.pointSize)])
-            needs[b.table, default: [:]][b.column] = max(needs[b.table]?[b.column] ?? 0, text.size().width.rounded(.up) + 8)
-        }
+        let layouts = tableLayouts(blocks, body: look.body, room: mathWidth)
         for (i, b) in blocks.enumerated() {
             let next = i + 1 < blocks.count ? blocks[i + 1] : nil, prev = i > 0 ? blocks[i - 1] : nil
             let piece = NSMutableAttributedString()
@@ -276,7 +271,7 @@ enum Markdown {
                 var spacing: CGFloat = isCell ? 0 : level > 0 ? headingGap : (b.inList && (next?.inList ?? false)) ? listGap : gap
                 if next?.kind == .cell && !isCell { spacing = tableGapAbove }  // Qt: the table starts 1 px under the line above it
                 // a heading is its level's size, bold (the line below follows the font: 20/19/18 px against 17 for body text)
-                let size = level > 0 ? headPx[level] ?? 14 : look.body.pointSize
+                let size = level > 0 ? headPx[level] ?? 14 : b.kind == .cell ? layouts[b.table]?.size ?? look.body.pointSize : look.body.pointSize
                 let lineFont = level > 0 ? face(look.body, bold: true, italic: false, size: size) : look.body
                 let at = CGFloat(b.lists) * look.indent + CGFloat(b.quotes) * quoteIndent
                 let p = NSMutableParagraphStyle()
@@ -289,7 +284,7 @@ enum Markdown {
                     cell.setWidth(1, type: .absoluteValueType, for: .border)
                     cell.setBorderColor(look.grid)
                     cell.setWidth(4, type: .absoluteValueType, for: .padding)
-                    cell.setValue((needs[b.table]?[b.column] ?? 8) - 8, type: .absoluteValueType, for: .width)  // as wide as its widest text
+                    cell.setValue(layouts[b.table]?.widths[b.column] ?? 0, type: .absoluteValueType, for: .width)
                     p.textBlocks = [cell]
                 }
                 para = p
@@ -344,8 +339,49 @@ enum Markdown {
         return out
     }
 
+    /// The text widths of a table's columns and the size its cells are set in. A table is as wide as its cells need (`room` is the
+    /// column it must fit, with 4 px of padding each side and 1 px lines per column). When that does not fit, no column gets narrower
+    /// than its longest word: the room left over goes to the columns that wrap anyway (the prose ones), in proportion to what they would
+    /// like. When even the longest words do not fit, the cells are set smaller, down to `tableMinPx`.
+    private static func tableLayouts(_ blocks: [Block], body: NSFont, room: CGFloat) -> [Int: (widths: [Int: CGFloat], size: CGFloat)] {
+        var out: [Int: (widths: [Int: CGFloat], size: CGFloat)] = [:]
+        for table in Set(blocks.filter { $0.kind == .cell }.map(\.table)) {
+            let cells = blocks.filter { $0.kind == .cell && $0.table == table }
+            func measure(_ size: CGFloat) -> (full: [Int: CGFloat], word: [Int: CGFloat]) {
+                var full: [Int: CGFloat] = [:], word: [Int: CGFloat] = [:]
+                for b in cells {
+                    let text = b.inlines.map(\.text).joined(), bold = b.inlines.contains(where: \.bold)
+                    let attrs: [NSAttributedString.Key: Any] = [.font: face(body, bold: bold, italic: false, size: size), .kern: body.isFixedPitch ? 0 : Chrome.qtKern(size)]
+                    func width(_ s: String) -> CGFloat { NSAttributedString(string: s, attributes: attrs).size().width.rounded(.up) + 1 }
+                    full[b.column] = max(full[b.column] ?? 0, width(text))
+                    for w in text.split(whereSeparator: \.isWhitespace) { word[b.column] = max(word[b.column] ?? 0, width(String(w))) }
+                }
+                return (full, word)
+            }
+            let columns = CGFloat((cells.map(\.column).max() ?? 0) + 1)
+            let free = room - columns * 9 - 1  // padding and lines
+            var size = body.pointSize
+            var (full, word) = measure(size)
+            while word.values.reduce(0, +) > free && size > tableMinPx {
+                size -= 1
+                (full, word) = measure(size)
+            }
+            let spare = free - word.values.reduce(0, +), wish = full.reduce(0) { $0 + $1.value - (word[$1.key] ?? 0) }
+            var widths = full
+            if full.values.reduce(0, +) > free {
+                for (c, f) in full {
+                    let least = word[c] ?? 0
+                    widths[c] = least + (wish > 0 ? max(0, spare) * (f - least) / wish : 0)
+                }
+            }
+            out[table] = (widths, size)
+        }
+        return out
+    }
+    static let tableMinPx: CGFloat = 11
+
     /// What is left of the gap below a table once the table has its own border and the empty block its hair of height, and the
-    /// gap above one (the empty block only; fitted to the Python card's heights: see MarkdownTests).
+    /// gap above one (the empty block only; pinned in MarkdownTests).
     static let tableGapBelow: CGFloat = 9.5, tableGapAbove: CGFloat = 1
 
     /// Plain text (your own quote): one font and colour, no Markdown, and no taller a line for an emoji than Qt's.
@@ -537,22 +573,9 @@ final class BoxTextView: NSTextView {
     }
 }
 
-/// The scroll bar of the style sheet: a 5 px track-less strip with a rounded handle in the accent colour.
-final class KnobScroller: NSScroller {
-    var knob = NSColor.gray { didSet { needsDisplay = true } }
-    override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat { 5 }
-    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
-    override func draw(_ dirtyRect: NSRect) {
-        guard usableParts != .noScrollerParts else { return }
-        var r = rect(for: .knob)
-        if r.height < 18 { r.size.height = 18 }
-        knob.setFill()
-        NSBezierPath(roundedRect: NSRect(x: bounds.maxX - 5, y: r.minY, width: 5, height: r.height), xRadius: 2, yRadius: 2).fill()
-    }
-}
-
-/// A text box as tall as its text, up to a cap, then it scrolls (the reply and the quote's text). The text container
-/// is as wide as the box, 5 px less while the scroll bar shows; it never edits.
+/// A text box as tall as its text, up to a cap, then it scrolls with the system's scroller (overlay, unless the user's setting says
+/// always show). The text is `scrollerRoom` narrower while the scroller shows, or the scroller's track hides the end of each line (seen
+/// on the card, 2026-11-04). It never edits.
 final class TextBox: NSScrollView {
     let textView: BoxTextView
     private let layout = RoboLayoutManager()
@@ -562,6 +585,7 @@ final class TextBox: NSScrollView {
     private(set) var documentHeight: CGFloat = 0
     private var trailing: [NSAttributedString.Key: Any]?
     private(set) var widthChanges = 0  // how often the text was laid out again at the other width (a text that overflows must not do it per tick)
+    static var scrollerRoom: CGFloat { NSScroller.scrollerWidth(for: .small, scrollerStyle: NSScroller.preferredScrollerStyle) }
 
     init(width: CGFloat) {
         boxWidth = width
@@ -576,8 +600,8 @@ final class TextBox: NSScrollView {
         textView.textContainerInset = .zero; textView.isRichText = true; textView.allowsUndo = false
         textView.isVerticallyResizable = false; textView.isHorizontallyResizable = false; textView.autoresizingMask = []
         drawsBackground = false; borderType = .noBorder; hasHorizontalScroller = false; hasVerticalScroller = false
-        verticalScroller = KnobScroller()
-        scrollerStyle = .legacy
+        verticalScroller = NSScroller()
+        verticalScroller?.controlSize = .small
         autohidesScrollers = false
         contentView.drawsBackground = false
         documentView = textView
@@ -589,22 +613,21 @@ final class TextBox: NSScrollView {
     var length: Int { textView.textStorage?.length ?? 0 }
     var string: String { textView.string }
 
-    func style(_ t: Theme) {
-        textView.selectedTextAttributes = [.backgroundColor: Chrome.accent(t, t.hue, 0.35), .foregroundColor: Chrome.text]
-        textView.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
-        (verticalScroller as? KnobScroller)?.knob = Chrome.accent(t, t.hue, 0.45)
+    func style() {
+        textView.selectedTextAttributes = [.backgroundColor: Chrome.wash(0.2), .foregroundColor: Chrome.text]
+        textView.linkTextAttributes = [.foregroundColor: Chrome.text, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
     }
 
     func setContent(_ s: NSAttributedString) {
         textView.textStorage?.setAttributedString(s)
         trailing = s.length > 0 ? s.attribute(.trailing, at: s.length - 1, effectiveRange: nil) as? [NSAttributedString.Key: Any] : nil
         if let trailing { textView.typingAttributes = trailing }  // the empty last line takes its height from these
-        relayout()  // at the width it had: `wantedHeight` decides whether that changes
+        relayout()
     }
 
     private func relayout() {
         if hasVerticalScroller != overflows { hasVerticalScroller = overflows }
-        let width = boxWidth - (overflows ? 5 : 0)
+        let width = boxWidth - (overflows ? Self.scrollerRoom : 0)
         if container.containerSize.width != width { container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude); widthChanges += 1 }
         layout.ensureLayout(for: container)
         // AppKit leaves the line spacing off the last line of the text; Qt's proportional height keeps it
@@ -614,15 +637,15 @@ final class TextBox: NSScrollView {
         textView.setFrameSize(NSSize(width: container.containerSize.width, height: max(documentHeight.rounded(.up), frame.height)))
     }
 
-    /// `_text_height`: 0 when empty, else the height that shows all the text plus 2, at most `cap`. A text that needs
-    /// the cap gets the scroll bar (which takes 5 px of the width, as in Qt). The width the text was last laid out at is kept
-    /// between calls: only near the cap can the other width change the answer, so only there is it tried.
+    /// `_text_height`: 0 when empty, else the height that shows all the text plus 2, at most `cap`. A text that needs the cap gets the
+    /// scroller. The width the text was last laid out at is kept between calls: only near the cap can the other width change the
+    /// answer, so only there is it tried.
     func wantedHeight(cap: CGFloat) -> CGFloat {
         guard !isBlank else { overflows = false; relayout(); return 0 }
         relayout()
         var h = CGFloat(Int(documentHeight)) + 2
         if overflows {
-            guard h <= cap * 1.1 + 40 else { return cap }  // far above the cap, five pixels of width do not bring it under
+            guard h <= cap * 1.1 + 40 else { return cap }  // far above the cap, a few pixels of width do not bring it under
             overflows = false; relayout()
             h = CGFloat(Int(documentHeight)) + 2
         }

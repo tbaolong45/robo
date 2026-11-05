@@ -1,7 +1,6 @@
-// Robo's own Brave: a separate profile (school logins only) that Hermes drives over CDP.
-// Port of src/robo/browser.py (macOS only: no /proc).
+// Robo's own Brave: a separate profile (school logins only) that the agent drives over CDP.
 //
-// The user's everyday Brave locks its login databases while it runs, so Hermes cannot borrow it.
+// The user's everyday Brave locks its login databases while it runs, so the agent cannot borrow it.
 // Robo's Brave has its own data dir, listens on 127.0.0.1 only, runs headless, and is shown once
 // (`robo signin`) so the user can sign in to Outlook, Teams and Moodle with their passkey.
 import Foundation
@@ -12,7 +11,7 @@ public struct BrowserError: Error, CustomStringConvertible {
 }
 
 public enum Browser {
-    public static let port = 9333  // not 9222, which Hermes' own `/browser connect` uses
+    public static let port = 9333
     public static let cdpURL = "http://127.0.0.1:\(port)"
     public static let macBrave = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
     public static let signinURLs = ["https://outlook.office.com/mail/", "https://teams.microsoft.com/"]
@@ -31,8 +30,8 @@ public enum Browser {
     }
 
     /// Make robo's Brave save downloads into `folder`, and download a PDF instead of showing it. A headless Brave has no download
-    /// folder, so nothing it fetched ever reached the disk; CDP's `setDownloadBehavior` does not outlive one connection, and Hermes
-    /// opens a new one per call. Brave rewrites its Preferences when it exits, so this works only before a start. A Preferences file
+    /// folder, so nothing it fetched ever reached the disk; CDP's `setDownloadBehavior` does not outlive one connection.
+    /// Brave rewrites its Preferences when it exits, so this works only before a start. A Preferences file
     /// that does not parse is left alone.
     static func allowDownloads(_ dataDir: URL, into folder: URL) throws {
         let fm = FileManager.default

@@ -43,7 +43,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("question")
         #expect(roles(r) == [.you, .robo] && r.window.transcript.writing && turns(r)[0] == "question")
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question", "done"] && !r.window.transcript.writing)
     }
@@ -53,7 +53,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("one")
         #expect(await pump(!r.window.busy))
-        r.hermes.script = [completed("second answer")]
+        r.agent.script = [completed("second answer")]
         r.window.ask("two")
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["one", "first answer", "two", "second answer"] && roles(r) == [.you, .robo, .you, .robo])
@@ -72,7 +72,7 @@ private func receipt(_ at: Double) -> String {
         #expect(r.window.chatOpen)
         r.window.ask("close the chat")
         #expect(!r.window.chatOpen && !r.window.chat!.isVisible)
-        #expect(r.hermes.asked.map(\.text) == ["hi"])  // the command was not a request for the agent
+        #expect(r.agent.asked.map(\.text) == ["hi"])  // the command was not a request for the agent
         #expect(turns(r) == ["hi", HELLO])  // and the conversation is kept
         r.window.openChat()
         #expect(r.window.chatOpen)
@@ -86,9 +86,9 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        r.window.onHeard(said)  // spoken
-        #expect(!r.window.chatOpen && r.hermes.asked.count == 1)
-        r.hermes.script = [completed("hi")]
+        r.window.onHeard(said, handsFree: false)  // spoken
+        #expect(!r.window.chatOpen && r.agent.asked.count == 1)
+        r.agent.script = [completed("hi")]
         r.window.ask("hello again")
         #expect(r.window.chatOpen)
         #expect(await pump(!r.window.busy))
@@ -103,7 +103,7 @@ private func receipt(_ at: Double) -> String {
         #expect(await pump(!r.window.busy))
         r.window.ask("close the Moodle tab")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && r.hermes.asked.map(\.text) == ["hi", "close the Moodle tab"])
+        #expect(r.window.chatOpen && r.agent.asked.map(\.text) == ["hi", "close the Moodle tab"])
     }
 
     @Test func closeWithTheChatClosedIsAnOrdinaryRequest() async {
@@ -111,7 +111,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("close the chat")  // nothing to close: the agent may have something to say about it
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["close the chat"])
+        #expect(r.agent.asked.map(\.text) == ["close the chat"])
     }
 
     @Test func closingWhileAnAnswerIsOnItsWayShowsItOnThePetsCardAndNothingIsLost() async {
@@ -122,7 +122,7 @@ private func receipt(_ at: Double) -> String {
         r.window.ask("close the chat")
         #expect(!r.window.chatOpen && !r.window.card.isHidden)  // the card carries the rest
         #expect(r.window.card.reply.string.contains("partial"))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(await r.run(until: r.window.typed))
         #expect(r.window.card.reply.string == "partial answer")
@@ -140,7 +140,7 @@ private func receipt(_ at: Double) -> String {
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["one", "a"])
         day = CalendarDay(year: 2026, month: 10, day: 12)!
-        r.hermes.script = [completed("b")]
+        r.agent.script = [completed("b")]
         r.window.ask("two")
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["two", "b"])  // the agent's session is another one, so the chat is
@@ -156,7 +156,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onEvent(.listening(true))  // Ctrl+Q held, a click on the face, a name
         #expect(r.window.chatOpen && turns(r) == ["hi", HELLO] && bubbleCount(r) == 2)
         #expect(!r.window.card.isHidden)  // the card says "listening"
-        r.window.onHeard("what is due")
+        r.window.onHeard("what is due", handsFree: false)
         #expect(r.window.card.isHidden)  // and goes when the words became a request
         #expect(await pump(!r.window.busy))
         #expect(roles(r) == [.you, .robo, .you, .robo] && turns(r)[2] == "what is due")
@@ -170,7 +170,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onEvent(.listening(true))  // you start speaking over it
         #expect(r.window.transcript.turns.last?.text == "Hello wor" && r.window.transcript.turns.last?.footer == ["stopped"])
         #expect(!r.window.transcript.writing)
-        r.hermes.gate.signal()  // the run ends
+        r.agent.gate.signal()  // the run ends
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question", "Hello wor"] && r.window.transcript.turns.last?.footer == ["stopped"])  // sealed once
     }
@@ -180,7 +180,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("question")
         r.window.onEvent(.listening(true))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question"] && bubbleCount(r) == 1)
     }
@@ -191,9 +191,9 @@ private func receipt(_ at: Double) -> String {
         r.window.ask("one")
         #expect(await pump(r.window.tw.text == "first part"))
         r.window.ask("two")  // waits for the first run to end
-        r.hermes.script = [completed("answer two")]
-        r.hermes.gate.signal()
-        #expect(await pump(r.hermes.asked.count == 2 && !r.window.busy))
+        r.agent.script = [completed("answer two")]
+        r.agent.gate.signal()
+        #expect(await pump(r.agent.asked.count == 2 && !r.window.busy))
         #expect(turns(r) == ["one", "first part", "two", "answer two"])
         #expect(r.window.transcript.turns[1].footer == ["stopped"])
     }
@@ -206,7 +206,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onNote("I lost the microphone, reconnecting...")
         #expect(turns(r) == ["question", "I lost the microphone, reconnecting...", ""])  // before the answer being written
         #expect(r.window.transcript.writing && r.window.tw.text == "working on it ")  // the typing was not reset
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r).last == "working on it done" && !r.window.transcript.writing)
     }
@@ -218,42 +218,66 @@ private func receipt(_ at: Double) -> String {
         #expect(await pump(!r.window.busy))
         r.window.onEvent(.listening(true))
         #expect(!r.window.card.isHidden)
-        r.window.onHeard("")
+        r.window.onHeard("", handsFree: false)
         #expect(turns(r) == ["hi", HELLO, "Sorry, I didn't catch that."] && r.window.card.isHidden)
     }
 
     // MARK: failures, footers, the digest
 
     @Test func aFailedRunIsAFailedTurnWithItsReason() async {
-        let r = Rig(fail: BrainError("Hermes is not running"), chat: true)
+        let r = Rig(fail: BrainError("The agent is not running"), chat: true)
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
         #expect(await r.run(until: r.window.typed))
         let last = r.window.transcript.turns.last
-        #expect(last?.text == "Hermes is not running" && last?.failed == true)
+        #expect(last?.text == "The agent is not running" && last?.failed == true)
     }
 
     @Test func theFooterAndTheReceiptSitUnderTheAnswer() async {
         let reply = "I sent the email."
         let r = Rig([delta(reply), completed(reply)], chat: true)
         defer { r.close() }
-        r.hermes.onAsk = {
+        r.agent.onAsk = {
             Usage.append(receipt(Date().timeIntervalSince1970), to: r.receipts)
             write([r.vault.appendingPathComponent("Drafts/Mail.md"): "Hi"])
         }
         r.window.ask("send it")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.transcript.turns.last?.footer == ["📓 In Obsidian: Mail", "✓ sent · outlook.office.com"])
+        #expect(r.window.transcript.turns.last?.footer == ["In Obsidian: Mail", "✓ sent · outlook.office.com"])
         #expect(r.window.transcript.turns.last?.text == reply)  // the footer is not part of the answer
     }
 
-    @Test func theMorningDigestOpensTheChatByItselfAndAnsweringItNeedsNoUserTurn() async {
+    @Test func theMorningDigestGoesOnTheCardNotTheChatAndIsInTheConversationLater() async {
         let r = Rig([completed("Today: two things.")], chat: true)
         defer { r.close() }
         r.window.ask(RoboWindow.digestPrompt, waitNetwork: true)
+        #expect(!r.window.card.isHidden && r.screenAsks == 0)  // a card at once, and no permission dialog nobody asked for
         #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && roles(r) == [.robo] && turns(r) == ["Today: two things."])
+        #expect(!r.window.chatOpen && r.chats.isEmpty && !r.window.card.isHidden && r.blurs.isEmpty)
+        for _ in 0..<80 where r.window.tw.pending { r.step() }
+        #expect(roles(r) == [.robo] && turns(r) == ["Today: two things."])
+        r.window.typeText()  // opened later: the digest is there, and the card has gone
+        #expect(r.window.chatOpen && turns(r) == ["Today: two things."] && r.window.card.isHidden)
+    }
+
+    @Test func aMorningDigestWhileTheChatIsOpenStaysInTheChat() async {
+        let r = Rig([completed("Today: two things.")], chat: true)
+        defer { r.close() }
+        r.window.typeText()
+        r.window.ask(RoboWindow.digestPrompt, waitNetwork: true)
+        #expect(await pump(!r.window.busy))
+        #expect(r.window.chatOpen && r.window.card.isHidden)
+    }
+
+    @Test func theCloseButtonClosesTheChatAndSaysSoToVoiceOver() throws {
+        let r = Rig(chat: true)
+        defer { r.close() }
+        r.window.typeText()
+        let view = try #require(r.window.chat?.chat)
+        #expect(view.close.accessibilityLabel() == "Close chat" && view.close.acceptsFirstMouse(for: nil))
+        view.close.performClick(nil)
+        #expect(!r.window.chatOpen)
     }
 
     @Test func theMenuDigestShowsADigestTurn() async {
@@ -261,7 +285,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask(RoboWindow.digestPrompt)
         #expect(await pump(!r.window.busy))
-        #expect(turns(r) == ["📚 School digest", "Today: two things."])
+        #expect(turns(r) == ["School digest", "Today: two things."])
     }
 
     // MARK: the pet and the rest of the window
@@ -284,7 +308,7 @@ private func receipt(_ at: Double) -> String {
         defer { RoboWindow.announce = keep }
         r.window.ask("what is six times seven")
         #expect(await pump(!r.window.busy && !r.window.tw.pending))
-        #expect(said == ["Robo: The answer is 42."])  // the words, not the Markdown
+        #expect(said.contains("Robo: The answer is 42."))  // the words, not the Markdown; `announce` is global, so other running tests may add theirs
     }
 
     @Test func theTextBoxSendsLikeAnyOtherRequest() async {
@@ -293,7 +317,7 @@ private func receipt(_ at: Double) -> String {
         r.window.openChat()
         r.window.chat?.chat.onSubmit?("typed in the chat")
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["typed in the chat"] && turns(r) == ["typed in the chat", "fine"])
+        #expect(r.agent.asked.map(\.text) == ["typed in the chat"] && turns(r) == ["typed in the chat", "fine"])
     }
 
     @Test func theTextBoxTakesFocusAcceptsTypingAndSendsIt() async {
@@ -313,7 +337,7 @@ private func receipt(_ at: Double) -> String {
         panel.chat.input.sendAction(panel.chat.input.action, to: panel.chat.input.target)  // Return
         #expect(panel.chat.input.stringValue.isEmpty)
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["typed hello"] && turns(r) == ["typed hello", "fine"])
+        #expect(r.agent.asked.map(\.text) == ["typed hello"] && turns(r) == ["typed hello", "fine"])
     }
 
     @Test func afterAnAnswerInTheChatYouCanReplyWithoutSayingRobo() async {
@@ -332,7 +356,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(r.window.busy)  // working: the pet is called
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(r.window.chatOpen && r.window.card.isHidden)  // the card is out, so "called" (`busy || card shown`) is false again
     }
@@ -349,19 +373,27 @@ private func receipt(_ at: Double) -> String {
 
     // MARK: called: the pet goes to a side, the background is blurred a little
 
-    @Test func theBackgroundIsBlurredWhileRoboIsCalledAndWhileTheChatIsUp() async {
+    @Test func theBackgroundIsBlurredOnlyWhileRoboListensOrYouTypeInTheChat() async {
         let r = Rig([completed(HELLO)], chat: true)
         defer { r.close() }
         #expect(r.blurs.isEmpty)
         r.window.onEvent(.listening(true))  // Ctrl+Q held
         #expect(r.blurs.last?.on == true && r.blurs.last?.frame == Rig.single[0].frame)  // the main display, all of it
-        r.window.onHeard("")  // nothing was said: not called any more
+        r.window.onHeard("", handsFree: false)  // nothing was said: not called any more
         #expect(r.blurs.last?.on == false)
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        #expect(r.blurs.last?.on == true && r.blurs.count == 3)  // the chat is up
+        #expect(r.window.chatOpen && r.blurs.count == 2)  // the chat being up is not enough
+        r.typing = true  // a click in its text box
+        r.window.refresh()
+        #expect(r.blurs.last?.on == true && r.blurs.count == 3)
         for _ in 0..<600 { r.step() }
         #expect(r.blurs.count == 3)  // switched on once, not on every tick
+        r.typing = false
+        r.window.refresh()
+        #expect(r.blurs.last?.on == false && r.blurs.count == 4)
+        r.typing = true
+        r.window.refresh()
         r.window.ask("close the chat")
         #expect(r.blurs.last?.on == false)
     }
@@ -684,7 +716,7 @@ private func receipt(_ at: Double) -> String {
         v.setStatus("searching the web…")
         v.setWorking(true)
         let bubble = v.bubbles[t.turns[1].id]!
-        #expect(v.statusLabel.stringValue == "searching the web…" && bubble.dots != nil)
+        #expect(v.statusLabel.stringValue == "Searching the web…" && bubble.dots != nil)
         let labels = bubble.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
         #expect(!labels.contains("searching the web…"))
         #expect(bubble.bubbleSize.height == 16 + BubbleView.pad.top + BubbleView.pad.bottom)  // just the dots
@@ -744,14 +776,10 @@ private func receipt(_ at: Double) -> String {
         #expect(v.lastRoboText == "And a second bubble from Robo.")
     }
 
-    @Test func theOrbAndTheDotsKeepStillUnderReduceMotion() {
+    @Test func theDotsKeepStillUnderReduceMotion() {
         for reduce in [false, true] {
-            let orb = OrbView()
-            orb.reduceMotion = { reduce }
-            orb.pulsing = true
-            #expect((orb.layer?.animation(forKey: "breathe") != nil) == !reduce)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 40), styleMask: .borderless, backing: .buffered, defer: true)
-            let dots = TypingDotsView(theme: Themes.glass)
+            let dots = TypingDotsView()
             dots.reduceMotion = { reduce }
             window.contentView?.addSubview(dots)
             #expect((dots.timer != nil) == !reduce)

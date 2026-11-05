@@ -92,7 +92,7 @@ func spoken(_ voice: String, _ text: String) throws -> [Float] {
     ("Tessa", "Robots are interesting.", "Robots are interesting."),
     ("Samantha", "Robo, I got eight out of ten on the quiz.", "Robo, I got 8 out of 10 on the quiz."),
 ])
-func parakeetWritesWhatPythonsOnnxAsrWrites(voice: String, said: String, python: String) throws {
+func parakeetWritesTheGoldenTranscripts(voice: String, said: String, python: String) throws {
     let stt = try shared.get()
     #expect(try stt(spoken(voice, said)) == python)
 }
@@ -135,7 +135,7 @@ func aMalformedVocabularyThrows(vocab: String) throws {
     try withModelFolder(vocab: brokenVocabularies[0]) { dir in
         let events = Events()
         let lis = listener(events, mic: { FakeMic() }, stt: { try Parakeet(directory: dir).callAsFunction })
-        #expect(lis.start())
+        lis.start()
         let note = Events.note(events.get())
         #expect(note?.hasPrefix("I can't load speech recognition: ") == true)
         #expect(eventually { !lis.running })

@@ -1,5 +1,5 @@
 // The conversation shown in the chat window: your turns and Robo's answers, in order. Pure, and in memory only (nothing is written
-// to disk). The agent keeps the real history on its side, per Hermes session id (one a day), so this is only what the window displays;
+// to disk). The agent keeps the real history on its side, per agent session id (one a day), so this is only what the window displays;
 // when the session id changes (a new day, a new persona) the conversation starts again, as the agent's does.
 import Foundation
 

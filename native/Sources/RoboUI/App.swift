@@ -1,4 +1,4 @@
-// The conversation half of app.py: asking Hermes, what its events do to the face and the card, the reply
+// The conversation: asking the agent, what its events do to the face and the card, the reply
 // typed letter by letter, the card's life (open, close in a while), and what robo made opening by itself.
 // Plus `RoboApp.run()`, the app itself.
 import AppKit
@@ -7,7 +7,7 @@ import RoboSystem
 import RoboVoice
 
 extension RoboWindow {
-    // MARK: - talking to Hermes
+    // MARK: - talking to the agent
 
     /// Start one run; while another is in flight, stop it and ask this one after it.
     func ask(_ text: String, waitNetwork: Bool = false) {
@@ -37,14 +37,14 @@ extension RoboWindow {
         reply = ""
         runStart = now()
         toolLabel = ""
-        // One Hermes session per day and persona version (Setup persona stamp).
+        // One agent session per day and persona version (Setup persona stamp).
         sessionID = ["robo", day.iso, persona].filter { !$0.isEmpty }.joined(separator: "-")
         digestDay = text == RoboWindow.digestPrompt ? day : nil
         autoDigest = waitNetwork && digestDay != nil
         startedAt = machine.wall()  // files robo makes from now on are opened when it's done
         if machine.chatOn {
             // Your turn and Robo's answer go to the chat window, which keeps the conversation; the pet's card only listened.
-            chatBegin(you: digestDay == nil ? text : (waitNetwork ? nil : "📚 School digest"))
+            chatBegin(you: digestDay == nil ? text : (waitNetwork ? nil : "School digest"), show: !autoDigest)
             clearReply()
         } else {
             let shown = !tw.text.isEmpty && !card.isHidden  // an answer is still up, or just
@@ -90,7 +90,7 @@ extension RoboWindow {
         do {
             var streamed = "", steps = 0
             var usage: UsageRecord?
-            for try await ev in hermes.ask(text, sessionId: session, started: { [weak self] id in self?.started(id) }) {
+            for try await ev in agent.ask(text, sessionId: session, started: { [weak self] id in self?.started(id) }) {
                 switch ev {
                 case .delta(let t): streamed += t
                 case .toolStarted: steps += 1
@@ -116,7 +116,7 @@ extension RoboWindow {
             runID = id
             return cancel
         }
-        if stopNow { background { [hermes] in try await hermes.stop(id) } }
+        if stopNow { background { [agent] in try await agent.stop(id) } }
     }
 
     func stop() {
@@ -127,7 +127,7 @@ extension RoboWindow {
             run = runID
             return true
         }
-        if running, let run { background { [hermes] in try await hermes.stop(run) } }
+        if running, let run { background { [agent] in try await agent.stop(run) } }
     }
 
     /// A click on the card answers the ask it shows (the oldest), then the next one shows.
@@ -136,9 +136,9 @@ extension RoboWindow {
         showApproval()
     }
 
-    /// Tell Hermes what to do about one ask, by its id: without one it answers the oldest pending ask, which may be another.
+    /// Tell the agent what to do about one ask, by its id: without one it answers the oldest pending ask, which may be another.
     func answer(_ choice: ApprovalChoice, _ id: String) {
-        if let run = lock.withLock({ runID }) { background { [hermes] in try await hermes.approve(run, choice, requestId: id) } }
+        if let run = lock.withLock({ runID }) { background { [agent] in try await agent.approve(run, choice, requestId: id) } }
     }
 
     /// The card shows the oldest ask and how many wait behind it; with none it hides.
@@ -155,10 +155,10 @@ extension RoboWindow {
 
     static let handsFreeRefusal = "Hold Ctrl+Q and say that again: without the key I only answer questions."
 
-    func onHeard(_ text: String) {
+    func onHeard(_ text: String, handsFree: Bool) {
         onEvent(.listening(false))  // changes nothing unless robo was listening
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !said.isEmpty && ear?.handsFree == true {
+        if !said.isEmpty && handsFree {
             // said in the follow-up window without the key (the TV or the room may have said it), and robo has not woken for it:
             // what may change something, or what `Intent` cannot read, is never acted on, and the reply being read stays
             if Intent.changesThings(said) { return refuseHandsFree() }
@@ -192,7 +192,7 @@ extension RoboWindow {
     }
 
     /// Show a short local message (no model involved), typed like an answer. During a run it is not the end
-    /// of the reply: Hermes goes on and `runEnded` finishes it.
+    /// of the reply: the agent goes on and `runEnded` finishes it.
     func say(_ text: String) {
         if chatOpen {  // a notice is a line of the conversation; the answer being typed (if any) is not touched
             dismissNudge()
@@ -222,7 +222,12 @@ extension RoboWindow {
             clearReply()
             open()  // the pet's card listens; the chat opens when there is something to ask
         case .userSent:
-            if !machine.chatOn { open() }
+            if !machine.chatOn {
+                open()
+            } else if autoDigest && !chatOpen {  // it goes on the card, and nobody asked: no permission dialog
+                setHeard("")
+                open(askScreen: false)
+            }
         case .delta(let t):
             reply += t
             feed(reply)
@@ -248,6 +253,7 @@ extension RoboWindow {
             break
         }
         listening = mind.activity == .listening
+        if called && roamer.mode != .come { roam() }  // a call starts now: the resting tick can be half a second away
         refresh()
     }
 
@@ -273,8 +279,8 @@ extension RoboWindow {
             let (notes, files) = (made?.notes ?? [], made?.files ?? [])
             for n in notes { machine.openNote(n, !autoDigest) }  // the automatic digest opens behind what you are doing
             for f in files { machine.openFile(f) }
-            if !notes.isEmpty { lines.append("📓 In Obsidian: " + notes.map { $0.deletingPathExtension().lastPathComponent }.joined(separator: ", ")) }
-            if !files.isEmpty { lines.append("📂 Opened " + files.map(\.lastPathComponent).joined(separator: ", ")) }
+            if !notes.isEmpty { lines.append("In Obsidian: " + notes.map { $0.deletingPathExtension().lastPathComponent }.joined(separator: ", ")) }
+            if !files.isEmpty { lines.append("Opened " + files.map(\.lastPathComponent).joined(separator: ", ")) }
         }
         if !listening { lines += made?.receipts ?? [] }  // what the guard recorded, also under a failed or stopped run: a send may have happened
         let toChat = machine.chatOn && chatOpen  // the answer is written in the chat window (else on the pet's card, as before)
@@ -343,7 +349,6 @@ extension RoboWindow {
         let typing = tw.pending
         let activity: Activity = typing && (m.activity == .idle || m.activity == .talking) ? .talking : m.activity
         face.setState(activity: activity, emotion: m.emotion, talking: typing ? tw.revealing : m.talking)
-        card.setHue(Themes.liveHue(theme, faceNow: face.params.hue, activity: m.activity.rawValue))
         card.setLights(link: link, mic: CardView.micState(listenerReady: ear?.ready, activity: m.activity, noted: noted,
                                                           following: now < followUntil && !busy))
         card.setPhase(now)
@@ -353,15 +358,16 @@ extension RoboWindow {
         let label = listeningNow ? "listening" : thinking ? workingLabel(m, now) : ""  // e.g. "searching the web…" beside the dots
         card.setStatusRow(typing: thinking, label: label)
         refreshChat(listening: listeningNow, thinking: thinking, label: label)
-        // Called (listening, or the chat is up): the rest of the screen is blurred a little, the pet and the chat stay sharp.
-        let blur = machine.chatOn && (chatOpen || listeningNow) && !shutdownStarted
+        // Listening, or typing in the chat: the rest of the screen is blurred a little, the pet and the chat stay sharp.
+        let typingInChat = chatOpen && chat.map(machine.chatTyping) == true
+        let blur = machine.chatOn && (typingInChat || listeningNow) && !shutdownStarted
         if blur != blurShown {
             blurShown = blur
             machine.blurBackground(blur, machine.displays().first?.frame ?? .zero)
         }
     }
 
-    /// The line beside the dots while Hermes works: what the last tool does (it stays while the model thinks between tools),
+    /// The line beside the dots while the agent works: what the last tool does (it stays while the model thinks between tools),
     /// "on it…" before the first one, and from 40 s on how long it has gone, every 20 s ("still working · 60 s"). Nothing
     /// while the card asks the user something: the wait is theirs.
     func workingLabel(_ m: Mind, _ now: Double) -> String {
@@ -372,7 +378,7 @@ extension RoboWindow {
     }
 
     /// Shown while the reply types and for `caretS` after: solid just after a letter, else blinking
-    /// (waiting for Hermes, or in a pause).
+    /// (waiting for the agent, or in a pause).
     func caret(_ now: Double) {
         let show = !tw.text.isEmpty && !tw.instant && (!tw.done || now < typedAt + RoboWindow.caretS)
         let blink = Int(now * 1000 / Double(theme.caretMs)) % 2 == 0
@@ -405,7 +411,7 @@ extension RoboWindow {
         ear?.followUp(seconds: 0)
     }
 
-    /// Hand the typewriter the reply so far (`end`: that is all of it, as Hermes finished).
+    /// Hand the typewriter the reply so far (`end`: that is all of it, as the agent finished).
     func feed(_ text: String, end: Bool = false) {
         if end { tw.end(text) } else { tw.feed(text) }
         resume()
@@ -442,7 +448,7 @@ extension RoboWindow {
         settle()
     }
 
-    /// Nothing is due any more: stop the steps; when Hermes is done too, the reply is typed.
+    /// Nothing is due any more: stop the steps; when the agent is done too, the reply is typed.
     func settle() {
         if !tw.pending {
             revealer?.invalidate()
@@ -594,7 +600,7 @@ extension RoboWindow {
 
     private static let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
 
-    /// When `url` was written, if it is a regular file (through a link, as Python's `is_file` sees it) written
+    /// When `url` was written, if it is a regular file (through a link) written
     /// since `started`.
     private static func written(_ url: URL, since started: Double) -> Date? {
         var values = try? url.resourceValues(forKeys: keys)

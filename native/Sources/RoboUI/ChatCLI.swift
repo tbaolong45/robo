@@ -1,4 +1,4 @@
-// `robo chat`: a text-only debug REPL on the same agent client as the app (chat in src/robo/cli.py).
+// `robo chat`: a text-only debug REPL on the same agent client as the app.
 import Foundation
 import RoboCore
 import RoboSystem
@@ -17,13 +17,13 @@ private final class Interrupt {
         lock.withLock { task.map { (task: $0, runID: runID) } }
     }
 
-    func install(_ hermes: HermesAPI, write: @escaping (String) -> Void) {
+    func install(_ agent: AgentAPI, write: @escaping (String) -> Void) {
         signal(SIGINT, SIG_IGN)
         let s = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
         s.setEventHandler { [self] in
             guard let run = take() else { exit(0) }
             run.task.cancel()
-            if let id = run.runID { Task { try? await hermes.stop(id) } }
+            if let id = run.runID { Task { try? await agent.stop(id) } }
             write("\n[stopped]\n")
         }
         s.resume()
@@ -32,11 +32,11 @@ private final class Interrupt {
 }
 
 /// The loop: a prompt, one line, the reply's events printed as they arrive. Returns 0 at the end of input.
-func runChat(_ hermes: HermesAPI, session: String, readLine: () -> String? = { Swift.readLine() },
+func runChat(_ agent: AgentAPI, session: String, readLine: () -> String? = { Swift.readLine() },
                     write: @escaping (String) -> Void = { print($0, terminator: ""); fflush(stdout) },
                     handleCtrlC: Bool = true) async -> Int32 {
     let interrupt = Interrupt()
-    if handleCtrlC { interrupt.install(hermes, write: write) }
+    if handleCtrlC { interrupt.install(agent, write: write) }
     while true {
         write("you> ")
         guard let line = readLine() else { return 0 }
@@ -44,7 +44,7 @@ func runChat(_ hermes: HermesAPI, session: String, readLine: () -> String? = { S
         if text.isEmpty { continue }
         let task = Task {
             do {
-                for try await ev in hermes.ask(text, sessionId: session, started: { interrupt.started($0) }) {
+                for try await ev in agent.ask(text, sessionId: session, started: { interrupt.started($0) }) {
                     switch ev {
                     case .feeling(let e): write("[\(e)] ")
                     case .delta(let t): write(t)
@@ -74,7 +74,7 @@ public func chatMain(environment: [String: String] = ProcessInfo.processInfo.env
         let service = agent.service()
         defer { service?.stop() }
         let session = "robo-chat-\(CalendarDay().iso)-\(agent.personaStamp())"
-        return await runChat(AgentKeeper(HermesClient(baseURL: c.url, key: c.key), service: service, hasKey: { agent.hasAnthropicKey }),
+        return await runChat(AgentKeeper(AgentClient(baseURL: c.url, key: c.key), service: service, hasKey: { agent.hasAnthropicKey }),
                              session: session)
     } catch {
         Host.warn("robo: \(error)")

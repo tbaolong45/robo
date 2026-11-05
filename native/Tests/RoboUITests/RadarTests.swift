@@ -644,7 +644,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         tick(r, at(9))
         let w: RoboWindow = r.window
         #expect(w.nudge.shown.map(\.candidate.id) == ["radar-setup"] && !w.card.isHidden)
-        #expect(w.card.nudge.label.text == "WORTH A LOOK ▸" && !w.card.nudge.open.isHidden && w.mind.emotion == "curious")
+        #expect(w.card.nudge.label.text == "Worth a look" && !w.card.nudge.open.isHidden && w.mind.emotion == "curious")
         #expect(w.card.nudge.well.text == "Tell me what you want to discover\nFill in Radar/Profile.md (interests, goals...), I read it tomorrow morning")
         // Open shows the note in Obsidian (in front): no link, no alert
         w.card.nudge.open.onClick?()
@@ -786,7 +786,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
         // 13:00: the digest, which opens the note
         tick(r, at(13))
         #expect(w.nudge.shown.map(\.candidate.id) == ["radar-digest-2026-10-20"])
-        #expect(w.card.nudge.label.text == "WORTH A LOOK ▸" && w.card.nudge.well.text.hasPrefix("\(listed(text, ["Papers", "Announcements", "News"])) to read, \(listed(text, ["Code", "Opportunities", "Contests"])) to look into\n") && !w.card.nudge.open.isHidden)
+        #expect(w.card.nudge.label.text == "Worth a look" && w.card.nudge.well.text.hasPrefix("\(listed(text, ["Papers", "Announcements", "News"])) to read, \(listed(text, ["Code", "Opportunities", "Contests"])) to look into\n") && !w.card.nudge.open.isHidden)
         let digestTitles = w.card.nudge.well.text.components(separatedBy: "\n")[1]
         #expect(digestTitles.contains(" · ") && !w.card.nudge.well.text.contains("↗"))  // two titles, and no domain line
         w.card.nudge.open.onClick?()
@@ -911,7 +911,7 @@ private func run(_ vault: URL, _ f: RadarFakes, at when: Date = date(8), seen: [
     @Test func aCandidateWithANoteCanBeOpenedAndShowsNoDomain() {
         let note = NudgeCandidate(id: "radar-digest-2026-10-20", category: .digest, title: "3 to read, 2 to look into", detail: "A · B", url: nil, note: "Radar/2026-10-20.md")
         let text = NudgeText([note])
-        #expect(text.canOpen && text.domain == nil && text.label == "WORTH A LOOK ▸" && text.body == "3 to read, 2 to look into\nA · B")
+        #expect(text.canOpen && text.domain == nil && text.label == "Worth a look" && text.body == "3 to read, 2 to look into\nA · B")
         var plain = note
         plain.note = nil
         #expect(!NudgeText([plain]).canOpen)  // no link, no note

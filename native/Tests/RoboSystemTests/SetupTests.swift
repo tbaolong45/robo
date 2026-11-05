@@ -1,4 +1,4 @@
-// Port of tests/test_setup.py and the setup tests of tests/test_cli.py (macOS only), for robo's own agent: a temp dir stands in
+// `robo setup`, for robo's own agent: a temp dir stands in
 // for the home, so nothing real is touched (no ~/.local/share/robo, no LaunchAgent, no vault, no agent is started).
 import Foundation
 import Testing
@@ -41,45 +41,6 @@ private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/de
 private let uv = "/opt/fake/uv"
 
 @Suite struct SetupTests {
-    // --- dotenv files (only read now: the Moodle address of the old Hermes profile) ---
-
-    @Test func readEnvIgnoresCommentsAndQuotes() throws {
-        try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try write("# X=no\nX='yes'\nY=\"two words\"\nZ\n", to: env)
-            #expect(try Setup.readEnv(env) == ["X": "yes", "Y": "two words"])
-            #expect(try Setup.readEnv(tmp.appendingPathComponent("missing")) == [:])
-        }
-    }
-
-    @Test func readEnvEdgeCases() throws {
-        try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            for (text, expected) in [
-                ("A=1\nA=2\n", ["A": "2"]),  // the later line wins
-                ("  K = v  \n=novalue\n#c=1\n", ["K": "v"]),
-                ("Q=''\"x\"'\nR=\"\"\n", ["Q": "x", "R": ""]),  // all quotes at the ends, not one level
-                ("A=b=c\n", ["A": "b=c"]),
-                ("A=1\r\nB=2\r\n", ["A": "1", "B": "2"]),
-                (" #A=1\nB=2", ["B": "2"]),
-                ("'A'=1\n", ["'A'": "1"]),
-            ] as [(String, [String: String])] {
-                try write(text, to: env)
-                #expect(try Setup.readEnv(env) == expected, "\(text.debugDescription)")
-            }
-        }
-    }
-
-    @Test func aDotenvThatIsNotUTF8IsAnErrorNotAnEmptyFile() throws {
-        // Python raises UnicodeDecodeError; treating it as empty would let setup overwrite the user's keys.
-        try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try Data([0x4B, 0x3D, 0xFF, 0xFE, 0x0A]).write(to: env)
-            #expect(throws: (any Error).self) { try Setup.readEnv(env) }
-        }
-    }
-
-
     // --- the agent's files and its connection ---
 
     @Test func theAgentFilesLiveUnderTheHome() {
@@ -160,7 +121,7 @@ private let uv = "/opt/fake/uv"
         }
     }
 
-    @Test func personaStampOrdersPathsByComponentLikePython() throws {
+    @Test func personaStampOrdersPathsByComponent() throws {
         // a/ before a-b/ by path component (not by string): swapping the two skills' texts changes the stamp.
         try scratch { tmp throws in
             let dir = tmp.appendingPathComponent("agent")
@@ -330,21 +291,13 @@ private let uv = "/opt/fake/uv"
         }
     }
 
-    @Test func setupMovesTheMoodleAddressOverFromHermesAndTakesANewOne() throws {
+    @Test func setupTakesANewMoodleAddress() throws {
         try scratch { tmp throws in
             let a = agent(tmp)
-            let secret = "API_SERVER_KEY=do-not-print-me"
-            try write("\(secret)\nMOODLE_BASE_URL=https://lms.uni.example/my/\n", to: a.home.appendingPathComponent(".hermes/profiles/robo/.env"))
-            let lines = try Setup.report(moodle: nil, agent: a, executable: exe, project: try project(tmp), uv: { _ in uv }, running: { true })
-            #expect(try config(a)["moodle_url"] as? String == "https://lms.uni.example")
-            #expect(lines.contains("- kept your Moodle address from the Hermes profile"))
-            #expect(!lines.joined().contains("do-not-print-me") && !fm.fileExists(atPath: a.keyFile("api_key").path))
-            #expect(try !read(a.configFile).contains("do-not-print-me"))
-            _ = try Setup.report(moodle: "https://moodle.other.example/login/index.php", agent: a, executable: exe,
-                                 project: try project(tmp), uv: { _ in uv }, running: { true })
+            let lines = try Setup.report(moodle: "https://moodle.other.example/login/index.php", agent: a, executable: exe,
+                                         project: try project(tmp), uv: { _ in uv }, running: { true })
             #expect(try config(a)["moodle_url"] as? String == "https://moodle.other.example")
-            try write("MOODLE_BASE_URL=--remote-debugging-port=1\n", to: a.home.appendingPathComponent(".hermes/profiles/robo/.env"))
-            #expect(Setup.hermesMoodle(home: a.home) == nil)  // only an https address moves over
+            #expect(lines.contains("- set your Moodle address"))
         }
     }
 
@@ -448,7 +401,7 @@ private let uv = "/opt/fake/uv"
         }
     }
 
-    // --- `robo setup` as the CLI runs it (tests/test_cli.py) ---
+    // --- `robo setup` as the CLI runs it ---
 
     /// Everything `robo setup` touches, in a temp home; `obsidian.json` is there for the vault to join.
     private func cli(_ tmp: URL, running: Bool = false) throws -> () throws -> [String] {
@@ -531,7 +484,7 @@ private let uv = "/opt/fake/uv"
         ("https://m.example:8443/m/login", "https://m.example:8443/m"),
         ("https://m.example/my/course/", "https://m.example"),
     ] as [(String, String?)])
-    func theMoodleURLMatchesPython(input: String, expected: String?) throws {
+    func theMoodleURLMatchesItsGolden(input: String, expected: String?) throws {
         if let expected {
             #expect(try Setup.moodleURL(input) == expected)
         } else {
@@ -562,7 +515,7 @@ private let uv = "/opt/fake/uv"
         }
     }
 
-    @Test func theLaunchAgentIsPythonsPlistByteForByte() throws {
+    @Test func theLaunchAgentPlistMatchesByteForByte() throws {
         // plistlib.dumps of the same dict (home /Users/test), as Python's _launch_agent() would write it.
         let python = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>ai.robo</string>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/Users/test/Robo.app/Contents/MacOS/robo</string>\n\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>StandardErrorPath</key>\n\t<string>/Users/test/Library/Logs/robo.log</string>\n\t<key>StandardOutPath</key>\n\t<string>/Users/test/Library/Logs/robo.log</string>\n</dict>\n</plist>\n"
         try scratch { tmp throws in
@@ -618,7 +571,7 @@ private let uv = "/opt/fake/uv"
         #expect(throws: (any Error).self) { try Host.run(["robo-no-such-command-xyz"], timeout: 1) }
     }
 
-    @Test func signinNoticeMatchesPython() {
+    @Test func signinNoticeMatchesItsGolden() {
         #expect(Setup.signinNotice(lms: false) == "Sign in to Outlook, Teams in the Brave window that opened. When Microsoft asks \"Stay signed in?\", choose Yes, or the sign-in is lost when robo's browser restarts.")
         #expect(Setup.signinNotice(lms: true).hasPrefix("Sign in to Outlook, Teams and your LMS in the Brave window"))
     }

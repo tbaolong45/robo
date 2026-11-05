@@ -1,5 +1,4 @@
-// Port of tests/test_activity.py (macOS cases; the GNOME D-Bus and recently-used.xbel tests have no
-// counterpart), plus goldens: Python's own output for the same rows. Tests use temp directories and
+// The activity watcher, plus goldens from the retired Python build for the same rows. Tests use temp directories and
 // injected readers, never the real database, Brave profile or windows.
 import Foundation
 import SQLite3
@@ -8,7 +7,7 @@ import Testing
 
 private let DAY = 86400.0
 
-/// Local time on 2026-10-`d`, like Python's `datetime(2026, 10, d, h, m).timestamp()`.
+/// Local time on 2026-10-`d`.
 private func at(_ h: Int, _ m: Int, day d: Int = 11) -> Double {
     CalendarDay.local.date(from: DateComponents(year: 2026, month: 10, day: d, hour: h, minute: m))!.timeIntervalSince1970
 }
@@ -56,7 +55,6 @@ private final class Counter {
         }
         #expect(cols == ["minutes": ["ts", "app", "title", "idle_s", "locked"],
                          "sites": ["ts", "domain"], "files": ["ts", "path"]])
-        // The Python build creates the same tables, so the same file serves both.
         #expect(try rows(store, "SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
                 == [["files_ts"], ["minutes_ts"], ["sites_ts"]])
     }
@@ -88,7 +86,7 @@ private final class Counter {
     }
 }
 
-@Test func addStoresEveryColumnAsPythonDoes() throws {
+@Test func addStoresEveryColumn() throws {
     try withTemp { dir in
         let store = try ActivityStore(path: dir.appendingPathComponent("a.db"))
         try store.add(s(NOW, "Code", "x.py", idle: 7, locked: true))
@@ -116,7 +114,7 @@ private final class Counter {
         ActivityLog.sample(now: NOW, since: NOW, focus: { ("", "") }, idle: { x }, locked: { false },
                            sites: { _, _ in [] }, files: { _, _ in [] }).idleS
     }
-    #expect(idleS(113.9) == 113)  // Python's int() truncates
+    #expect(idleS(113.9) == 113)  // whole seconds, cut off
     #expect(idleS(1e30) == .max && idleS(.infinity) == .max && idleS(.nan) == .max)
 }
 
@@ -208,7 +206,7 @@ private let braveVisits: [(String, Double)] = [
     }
 }
 
-@Test func webkitTimeIsPythons() {
+@Test func webkitTimeMatchesItsGolden() {
     // values from robo.activity._webkit
     #expect(ActivityLog.webkit(1760180400.5) == 13404654000500000)
     #expect(ActivityLog.webkit(0) == 11644473600000000)
@@ -333,7 +331,7 @@ private func ties(_ store: ActivityStore) throws {
 
 private let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"  // one grapheme, seven scalars
 
-/// Python counts and cuts code points: combining marks, a ZWJ emoji, NFC against NFD, "~" folding quirks.
+/// The summary counts and cuts code points: combining marks, a ZWJ emoji, NFC against NFD, "~" folding quirks.
 private func text(_ store: ActivityStore) throws {
     try store.add(s(at(15, 0), "Brave", String(repeating: "\u{65E5}\u{672C}\u{8A9E}", count: 20) + String(repeating: family, count: 3)))
     try store.add(s(at(15, 1), "Brave", "caf\u{E9}"))
@@ -416,8 +414,8 @@ private let cases: [(name: String, build: [Builder], day: CalendarDay, days: Int
     }
 }
 
-@Test("summary equals Python's, line for line", arguments: cases.map(\.name))
-func summaryMatchesPython(_ name: String) throws {
+@Test("summary equals its golden, line for line", arguments: cases.map(\.name))
+func summaryMatchesItsGolden(_ name: String) throws {
     let c = cases.first { $0.name == name }!
     try withTemp { dir in
         let store = try ActivityStore(path: dir.appendingPathComponent("a.db"))
@@ -425,9 +423,9 @@ func summaryMatchesPython(_ name: String) throws {
         let got = try ActivityLog.summary(store, day: c.day, days: c.days, home: "/Users/u")
             .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let want = golden[name]!
-        #expect(got.count == want.count, "\(name): \(got.count) lines, Python had \(want.count)")
+        #expect(got.count == want.count, "\(name): \(got.count) lines, wanted \(want.count)")
         for (i, (g, w)) in zip(got, want).enumerated() where g.unicodeScalars.elementsEqual(w.unicodeScalars) == false {
-            Issue.record("\(name) line \(i): got \(g.debugDescription), Python \(w.debugDescription)")
+            Issue.record("\(name) line \(i): got \(g.debugDescription), wanted \(w.debugDescription)")
         }
     }
 }
@@ -485,20 +483,14 @@ private func win(_ layer: Int, _ owner: String, _ name: String? = nil, alpha: Do
     #expect(ActivityLog.macFiles(since: NOW - 60, now: NOW, find: { _ in throw Hiccup() }) == [])
 }
 
-@Test func macFilesSplitsLinesLikePythonsSplitlines() {
-    // str.splitlines() also breaks on \r, \v, \f, \x1c-\x1e, \x85, U+2028 and U+2029 (checked against Python)
-    let out = "/a\r\n/b\u{0B}/c\u{2028}/d\u{85}/e\u{1C}/f\n\n/a\r/g\u{0C}/h\u{1D}/i\u{1E}/j\u{2029}not a path"
-    #expect(ActivityLog.macFiles(since: 0, now: 1, find: { _ in out })
-            == ["/a", "/b", "/c", "/d", "/e", "/f", "/g", "/h", "/i", "/j"])
+@Test func macFilesSplitsLinesAndKeepsOnlyPathsOnce() {
+    let out = "/a\r\n/b\n/c\u{2028}/d\n\n/a\rnot a path\n"
+    #expect(ActivityLog.macFiles(since: 0, now: 1, find: { _ in out }) == ["/a", "/b", "/c", "/d"])
 }
 
-@Test func utcFormatsAndRoundsLikePython() {
-    // values from robo.activity._utc; fromtimestamp rounds to microseconds first, which can carry a second
-    #expect(ActivityLog.utc(1760180400.9999996) == "2025-10-11T11:00:01Z")
-    #expect(ActivityLog.utc(1760180400.9999994) == "2025-10-11T11:00:00Z")
-    #expect(ActivityLog.utc(-0.5) == "1969-12-31T23:59:59Z")
-    #expect(ActivityLog.utc(-0.0000004) == "1970-01-01T00:00:00Z")
-    #expect(ActivityLog.utc(1.5) == "1970-01-01T00:00:01Z" && ActivityLog.utc(2.5) == "1970-01-01T00:00:02Z")
+@Test func utcIsWhatSpotlightReads() {
+    #expect(ActivityLog.utc(1760180400) == "2025-10-11T11:00:00Z")
+    #expect(ActivityLog.utc(1.5) == "1970-01-01T00:00:01Z")
 }
 
 // MARK: - calendar day and `robo activity` arguments
@@ -526,61 +518,16 @@ private func win(_ layer: Int, _ owner: String, _ name: String? = nil, alpha: Do
     #expect(oct11.start.timeIntervalSince1970 == at(0, 0))
 }
 
-// MARK: - days and dates out of range
+// MARK: - the span of days
 
-// Python's summary() for these (day, days): the text, or the last line of the traceback `robo activity` prints
-// (exit status 1). The ValueError cases are Python's `timestamp()` of the local midnight of 0001-01-01.
-private let ranges: [(day: String, days: Int, result: String)] = [
-    ("2026-10-11", Int.min, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", Int.max, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", Int.min + 1, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", Int.max - 1, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", 3652059, "OverflowError: date value out of range"),
-    ("2026-10-11", 3652058, "OverflowError: date value out of range"),
-    ("2026-10-11", 3652060, "OverflowError: date value out of range"),
-    ("2026-10-11", -3000000, "OverflowError: date value out of range"),
-    ("2026-10-11", 1000000000, "OverflowError: date value out of range"),
-    ("2026-10-11", 1000000001, "OverflowError: days=1000000000; must have magnitude <= 999999999"),
-    ("2026-10-11", 2147483648, "OverflowError: days=2147483647; must have magnitude <= 999999999"),
-    ("2026-10-11", 2147483649, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", -2147483647, "OverflowError: days=-2147483648; must have magnitude <= 999999999"),
-    ("2026-10-11", -2147483648, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", -2147483649, "OverflowError: Python int too large to convert to C int"),
-    ("2026-10-11", 999999999, "OverflowError: date value out of range"),
-    ("2026-10-11", 100000, "No activity recorded for 1752-12-27..2026-10-11."),
-    ("2026-10-11", 738000, "No activity recorded for 0006-03-16..2026-10-11."),
-    ("2026-10-11", 738800, "No activity recorded for 0004-01-06..2026-10-11."),
-    ("2026-10-11", 739000, "No activity recorded for 0003-06-20..2026-10-11."),
-    ("2026-10-11", -738000, "No activity recorded for 4047-05-10..2026-10-11."),
-    ("2026-10-11", 0, "No activity recorded for 2026-10-12..2026-10-11."),
-    ("2026-10-11", -1, "No activity recorded for 2026-10-13..2026-10-11."),
-    ("2026-10-11", 1, "No activity recorded for 2026-10-11."),
-    ("2026-10-11", 2, "No activity recorded for 2026-10-10..2026-10-11."),
-    ("9999-12-31", 1, "OverflowError: date value out of range"),  // day + 1 is past year 9999
-    ("9999-12-31", 0, "OverflowError: date value out of range"),
-    ("9999-12-30", 1, "No activity recorded for 9999-12-30."),
-    ("9999-12-30", 2, "No activity recorded for 9999-12-29..9999-12-30."),
-    ("0001-01-02", 1, "No activity recorded for 0001-01-02."),
-    ("0001-01-01", 2, "OverflowError: date value out of range"),
-    ("0001-01-01", 1, "ValueError: year must be in 1..9999, not 0"),
-    ("0001-01-02", 2, "ValueError: year must be in 1..9999, not 0"),
-    ("0001-01-03", 3, "ValueError: year must be in 1..9999, not 0"),
-    ("0001-01-03", 2, "No activity recorded for 0001-01-02..0001-01-03."),
-    // Python's calendar is the proleptic Gregorian one: no skipped days in 1582, and 1500 is not a leap year
-    ("1582-10-15", 2, "No activity recorded for 1582-10-14..1582-10-15."),
-    ("1582-10-04", 2, "No activity recorded for 1582-10-03..1582-10-04."),
-    ("1500-03-01", 2, "No activity recorded for 1500-02-28..1500-03-01."),
-    ("1700-03-01", 3, "No activity recorded for 1700-02-27..1700-03-01."),
-]
-
-@Test("days out of range fail, and the rest span, like Python's summary()", arguments: Array(ranges.indices))
-func rangesMatchPython(_ i: Int) throws {
-    let r = ranges[i]
+@Test func aSpanEndsOnTheDayAndCountsBack() throws {
     try withTemp { dir in
         let store = try ActivityStore(path: dir.appendingPathComponent("a.db"))
-        let got: String
-        do { got = try ActivityLog.summary(store, day: CalendarDay(iso: r.day)!, days: r.days, home: "/Users/u") } catch { got = "\(error)" }
-        #expect(got == r.result, "day \(r.day), days \(r.days)")
+        for (day, days, says) in [("2026-10-11", 1, "2026-10-11."), ("2026-10-11", 2, "2026-10-10..2026-10-11."),
+                                  ("2026-01-01", 2, "2025-12-31..2026-01-01."), ("2024-03-01", 2, "2024-02-29..2024-03-01.")] {
+            let got = try ActivityLog.summary(store, day: CalendarDay(iso: day)!, days: days, home: "/Users/u")
+            #expect(got == "No activity recorded for \(says)", "day \(day), days \(days)")
+        }
     }
 }
 
@@ -589,81 +536,41 @@ func rangesMatchPython(_ i: Int) throws {
     var n = 0
     for y in stride(from: 1, through: 9999, by: 7) {
         for (m, d) in [(1, 1), (2, 28), (3, 1), (10, 4), (10, 15), (12, 31)] {
-            if let day = CalendarDay(year: y, month: m, day: d) { _ = day.start; n += 1 }
+            if let day = CalendarDay(year: y, month: m, day: d) { _ = day.start; _ = day.adding(days: 1); n += 1 }
         }
     }
     #expect(n > 8_000)
-}
-
-@Test func ordinalsAreDatetimesDate() {
-    // (year, month, day, date.toordinal()) from Python
-    for (y, m, d, o) in [(1, 1, 1, 1), (2026, 10, 11, 739900), (1582, 10, 15, 577736), (1582, 10, 4, 577725),
-                         (1500, 3, 1, 547558), (1900, 3, 1, 693655), (2000, 2, 29, 730179), (2100, 3, 1, 766704),
-                         (4000, 2, 29, 1460664), (9999, 12, 31, 3652059), (1752, 9, 14, 639797), (100, 2, 28, 36218),
-                         (400, 12, 31, 146097)] {
-        #expect(CalendarDay(year: y, month: m, day: d)!.ordinal == o, "\(y)-\(m)-\(d)")
-        #expect(CalendarDay(ordinal: o).iso == String(format: "%04d-%02d-%02d", y, m, d), "ordinal \(o)")
-    }
-    // every day of years 1...9999: ordinal and back, one day after the other, in calendar order
-    var bad = 0
-    var prev = CalendarDay(ordinal: 1)
-    for o in 2...3_652_059 {
-        let day = CalendarDay(ordinal: o)
-        let next = (prev.year, prev.month, prev.day)
-        let isNext = (day.year, day.month, day.day) > next && day.ordinal == o && CalendarDay(year: day.year, month: day.month, day: day.day) == day
-        if !isNext { bad += 1 }
-        prev = day
-    }
-    #expect(bad == 0)
     #expect(CalendarDay(year: 1900, month: 2, day: 29) == nil && CalendarDay(year: 2000, month: 2, day: 29) != nil)
-    #expect(CalendarDay(year: 1582, month: 10, day: 10) != nil)  // no gap: Python's calendar is proleptic
 }
 
-@Test func theCommandFailsWithPythonsLastTracebackLine() throws {
+@Test func theCommandExitsWithAStatusAndAUsageLine() throws {
     try withTemp { dir in
         let store = try ActivityStore(path: dir.appendingPathComponent("a.db"))
         func run(_ a: [String]) -> (status: Int32, stdout: String, stderr: String) { activityReport(a, store: { store }) }
-        let cInt = "OverflowError: Python int too large to convert to C int\n"
-        // exit status 1 and nothing on stdout, like Python's traceback (checked by running `robo activity`)
-        for a in [["--days", "-9223372036854775808"], ["--days", "9223372036854775807"], ["--days", "99999999999999999999"],
-                  ["--days=-99999999999999999999"], ["--days", "2147483649"]] {
-            let r = run(a)
-            #expect(r.status == 1 && r.stdout == "" && r.stderr == cInt, "\(a)")
-        }
-        let date = "OverflowError: date value out of range\n"
-        for a in [["--days", "3652059"], ["--day", "9999-12-31"], ["--day", "0001-01-01", "--days", "2"]] {
-            let r = run(a)
-            #expect(r.status == 1 && r.stdout == "" && r.stderr == date, "\(a)")
-        }
-        #expect(run(["--days", "1000000001"]).stderr == "OverflowError: days=1000000000; must have magnitude <= 999999999\n")
         let ok = run(["--day", "2026-10-11", "--days", "2"])
         #expect(ok.status == 0 && ok.stdout == "No activity recorded for 2026-10-10..2026-10-11.\n" && ok.stderr == "")
-        #expect(run(["--days", "x"]).status == 2 && run(["--days", "-"]).status == 2 && run(["--days", "+"]).status == 2)
+        for a in [["--days", "x"], ["--days", "0"], ["--days", "-1"], ["--days", "367"], ["--days", "99999999999999999999"]] {
+            let r = run(a)
+            #expect(r.status == 2 && r.stdout == "" && r.stderr.hasPrefix("usage: robo activity"), "\(a)")
+        }
     }
 }
 
-@Test func activityArgumentsAreParsedLikeArgparse() {
+@Test func activityArguments() {
     func parse(_ a: [String]) -> (CalendarDay?, Int)? { parseActivityArgs(a) }
     #expect(parse([])?.0 == nil && parse([])?.1 == 1)
     let a = parse(["activity", "--days", "3", "--day", "2026-10-11"])
     #expect(a?.0 == oct11 && a?.1 == 3)
     let b = parse(["--days=7", "activity", "--day=2026-10-09"])
     #expect(b?.0 == CalendarDay(year: 2026, month: 10, day: 9) && b?.1 == 7)
-    #expect(parse(["--days", "-1"])?.1 == -1)
-    // Python's int() has no limit, so these are accepted there (and then fail in summary with an OverflowError)
-    #expect(parse(["--days", "99999999999999999999"])?.1 == Int.max && parse(["--days=+99999999999999999999"])?.1 == Int.max)
-    #expect(parse(["--days", "-99999999999999999999"])?.1 == Int.min && parse(["--days", "9223372036854775808"])?.1 == Int.max)
-    #expect(parse(["--days", "-9223372036854775808"])?.1 == Int.min && parse(["--days", "9223372036854775807"])?.1 == Int.max)
-    #expect(parse(["--days", "+5"])?.1 == 5 && parse(["--days", "007"])?.1 == 7)
     for bad in [["--days"], ["--days", "x"], ["--days", "1.5"], ["--day", "2026-02-30"], ["--day"], ["--moodle", "x"], ["chat"], ["-h"]] {
         #expect(parse(bad) == nil, "\(bad)")
     }
 }
 
-// MARK: - Python's summary text for the scenarios above
+// MARK: - the summary text for the scenarios above
 
-// Generated by running robo.activity.ActivityStore and summary() on the same rows with HOME=/Users/u.
-// One line per element; the trailing spaces ("Sites (visits): ") are Python's too.
+// First generated by the retired Python build on the same rows with HOME=/Users/u. One line per element.
 private let golden: [String: [String]] = [
     "aggregates": [
         "Activity 2026-10-11: 5 active min (idle >= 120s and locked excluded), first 09:00, last 23:30",

@@ -60,7 +60,7 @@ final class RootView: NSView {
 final class Bridge {
     weak var window: RoboWindow?
     func event(_ ev: Event) { DispatchQueue.main.async { [weak window] in window?.onEvent(ev) } }
-    func heard(_ text: String) { DispatchQueue.main.async { [weak window] in window?.onHeard(text) } }
+    func heard(_ text: String, handsFree: Bool) { DispatchQueue.main.async { [weak window] in window?.onHeard(text, handsFree: handsFree) } }
     func note(_ text: String) { DispatchQueue.main.async { [weak window] in window?.onNote(text) } }
     func link(_ state: HealthState) { DispatchQueue.main.async { [weak window] in window?.onLink(state) } }
     func calendar(_ fetched: CalendarRefresh) { DispatchQueue.main.async { [weak window] in window?.onCalendar(fetched) } }

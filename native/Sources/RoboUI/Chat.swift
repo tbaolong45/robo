@@ -1,7 +1,8 @@
 // The chat window's side of the pet's window: when it opens, what goes into it, how it closes, and what its glass does about the
-// backdrop. The conversation is `transcript` (in memory, one per Hermes session); the window shows it (ChatPanel.swift, Bubbles.swift).
-//   - It opens when you ask for something (typed, spoken, the digest) and stays until you tell Robo to close it ("close the chat",
-//     spoken or typed; `Intent.closesChat`): no timer, no click on the pet closes it; Esc closes it only while its text box has the keyboard.
+// backdrop. The conversation is `transcript` (in memory, one per agent session); the window shows it (ChatPanel.swift, Bubbles.swift).
+//   - It opens when you ask for something (typed, spoken, the digest from the menu; the automatic digest stays on the pet's card) and
+//     stays until you close it: its close button, "close the chat" (spoken or typed; `Intent.closesChat`), or Esc while its text box has
+//     the keyboard. No timer, no click on the pet closes it.
 //   - Your turn and Robo's answer go into it; the answer is typed letter by letter into its bubble by the same typewriter as the pet's
 //     card. A local notice ("Sorry, I didn't catch that.") is a line of it. The pet's card keeps what is quick and about the pet: the
 //     menu, "listening", Allow/Deny and the nudges.
@@ -23,9 +24,16 @@ extension RoboWindow {
     private func makeChat() -> ChatPanel {
         let p = ChatPanel(theme: theme, reduceMotion: machine.reduceMotion)
         p.chat.onSubmit = { [unowned self] text in ask(text) }
-        p.onBecomeKey = { [weak self] in if let app = self?.machine.focus.other() { self?.chatPreviousApp = app } }
-        p.onResignKey = { [weak self] in self?.chatReleased() }
+        p.onBecomeKey = { [weak self] in
+            if let app = self?.machine.focus.other() { self?.chatPreviousApp = app }
+            self?.refresh()  // typing: the blur comes on
+        }
+        p.onResignKey = { [weak self] in
+            self?.chatReleased()
+            self?.refresh()
+        }
         p.onEscape = { [weak self] in self?.closeChat() }
+        p.chat.onClose = { [weak self] in self?.closeChat() }
         chat = p
         return p
     }
@@ -35,6 +43,7 @@ extension RoboWindow {
         guard machine.chatOn else { return }
         let panel = chat ?? makeChat()
         if !chatOpen {
+            if autoDigest { retireListeningCard() }  // the digest on the pet's card is in the conversation too
             chatOpen = true
             panel.chat.set(turns: transcript.turns)
             applyChatShade()
@@ -52,7 +61,7 @@ extension RoboWindow {
     /// Re-centre it (the arrangement of the displays changed).
     func placeChat() { chat?.setFrame(ChatPanel.frame(centredOn: mainVisible), display: true) }
 
-    /// "Close the chat": it goes away, the conversation stays for the next time. Nothing else closes it.
+    /// "Close the chat", the close button or Esc: it goes away, the conversation stays for the next time.
     func closeChat() {
         guard chatOpen else { return }
         chatOpen = false
@@ -77,15 +86,16 @@ extension RoboWindow {
     // MARK: the conversation
 
     /// A request begins: the conversation is the agent's session's (a new day or persona starts it again), the answer being written is
-    /// finished off, your turn and an empty turn of Robo's are added, and the chat opens.
-    func chatBegin(you text: String?) {
+    /// finished off, your turn and an empty turn of Robo's are added, and the chat opens, unless `show` is false: the automatic digest
+    /// nobody asked for goes on the pet's card and into the conversation, for when the chat is next opened.
+    func chatBegin(you text: String?, show: Bool = true) {
         chatInterrupted(stopped: false, footer: chatFooter)
         transcript.reset(for: sessionID)
         retireListeningCard()
         if let text { transcript.append(.you, text) }
         transcript.append(.robo, "")
         (chatFooter, chatFailed) = ([], false)
-        openChat()
+        if show { openChat() }
         chat?.chat.endLive()
         chat?.chat.set(turns: transcript.turns)
     }

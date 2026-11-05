@@ -1,4 +1,4 @@
-// The test rig shared by WindowTests, AppTests, TypedReplyTests and PetTests: a fake Hermes, ear, watcher and
+// The test rig shared by WindowTests, AppTests, TypedReplyTests and PetTests: a fake agent, ear, watcher and
 // health poll, a clock, fake displays and openers, in a temp home. Nothing here puts a window on the real
 // desktop: the panel is built but never ordered front.
 import AppKit
@@ -45,8 +45,8 @@ final class Gate: @unchecked Sendable {
     }
 }
 
-/// Hermes with a script: events, and `.wait` to hold the run until `gate.signal()`.
-final class FakeHermes: HermesAPI, @unchecked Sendable {
+/// The agent with a script: events, and `.wait` to hold the run until `gate.signal()`.
+final class FakeAgent: AgentAPI, @unchecked Sendable {
     enum Step { case event(Event), wait }
     private let lock = NSLock()
     private var _script: [Step]
@@ -56,7 +56,7 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
     let gate = Gate()
     var fail: Error?
     var beforeStart: Gate?  // holds the run between "asked" and "started"
-    var onAsk: (() -> Void)?  // what Hermes does to the machine while it works (writes files)
+    var onAsk: (() -> Void)?  // what the agent does to the machine while it works (writes files)
 
     init(_ script: [Step] = [], fail: Error? = nil) {
         _script = script
@@ -99,16 +99,16 @@ final class FakeHermes: HermesAPI, @unchecked Sendable {
 }
 
 final class FakeEar: Ear {
-    let onWake: () -> Void, onText: (String) -> Void, onNote: (String) -> Void
-    let ok: Bool
+    let onWake: () -> Void, deliver: (String, Bool) -> Void, onNote: (String) -> Void
     var now = 0, follow = 0.0, follows: [Double] = [], stops = 0, holds = 0, releases = 0  // follow: the last, follows: every call
     var stopped: Bool { stops > 0 }
-    var running = true, ready = true, handsFree = false  // handsFree: a test sets it before `onText`, as the listener does
+    var running = true, ready = true, handsFree = false  // handsFree: what the next `onText` is flagged with
 
-    init(_ w: @escaping () -> Void, _ t: @escaping (String) -> Void, _ n: @escaping (String) -> Void, ok: Bool = true) {
-        (onWake, onText, onNote, self.ok) = (w, t, n, ok)
+    init(_ w: @escaping () -> Void, _ t: @escaping (String, Bool) -> Void, _ n: @escaping (String) -> Void) {
+        (onWake, deliver, onNote) = (w, t, n)
     }
-    func start() -> Bool { ok }
+    func onText(_ text: String) { deliver(text, handsFree) }
+    func start() {}
     func listenNow() { now += 1 }
     func hold() { holds += 1 }
     func release() { releases += 1 }
@@ -230,7 +230,7 @@ extension CardView {
         let real = realpath(tmp.path, &buffer) == nil ? tmp : URL(fileURLWithPath: String(cString: buffer))
         return real.appendingPathComponent("robo-ui-\(UUID().uuidString)")
     }()
-    let hermes: FakeHermes
+    let agent: FakeAgent
     let clock = TestClock()
     var displays = Rig.single
     var pointer = CGPoint(x: 100, y: 100)  // AppKit coordinates
@@ -239,6 +239,7 @@ extension CardView {
     var chats: [ChatPanel] = []  // each time the chat was put on screen, and how often its text box was asked to take the keyboard
     var chatFocuses = 0
     var blurs: [(on: Bool, frame: CGRect)] = []  // every time the blur of the background was switched
+    var typing = false  // the chat's text box has the keyboard (its panel never is key here)
     var terminated = false
     /// The backdrop: what the fake sampler reads (nil = no Screen Recording), the rectangles it was asked about, the answers held back
     /// by `holdLooks` until `answerLooks`, how often the permission was asked for, and Reduce Motion. Nothing here captures the
@@ -259,7 +260,7 @@ extension CardView {
     let radarFake = RadarFakes()
     var away = false
     /// The Moodle address the LMS posts scan may use: nil (the default) is "the profile has none or the skill is not installed", so no
-    /// test reads the real Hermes profile and no other test meets a scan.
+    /// test reads the real agent folder and no other test meets a scan.
     var moodle: String?
     var openedLinks: [URL] = [], linkAsks: [URL] = [], linkAnswer = true
     var nudgeDir: URL { dir.appendingPathComponent("data") }
@@ -281,12 +282,12 @@ extension CardView {
     var usage: URL { window.machine.usageFile }
 
     /// `cps` is the typing speed of the theme (0 = at once); `digestDue` leaves today's digest to be asked.
-    init(_ script: [FakeHermes.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
-         listener: Bool = true, micOK: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
+    init(_ script: [FakeAgent.Step] = [], fail: Error? = nil, cps: Double = 0, tokens: String = "", digestDue: Bool = false,
+         listener: Bool = true, watcher: Watching? = nil, health: String = "", persona: String = "",
          today: @escaping () -> CalendarDay = { Rig.day }, network: @escaping () -> Bool = { true },
          watchPaused: Bool = false, hotkey: Hotkey? = nil, radar: Bool = false, chat: Bool = false) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        hermes = FakeHermes(script, fail: fail)
+        agent = FakeAgent(script, fail: fail)
         digest = DigestClock(path: dir.appendingPathComponent("state.json"))
         if !digestDue { try? digest.mark(Rig.day) }
         try? "{\"tokens\": {\"cps\": \(cps)\(tokens)}}".write(to: theme, atomically: true, encoding: .utf8)
@@ -308,7 +309,7 @@ extension CardView {
         m.calendarBodies = { [fake] in fake.bodies() }
         m.radarOn = radar
         m.radarNow = false  // whatever ROBO_RADAR_NOW the shell has
-        m.postsMoodle = { [weak self] in self?.moodle }  // never the real Hermes profile
+        m.postsMoodle = { [weak self] in self?.moodle }  // never the real agent folder
         m.radarFetcher = { [radarFake] _, hosts in
             radarFake.hosts = hosts
             return radarFake
@@ -329,6 +330,7 @@ extension CardView {
         }
         m.focusChat = { [weak self] _ in self?.chatFocuses += 1 }
         m.blurBackground = { [weak self] on, frame in self?.blurs.append((on, frame)) }  // never a real panel
+        m.chatTyping = { [weak self] _ in self?.typing ?? false }
         m.terminate = { [weak self] in self?.terminated = true }
         m.backdropLuma = { [weak self] rect, done in
             guard let self else { return done(nil) }
@@ -345,9 +347,9 @@ extension CardView {
         m.focus = Focus(frontmost: { [weak self] in self?.frontmost }, appIsActive: { [weak self] in self?.appActive ?? false },
                         activate: { [weak self] in self?.activated.append($0) })
         window = RoboWindow(
-            hermes: hermes, digest: digest, persona: persona, today: today, network: network, watchWake: false,
+            agent: agent, digest: digest, persona: persona, today: today, network: network, watchWake: false,
             listener: listener ? { [unowned self] w, t, n in
-                let e = FakeEar(w, t, n, ok: micOK)
+                let e = FakeEar(w, t, n)
                 self.ears.append(e)
                 return e
             } : nil,

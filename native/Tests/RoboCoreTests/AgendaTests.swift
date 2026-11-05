@@ -93,7 +93,7 @@ END:VEVENT
 END:VCALENDAR
 """#)
 
-/// A study ledger as the study-ledger skill writes it (hermes/skills/school/study-ledger/SKILL.md).
+/// A study ledger as the study-ledger skill writes it (agent/skills/school/study-ledger/SKILL.md).
 private let LEDGER = """
 # Study ledger
 

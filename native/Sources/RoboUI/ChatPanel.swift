@@ -87,17 +87,18 @@ final class ChatView: NSView, NSTextFieldDelegate {
     let reduceMotion: () -> Bool
     let glass = GlassSurface(frame: .zero, radius: Chrome.paneRadius)
     private let titleLabel = NSTextField(labelWithString: "Robo")
+    let close = FirstMouseButton()
     let statusLabel = NSTextField(labelWithString: "")
     let scroll = NSScrollView()
     private let doc = FlippedView()
     let input = NSTextField()
     private let pill = PillView()
     let send = NSButton()
-    let jump = NSButton()  // "jump to latest": shows while the reader is scrolled up from the end
+    let jump = FirstMouseButton()  // "jump to latest": shows while the reader is scrolled up from the end
     let empty = NSTextField(wrappingLabelWithString: "")  // what an empty conversation shows
-    let orb = OrbView()
     private let fade = CAGradientLayer()
     var onSubmit: ((String) -> Void)?
+    var onClose: (() -> Void)?
 
     private(set) var turns: [Turn] = []
     private(set) var bubbles: [Int: BubbleView] = [:]
@@ -125,7 +126,7 @@ final class ChatView: NSView, NSTextFieldDelegate {
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.textColor = .labelColor
         statusLabel.font = .systemFont(ofSize: 11)
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = Chrome.textDim(nil)
         statusLabel.lineBreakMode = .byTruncatingTail
         scroll.documentView = doc
         scroll.drawsBackground = false
@@ -133,10 +134,11 @@ final class ChatView: NSView, NSTextFieldDelegate {
         scroll.hasVerticalScroller = true
         scroll.scrollerStyle = .overlay
         scroll.autohidesScrollers = true
+        scroll.verticalScroller?.controlSize = .small
         scroll.contentView.drawsBackground = false
         scroll.contentView.postsBoundsChangedNotifications = true
-        input.placeholderString = "Reply to Robo…"
         input.font = .systemFont(ofSize: 14)
+        input.placeholderAttributedString = NSAttributedString(string: "Message Robo…", attributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: Chrome.textDim(nil)])
         input.isBordered = false
         input.drawsBackground = false
         input.focusRingType = .none
@@ -156,6 +158,16 @@ final class ChatView: NSView, NSTextFieldDelegate {
         send.target = self
         send.action = #selector(submit)
         send.setAccessibilityLabel("Send")
+        send.contentTintColor = .labelColor
+        close.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close chat")?
+            .withSymbolConfiguration(.init(pointSize: 18, weight: .regular))
+        close.isBordered = false
+        close.imagePosition = .imageOnly
+        close.contentTintColor = Chrome.textDim(nil)
+        close.target = self
+        close.action = #selector(closeChat)
+        close.setAccessibilityLabel("Close chat")
+        close.toolTip = "Close (Esc)"
         jump.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Jump to latest")?
             .withSymbolConfiguration(.init(pointSize: 22, weight: .regular))
         jump.isBordered = false
@@ -164,22 +176,21 @@ final class ChatView: NSView, NSTextFieldDelegate {
         jump.action = #selector(jumpToLatest)
         jump.setAccessibilityLabel("Jump to latest")
         jump.toolTip = "Jump to latest"
+        jump.contentTintColor = .labelColor
         jump.isHidden = true
         let centred = NSMutableParagraphStyle()
         centred.alignment = .center
         let welcome = NSMutableAttributedString(string: "Ask Robo anything\n", attributes: [
             .font: NSFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: NSColor.labelColor, .paragraphStyle: centred])
         welcome.append(NSAttributedString(string: "Type below, or talk to Robo.", attributes: [
-            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: centred]))
+            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: Chrome.textDim(nil), .paragraphStyle: centred]))
         empty.attributedStringValue = welcome
         empty.isSelectable = false
-        orb.reduceMotion = reduceMotion
-        applyAccent()
         // the conversation dissolves under the header and above the text box instead of ending on a line
         fade.colors = [NSColor.clear.cgColor, NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
         scroll.wantsLayer = true
         scroll.layer?.mask = fade
-        for v in [orb, titleLabel, statusLabel, scroll, empty, jump, pill, input, send] as [NSView] { addSubview(v) }
+        for v in [titleLabel, statusLabel, close, scroll, empty, jump, pill, input, send] as [NSView] { addSubview(v) }
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         inputChanged()
     }
@@ -199,10 +210,10 @@ final class ChatView: NSView, NSTextFieldDelegate {
         super.layout()
         let p = pane
         glass.frame = p
-        orb.frame = CGRect(x: p.minX + Self.side + 4, y: p.minY + 15, width: 18, height: 18)
         titleLabel.sizeToFit()
-        titleLabel.frame.origin = CGPoint(x: p.minX + Self.side + 28, y: p.minY + 13)
-        statusLabel.frame = CGRect(x: p.minX + Self.side + 28, y: p.minY + 32, width: p.width - 2 * Self.side - 32, height: 14)
+        titleLabel.frame.origin = CGPoint(x: p.minX + Self.side + 4, y: p.minY + 13)
+        statusLabel.frame = CGRect(x: p.minX + Self.side + 4, y: p.minY + 32, width: p.width - 2 * Self.side - 40, height: 14)
+        close.frame = CGRect(x: p.maxX - Self.side - 26, y: p.minY + 14, width: 26, height: 26)
         let bar = Self.inputBar + inputExtra
         scroll.frame = CGRect(x: p.minX, y: p.minY + Self.header - 6, width: p.width, height: p.height - Self.header - bar + 12)
         let h = scroll.bounds.height
@@ -222,18 +233,9 @@ final class ChatView: NSView, NSTextFieldDelegate {
 
     func setTheme(_ t: Theme) {
         theme = t
-        applyAccent()
         for b in bubbles.values { b.theme = t }
         for turn in turns { build(turn, force: true) }
         layoutRows()
-    }
-
-    /// The face's colour, a little, in the glass (as the card has), the orb and the buttons.
-    private func applyAccent() {
-        glass.tint(Chrome.accent(theme, theme.hue, CardView.tint))
-        orb.theme = theme
-        send.contentTintColor = Chrome.accent(theme, theme.hue, 0.95)
-        jump.contentTintColor = Chrome.accent(theme, theme.hue, 0.95)
     }
 
     /// The glass at `level` (0 dark ... 1 light, nil = the system's look): the panel's appearance is set by the window.
@@ -241,8 +243,8 @@ final class ChatView: NSView, NSTextFieldDelegate {
 
     /// The one line under the title that says what Robo is doing ("Listening…", what the tool does, "Listening for your reply").
     func setStatus(_ text: String) {
-        if statusLabel.stringValue != text { statusLabel.stringValue = text }
-        orb.pulsing = !text.isEmpty  // it breathes while Robo listens or works
+        let shown = Chrome.sentence(text)
+        if statusLabel.stringValue != shown { statusLabel.stringValue = shown }
     }
 
     /// The turns to show, after any change in the conversation: bubbles are made for new turns, updated for finished ones, dropped for
@@ -361,7 +363,7 @@ final class ChatView: NSView, NSTextFieldDelegate {
         for (i, turn) in turns.enumerated() {
             guard let v = bubbles[turn.id] else { continue }
             let nextSame = i + 1 < turns.count && turns[i + 1].role == turn.role
-            let size = v.measure(maxWidth: maxBubble, shrink: turn.role == .you)
+            let size = v.measure(maxWidth: maxBubble)
             let bodyW = v.bubbleSize.width
             let x = turn.role == .you ? width - Self.side - bodyW - inset : Self.side - inset
             v.frame = CGRect(x: x, y: y, width: max(bodyW, size.width) + 2 * inset, height: size.height)
@@ -450,6 +452,13 @@ final class ChatView: NSView, NSTextFieldDelegate {
     }
 
     func focusInput() { window?.makeFirstResponder(input) }
+
+    @objc private func closeChat() { onClose?() }
+}
+
+/// A button that answers the first click: the chat's panel is not the key window until its text box is clicked.
+final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// The capsule behind the text box: a drop of glass with a bright rim on top (a rounded box once the text takes more lines).
@@ -469,32 +478,5 @@ final class PillView: NSView {
         NSColor.white.withAlphaComponent(dark ? 0.22 : 0.9).setStroke()
         shape.lineWidth = 1
         shape.stroke()
-    }
-}
-
-/// A small drop of the face's colour beside the title; it breathes while Robo listens or works (not under Reduce Motion).
-final class OrbView: NSView {
-    var theme = Themes.glass { didSet { needsDisplay = true } }
-    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    var pulsing = false {
-        didSet {
-            guard pulsing != oldValue else { return }
-            wantsLayer = true
-            if pulsing && !reduceMotion() {
-                let a = CABasicAnimation(keyPath: "opacity")
-                (a.fromValue, a.toValue, a.duration) = (1.0, 0.45, 0.9)
-                a.autoreverses = true
-                a.repeatCount = .infinity
-                a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                layer?.add(a, forKey: "breathe")
-            } else {
-                layer?.removeAnimation(forKey: "breathe")
-            }
-        }
-    }
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func draw(_ dirtyRect: NSRect) {
-        Chrome.orb(at: CGPoint(x: bounds.midX, y: bounds.midY), halo: bounds.width / 2, core: 9, Chrome.accent(theme, theme.hue))
     }
 }

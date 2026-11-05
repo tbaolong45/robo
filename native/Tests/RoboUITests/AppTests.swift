@@ -1,10 +1,4 @@
-// The conversation: port of the behaviour cases of tests/test_app.py and tests/test_chat_ui.py, with a
-// fake Hermes, a fake ear and a temp home (the rig is in TestRig.swift).
-//
-// Not ported, because there is nothing left to test or the card (CardView, its own tests) owns it: the
-// Qt style-sheet, QTextDocument, scroll-bar, widget-geometry and pixel-diff checks; the docked window; the
-// compositor drag (startSystemMove); the QShortcut; WA_MacAlwaysShowToolWindow (the panel tests cover the
-// stay-on-top behaviour); TypingDots.offsets; `open_file` choosing xdg-open or open.
+// The conversation, with a fake agent, a fake ear and a temp home (the rig is in TestRig.swift).
 import AppKit
 import Foundation
 import Testing
@@ -14,8 +8,8 @@ import RoboSystem
 
 let HELLO = "Hello there, this is a short reply."
 let LONG = (0..<45).map { "word\($0)" }.joined(separator: " ")  // about 250 characters: seconds to type
-func completed(_ text: String) -> FakeHermes.Step { .event(.runEnded(status: "completed", output: text)) }
-func delta(_ text: String) -> FakeHermes.Step { .event(.delta(text)) }
+func completed(_ text: String) -> FakeAgent.Step { .event(.runEnded(status: "completed", output: text)) }
+func delta(_ text: String) -> FakeAgent.Step { .event(.delta(text)) }
 
 /// What the window shows of the reply now: the typewriter's view (Markdown, as the card gets it).
 @MainActor func shown(_ r: Rig) -> String { r.window.tw.view().markdown }
@@ -35,7 +29,7 @@ final class Flag: @unchecked Sendable {
     var value: Bool { get { lock.withLock { on } } set { lock.withLock { on = newValue } } }
 }
 
-// MARK: - asking Hermes
+// MARK: - asking the agent
 
 @MainActor @Suite(.serialized) struct AskTests {
     @Test func theReplyStreamsWithoutTagsAndReturnsToIdle() async {
@@ -43,17 +37,17 @@ final class Flag: @unchecked Sendable {
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["hi"] && r.hermes.asked[0].session == r.window.sessionID)
+        #expect(r.agent.asked.map(\.text) == ["hi"] && r.agent.asked[0].session == r.window.sessionID)
         #expect(shown(r) == "Hello **you**" && !shown(r).contains("[["))
         #expect(r.window.mind.activity == .idle && r.window.mind.emotion == "happy")
     }
 
     @Test func aBrainErrorShowsItsMessageAndASadFace() async {
-        let r = Rig(fail: BrainError("Hermes is not running"))
+        let r = Rig(fail: BrainError("The agent is not running"))
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        #expect(shown(r) == "Hermes is not running")  // no generic prefix
+        #expect(shown(r) == "The agent is not running")  // no generic prefix
         #expect(r.window.mind.activity == .error)
     }
 
@@ -67,7 +61,7 @@ final class Flag: @unchecked Sendable {
     }
 
     @Test func aFailedRunPokesTheHealthPoller() async {
-        let r = Rig(fail: BrainError("Hermes is not running"), health: "http://127.0.0.1:9")
+        let r = Rig(fail: BrainError("The agent is not running"), health: "http://127.0.0.1:9")
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
@@ -84,10 +78,10 @@ final class Flag: @unchecked Sendable {
         #expect(await pump(r.window.mind.activity == .working))
         #expect(await pump(r.window.card.statusShown.contains("searching")))
         r.window.ask("second while busy")  // one run at a time: it is asked when this one ends
-        r.hermes.gate.signal()
-        #expect(await pump(r.hermes.asked.count == 2))
-        #expect(r.hermes.asked.map(\.text) == ["news?", "second while busy"])
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
+        #expect(await pump(r.agent.asked.count == 2))
+        #expect(r.agent.asked.map(\.text) == ["news?", "second while busy"])
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -97,8 +91,8 @@ final class Flag: @unchecked Sendable {
         r.window.ask("go")
         #expect(await pump(r.window.mind.activity == .talking))
         r.window.stop()
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped == ["run_1"]))
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -110,9 +104,9 @@ final class Flag: @unchecked Sendable {
         #expect(await pump(r.window.card.approvalShown != nil))
         #expect(r.window.card.approvalShown == "open a page")
         r.window.card.onApprove?(button)  // Allow, or Deny
-        #expect(await pump(r.hermes.approved.map(\.choice) == [choice]))
-        #expect(r.hermes.approved[0].run == "run_1" && r.window.card.approvalShown == nil)
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.approved.map(\.choice) == [choice]))
+        #expect(r.agent.approved[0].run == "run_1" && r.window.card.approvalShown == nil)
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -123,26 +117,25 @@ final class Flag: @unchecked Sendable {
         r.window.ask("go")
         #expect(await pump(r.window.card.approvalShown != nil))
         #expect(r.window.card.approvalShown!.unicodeScalars.count == RoboWindow.approvalMax && r.window.card.approvalShown!.hasSuffix("…"))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
-    /// Hermes' own "Allow computer_use" approvals used to be answered "session" without a card. robo-agent sends no such ask,
-    /// and an ask that looks like one is shown like any other: nothing is approved unseen.
+    /// An ask that names `computer_use` is shown like any other: nothing is approved unseen.
     @Test func noAskIsApprovedUnseen() async {
         let r = Rig([.event(.approvalNeeded("Allow computer_use to perform `click`?", id: "H")), .wait, completed("ok")])
         defer { r.close() }
         r.window.ask("open the calculator and compute 12*7")
         #expect(await pump(r.window.card.approvalShown != nil))
         _ = await pump(timeout: 0.2)
-        #expect(r.hermes.approved.isEmpty)
+        #expect(r.agent.approved.isEmpty)
         r.window.card.onApprove?("deny")
-        #expect(await pump(r.hermes.approved.map(\.id) == ["H"] && r.hermes.approved[0].choice == .deny))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.approved.map(\.id) == ["H"] && r.agent.approved[0].choice == .deny))
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
-    /// Hermes answers the OLDEST pending ask unless the answer names one: the card shows the oldest, the count of the others, and
+    /// The agent answers the OLDEST pending ask unless the answer names one: the card shows the oldest, the count of the others, and
     /// every click carries the id of the ask it answered.
     @Test func parallelAsksQueueInOrderAndEachClickCarriesItsOwnId() async {
         let r = Rig([.event(.approvalNeeded("send the mail to Anna", id: "A")), .event(.approvalNeeded("delete the note", id: "B")),
@@ -150,19 +143,19 @@ final class Flag: @unchecked Sendable {
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.approvals.count == 3))
-        #expect(r.window.card.approvalShown == "send the mail to Anna" && r.window.card.approval.label.text == "APPROVAL ▸ +2 MORE")
+        #expect(r.window.card.approvalShown == "send the mail to Anna" && r.window.card.approval.label.text == "Approval +2 more")
         r.window.card.onApprove?("once")
-        #expect(await pump(r.hermes.approved.count == 1))
-        #expect(r.window.card.approvalShown == "delete the note" && r.window.card.approval.label.text == "APPROVAL ▸ +1 MORE")
+        #expect(await pump(r.agent.approved.count == 1))
+        #expect(r.window.card.approvalShown == "delete the note" && r.window.card.approval.label.text == "Approval +1 more")
         r.window.card.onApprove?("deny")
-        #expect(await pump(r.hermes.approved.count == 2))
-        #expect(r.window.card.approvalShown == "open a page" && r.window.card.approval.label.text == "APPROVAL ▸")  // the last one: no count
+        #expect(await pump(r.agent.approved.count == 2))
+        #expect(r.window.card.approvalShown == "open a page" && r.window.card.approval.label.text == "Approval")  // the last one: no count
         r.window.card.onApprove?("once")
-        #expect(await pump(r.hermes.approved.count == 3))
+        #expect(await pump(r.agent.approved.count == 3))
         #expect(r.window.card.approvalShown == nil && r.window.approvals.isEmpty)
-        #expect(r.hermes.approved.map(\.id) == ["A", "B", "C"] && r.hermes.approved.map(\.choice) == [.once, .deny, .once])
-        #expect(r.hermes.approved.allSatisfy { $0.run == "run_1" })
-        r.hermes.gate.signal()
+        #expect(r.agent.approved.map(\.id) == ["A", "B", "C"] && r.agent.approved.map(\.choice) == [.once, .deny, .once])
+        #expect(r.agent.approved.allSatisfy { $0.run == "run_1" })
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -172,12 +165,12 @@ final class Flag: @unchecked Sendable {
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.approvals.count == 2))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(r.window.approvals.isEmpty && r.window.card.approvalShown == nil)
         r.window.approve(.once)  // a click that arrives late answers nothing
         _ = await pump(timeout: 0.2)
-        #expect(r.hermes.approved.isEmpty)
+        #expect(r.agent.approved.isEmpty)
     }
 
     @Test(arguments: ["Microsoft Outlook", "Microsoft Teams"])
@@ -187,11 +180,11 @@ final class Flag: @unchecked Sendable {
         r.window.ask("reply to Anna")
         #expect(await pump(r.window.card.approvalShown != nil))
         _ = await pump(timeout: 0.2)
-        #expect(r.hermes.approved.isEmpty && r.window.card.approvalShown?.contains(app) == true)  // nothing is approved unseen
+        #expect(r.agent.approved.isEmpty && r.window.card.approvalShown?.contains(app) == true)  // nothing is approved unseen
         r.window.card.onApprove?("deny")
-        #expect(await pump(r.hermes.approved.count == 1))
-        #expect(r.hermes.approved[0].choice == .deny && r.hermes.approved[0].id == "G")
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.approved.count == 1))
+        #expect(r.agent.approved[0].choice == .deny && r.agent.approved[0].id == "G")
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -201,11 +194,11 @@ final class Flag: @unchecked Sendable {
                      .event(.approvalNeeded("Robo wants to delete a note.", id: "B")), .wait, completed("ok")],
                     digestDue: true)
         defer { r.close() }
-        #expect(await pump(r.hermes.approved.count == 2))
-        #expect(r.hermes.approved.map(\.choice) == [.deny, .deny] && r.hermes.approved.map(\.id) == ["A", "B"])
-        #expect(r.hermes.approved.allSatisfy { $0.run == "run_1" })
+        #expect(await pump(r.agent.approved.count == 2))
+        #expect(r.agent.approved.map(\.choice) == [.deny, .deny] && r.agent.approved.map(\.id) == ["A", "B"])
+        #expect(r.agent.approved.allSatisfy { $0.run == "run_1" })
         #expect(r.window.approvals.isEmpty && r.window.card.approvalShown == nil)  // no ask card, nothing to wait on
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -216,10 +209,10 @@ final class Flag: @unchecked Sendable {
         r.window.menu(.digest)
         #expect(await pump(r.window.card.approvalShown != nil))
         _ = await pump(timeout: 0.2)
-        #expect(r.hermes.approved.isEmpty && !r.window.autoDigest)
+        #expect(r.agent.approved.isEmpty && !r.window.autoDigest)
         r.window.card.onApprove?("deny")
-        #expect(await pump(r.hermes.approved.map(\.id) == ["A"]))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.approved.map(\.id) == ["A"]))
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -242,14 +235,14 @@ final class Flag: @unchecked Sendable {
 
     @Test func stopBeforeTheRunExistsStopsItOnceStarted() async {
         let r = Rig([.event(.runEnded(status: "cancelled"))])
-        r.hermes.beforeStart = Gate()
+        r.agent.beforeStart = Gate()
         defer { r.close() }
         r.window.ask("go")
-        #expect(await pump(!r.hermes.asked.isEmpty))
+        #expect(await pump(!r.agent.asked.isEmpty))
         r.window.stop()  // no run id yet
-        r.hermes.beforeStart?.signal()
+        r.agent.beforeStart?.signal()
         #expect(await pump(!r.window.busy))
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
+        #expect(await pump(r.agent.stopped == ["run_1"]))
     }
 
     @Test func stopWhileWaitingForTheNetworkNeverStartsARun() async {
@@ -260,7 +253,7 @@ final class Flag: @unchecked Sendable {
         r.window.stop()
         online.value = true
         #expect(await pump(!r.window.busy, timeout: 8))  // the wait polls every 2 s
-        #expect(r.hermes.asked.isEmpty && r.window.mind.activity == .idle)
+        #expect(r.agent.asked.isEmpty && r.window.mind.activity == .idle)
     }
 
     @Test func closingMidRunStopsIt() async {
@@ -270,8 +263,8 @@ final class Flag: @unchecked Sendable {
         #expect(await pump(r.window.mind.activity == .talking))
         r.window.quit()
         #expect(await pump(r.terminated))
-        #expect(r.hermes.stopped.first == "run_1")
-        r.hermes.gate.signal()
+        #expect(r.agent.stopped.first == "run_1")
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))  // the run's log line is written before the home is deleted
     }
 
@@ -286,7 +279,7 @@ final class Flag: @unchecked Sendable {
         d = d.adding(days: 1)
         r.window.ask("b")
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.session) == ["robo-2026-10-11", "robo-2026-10-12"])
+        #expect(r.agent.asked.map(\.session) == ["robo-2026-10-11", "robo-2026-10-12"])
     }
 
     @Test func theSessionCarriesThePersonaStamp() async {
@@ -294,24 +287,24 @@ final class Flag: @unchecked Sendable {
         defer { r.close() }
         r.window.ask("a")
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked[0].session == "robo-2026-10-11-ab12cd34")
+        #expect(r.agent.asked[0].session == "robo-2026-10-11-ab12cd34")
     }
 
     @Test func theDigestRunsOncePerDayAtStartAndOnWake() async {
         let r = Rig([completed("digest")], digestDue: true)
         defer { r.close() }
-        #expect(await pump(r.hermes.asked.count == 1 && !r.window.busy))
-        #expect(r.hermes.asked[0].text == RoboWindow.digestPrompt)
+        #expect(await pump(r.agent.asked.count == 1 && !r.window.busy))
+        #expect(r.agent.asked[0].text == RoboWindow.digestPrompt)
         #expect(!r.digest.due(Rig.day))
         r.window.maybeDigest()  // a later wake the same day: nothing
         _ = await pump(timeout: 0.3)
-        #expect(r.hermes.asked.count == 1)
+        #expect(r.agent.asked.count == 1)
     }
 
     @Test func aFailedDigestStaysDue() async {
         let r = Rig([.event(.runEnded(status: "failed", error: "offline"))], digestDue: true)
         defer { r.close() }
-        #expect(await pump(r.hermes.asked.count == 1 && !r.window.busy))
+        #expect(await pump(r.agent.asked.count == 1 && !r.window.busy))
         #expect(r.digest.due(Rig.day))
     }
 
@@ -319,9 +312,9 @@ final class Flag: @unchecked Sendable {
         var d = Rig.day
         let r = Rig([.wait, completed("digest")], digestDue: true, today: { d })
         defer { r.close() }
-        #expect(await pump(!r.hermes.asked.isEmpty))
+        #expect(await pump(!r.agent.asked.isEmpty))
         d = d.adding(days: 1)
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(!r.digest.due(Rig.day) && r.digest.due(d))
     }
@@ -386,20 +379,20 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         let reply = "I sent the email."
         let r = Rig([delta(reply), completed(reply)])
         defer { r.close() }
-        r.hermes.onAsk = {
+        r.agent.onAsk = {
             Usage.append(receipt(wallNow()), to: r.receipts)
             write([r.vault.appendingPathComponent("Drafts/Mail.md"): "Hi"])
         }
         r.window.ask("send it")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.card.footerShown == "📓 In Obsidian: Mail\n\(sent)")
+        #expect(r.window.card.footerShown == "In Obsidian: Mail\n\(sent)")
         #expect(shown(r) == reply && !r.window.tw.text.contains("✓"))  // the footer is not part of the reply
     }
 
     @Test func aNoteFiledInTheSecondBrainOpensLikeAnyOtherAndItsFilesBesideItDoNot() async {
         let r = Rig([completed("Saved it.")])
         defer { r.close() }
-        r.hermes.onAsk = {
+        r.agent.onAsk = {
             write([r.vault.appendingPathComponent("Brain/Reading/Attention is all you need.md"): "x",
                    r.vault.appendingPathComponent("Brain/Communication/slides.pdf"): "%PDF"])
             // robo-guard records a write_file like this, so "saved" is a backed claim (a terminal `>>` is not recorded: the skill uses patch)
@@ -407,7 +400,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         }
         r.window.ask("save this paper to my brain")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.card.footerShown == "📓 In Obsidian: Attention is all you need\n✓ saved · Attention is all you need.md")  // backed: no ⚠
+        #expect(r.window.card.footerShown == "In Obsidian: Attention is all you need\n✓ saved · Attention is all you need.md")  // backed: no ⚠
         #expect(await pump(r.notes.count == 1))
         #expect(r.notes.map(\.url.lastPathComponent) == ["Attention is all you need.md"] && r.files.isEmpty)
     }
@@ -418,9 +411,9 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("send it")
         #expect(await pump(!r.window.busy))
         #expect(r.window.card.footerShown == "⚠ unverified: sent (no send was recorded)")
-        r.hermes.script = [completed("Here is the draft.")]
+        r.agent.script = [completed("Here is the draft.")]
         r.window.ask("draft it")
-        #expect(await pump(r.hermes.asked.count == 2 && !r.window.busy))
+        #expect(await pump(r.agent.asked.count == 2 && !r.window.busy))
         #expect(r.window.card.footerShown == "")
     }
 
@@ -437,7 +430,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     func aRunThatDidNotCompleteStillShowsWhatHappened(status: String) async {
         let r = Rig([.event(.runEnded(status: status, error: status == "failed" ? "boom" : ""))])
         defer { r.close() }
-        r.hermes.onAsk = { Usage.append(receipt(wallNow()), to: r.receipts) }
+        r.agent.onAsk = { Usage.append(receipt(wallNow()), to: r.receipts) }
         r.window.ask("send it")
         #expect(await pump(!r.window.busy))
         #expect(r.window.card.footerShown == sent && shown(r) == (status == "failed" ? "boom" : "Run cancelled."))
@@ -462,7 +455,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("news?")
         #expect(await pump(r.window.mind.activity == .thinking && r.window.card.statusShown.contains("reading")))
         r.clock.advance(12.5)
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         let rows = try logged(r)
         #expect(rows.count == 1)
@@ -486,7 +479,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
     }
 
     @Test func aRunThatCouldNotStartLeavesNoLog() async {
-        let r = Rig(fail: BrainError("Hermes is not running"))
+        let r = Rig(fail: BrainError("The agent is not running"))
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
@@ -511,7 +504,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("hi")
         #expect(shown(r) == message && !r.window.busy)
         #expect(r.window.card.reply.textView.string.contains("number in daily_tokens"))  // the underscore is not Markdown
-        #expect(!(await pump(!r.hermes.asked.isEmpty, timeout: 0.3)))  // Hermes was never asked
+        #expect(!(await pump(!r.agent.asked.isEmpty, timeout: 0.3)))  // The agent was never asked
         #expect(r.window.mind.activity == .idle)
     }
 
@@ -521,7 +514,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         defer { r.close() }
         capped(r, cap: cap, used: used, at: day + ago)
         r.window.ask("hi")
-        #expect(await pump(!r.window.busy && r.hermes.asked.count == 1))
+        #expect(await pump(!r.window.busy && r.agent.asked.count == 1))
         #expect(shown(r) == "ok")
     }
 
@@ -532,7 +525,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("first")
         #expect(await pump(!r.window.busy && shown(r) == "ok"))
         r.window.ask("second")
-        #expect(shown(r) == message && r.hermes.asked.map(\.text) == ["first"])
+        #expect(shown(r) == message && r.agent.asked.map(\.text) == ["first"])
     }
 
     @Test func theCapReadsTheEnvironmentThenTheDataFolderWhenTheMachineIsBuilt() {
@@ -552,13 +545,13 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(r.window.mind.label == "")  // the mind forgot the tool, the card did not
         r.window.tick()
         #expect(r.window.card.statusShown == "searching the web…")
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(r.window.card.statusShown == "")
-        r.hermes.script = [.wait, completed("again")]
+        r.agent.script = [.wait, completed("again")]
         r.window.ask("again")  // a new request does not start with the old request's tool
         #expect(r.window.card.statusShown == "on it…")
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -573,7 +566,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
             r.window.tick()
             #expect(r.window.card.statusShown == want)
         }
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -586,7 +579,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.tick()
         #expect(r.window.card.statusShown == "")
         r.window.card.onApprove?("once")
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -598,7 +591,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.clock.advance(50)
         r.window.tick()
         #expect(r.window.card.statusShown == "" && !r.window.card.dotsShown)  // text is on screen: no status row
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 }
@@ -613,8 +606,8 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(await pump(r.window.mind.activity == .listening))
         #expect(!r.window.card.isHidden && r.window.card.statusShown == "listening")
         r.ear.onText("what's on my calendar today")
-        #expect(await pump(!r.hermes.asked.isEmpty))
-        #expect(r.hermes.asked[0].text == "what's on my calendar today")
+        #expect(await pump(!r.agent.asked.isEmpty))
+        #expect(r.agent.asked[0].text == "what's on my calendar today")
         #expect(await pump(!r.window.busy))
     }
 
@@ -624,7 +617,7 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.ear.onWake()
         r.ear.onText("")
         #expect(await pump(r.window.tw.text.contains("didn't catch")))
-        #expect(r.hermes.asked.isEmpty && r.window.mind.activity == .idle)
+        #expect(r.agent.asked.isEmpty && r.window.mind.activity == .idle)
     }
 
     @Test func aWakeWhileAnsweringInterrupts() async {
@@ -633,8 +626,8 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("tell me a story")
         #expect(await pump(r.window.mind.activity == .talking))
         r.ear.onWake()
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped == ["run_1"]))
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -644,13 +637,13 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("tell me a story")
         #expect(await pump(r.window.mind.activity == .talking))
         r.ear.onWake()
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
-        r.hermes.gate.signal()  // the old run ends while robo is still listening
+        #expect(await pump(r.agent.stopped == ["run_1"]))
+        r.agent.gate.signal()  // the old run ends while robo is still listening
         #expect(await pump(!r.window.busy))
         #expect(r.window.mind.activity == .listening && !r.window.tw.text.contains("cancelled"))
-        r.hermes.script = [completed("ok")]
+        r.agent.script = [completed("ok")]
         r.ear.onText("what's due")
-        #expect(await pump(r.hermes.asked.map(\.text) == ["tell me a story", "what's due"]))
+        #expect(await pump(r.agent.asked.map(\.text) == ["tell me a story", "what's due"]))
     }
 
     @Test func aQuestionHeardDuringARunWaitsForIt() async {
@@ -659,9 +652,9 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("first")
         #expect(await pump(r.window.mind.activity == .talking))
         r.ear.onText("second")  // heard while the first still runs (its stop is on the way)
-        r.hermes.script = [completed("second done")]
-        r.hermes.gate.signal()
-        #expect(await pump(r.hermes.asked.map(\.text) == ["first", "second"]))
+        r.agent.script = [completed("second done")]
+        r.agent.gate.signal()
+        #expect(await pump(r.agent.asked.map(\.text) == ["first", "second"]))
     }
 
     @Test func aListenerErrorEndsListening() async {
@@ -676,8 +669,8 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         #expect(await pump(r.window.mind.activity == .listening && !r.window.noted))
     }
 
-    @Test func withoutAMicrophoneThereIsNoEarAndClickingTypes() async {
-        let r = Rig(micOK: false, chat: true)
+    @Test func withoutAListenerThereIsNoEarAndClickingTypes() async {
+        let r = Rig(listener: false, chat: true)
         defer { r.close() }
         #expect(r.window.ear == nil)
         r.window.clicked()
@@ -700,8 +693,8 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("story")
         #expect(await pump(r.window.mind.activity == .talking))
         r.window.clicked()
-        #expect(await pump(r.hermes.stopped == ["run_1"]) && r.ear.now == 1)
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped == ["run_1"]) && r.ear.now == 1)
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -723,12 +716,12 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         defer { r.close() }
         let w = r.window!
         w.ask("count to forty-five")
-        #expect(await r.run(until: !w.busy && w.tw.pending))  // Hermes is done, the letters are still coming
+        #expect(await r.run(until: !w.busy && w.tw.pending))  // The agent is done, the letters are still coming
         #expect(!opened(r) && w.followUntil == 0 && w.followDue)  // typing does not eat the window
         #expect(w.card.header.mic.state != .hot)
         #expect(await r.run(until: w.typed))
         #expect(r.ear.follow == RoboWindow.followUpS && w.followUntil == w.typedAt + RoboWindow.followUpS)
-        #expect(!w.followDue && w.card.header.mic.state == .hot)  // "LISTENING" while it waits for a reply
+        #expect(!w.followDue && w.card.header.mic.state == .hot)  // "Listening" while it waits for a reply
         r.clock.advance(RoboWindow.followUpS - 1)
         w.tick()
         #expect(w.card.header.mic.state == .hot)
@@ -800,11 +793,11 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.ear.handsFree = handsFree  // the listener sets it before it delivers the text
         r.ear.onText(said)
         if asked {
-            #expect(await pump(r.hermes.asked.map(\.text) == [said]))
+            #expect(await pump(r.agent.asked.map(\.text) == [said]))
         } else {
             #expect(await pump(r.window.card.heardShown == RoboWindow.handsFreeRefusal))
             _ = await pump(timeout: 0.2)
-            #expect(r.hermes.asked.isEmpty && !r.window.busy && r.window.mind.activity == .idle)  // not listening, nothing sent
+            #expect(r.agent.asked.isEmpty && !r.window.busy && r.window.mind.activity == .idle)  // not listening, nothing sent
         }
     }
 
@@ -829,10 +822,10 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
             #expect(!w.card.isHidden && w.card.reply.textView.string.contains("Friday"))
         }
         #expect(r.ear.follows.count == follows + 1 && r.ear.follow > 0)  // the window the listener closed on delivery is open again
-        #expect(r.hermes.asked.map(\.text) == ["when is the quiz"] && r.hermes.stopped.isEmpty)
-        r.hermes.script = [completed("Tomorrow.")]
+        #expect(r.agent.asked.map(\.text) == ["when is the quiz"] && r.agent.stopped.isEmpty)
+        r.agent.script = [completed("Tomorrow.")]
         r.ear.onText("what is due tomorrow")  // a question in the same window is taken: robo wakes for it itself
-        #expect(await pump(r.hermes.asked.map(\.text) == ["when is the quiz", "what is due tomorrow"]))
+        #expect(await pump(r.agent.asked.map(\.text) == ["when is the quiz", "what is due tomorrow"]))
     }
 
     @Test func speakingDuringAnApprovalStopsTheRunAndNeverApproves() async {
@@ -841,18 +834,39 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
         r.window.ask("mail Anna")
         #expect(await pump(r.window.card.approvalShown != nil))
         r.ear.onWake()  // she starts to talk: the run is stopped, which is a deny
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
+        #expect(await pump(r.agent.stopped == ["run_1"]))
         r.ear.handsFree = true  // "yes, go ahead" in a window: not an approval, and a bare yes never acts without the key
         r.ear.onText("yes, go ahead")
         #expect(await pump(r.window.card.heardShown == RoboWindow.handsFreeRefusal))
-        #expect(r.hermes.asked.map(\.text) == ["mail Anna"] && r.hermes.approved.isEmpty)
+        #expect(r.agent.asked.map(\.text) == ["mail Anna"] && r.agent.approved.isEmpty)
         r.ear.handsFree = false  // with the key held it is a new request (still not an approval)
         r.ear.onText("yes, go ahead")
-        r.hermes.script = [completed("ok")]
-        r.hermes.gate.signal()
-        #expect(await pump(r.hermes.asked.map(\.text) == ["mail Anna", "yes, go ahead"]))
+        r.agent.script = [completed("ok")]
+        r.agent.gate.signal()
+        #expect(await pump(r.agent.asked.map(\.text) == ["mail Anna", "yes, go ahead"]))
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.approved.isEmpty && r.window.card.approvalShown == nil)
+        #expect(r.agent.approved.isEmpty && r.window.card.approvalShown == nil)
+    }
+
+    /// The flag belongs to its text: the listener's thread can deliver again before the hop to the main thread has run.
+    @Test func aLaterDeliveryDoesNotChangeWhetherATextWasHandsFree() async {
+        let r = Rig([completed("Tomorrow.")])
+        defer { r.close() }
+        r.ear.handsFree = true
+        r.ear.onText("send it to Anna")  // the room said it
+        r.ear.handsFree = false  // the next delivery, under the key, comes before the main thread has run
+        r.ear.onText("what is due")
+        #expect(await pump(!r.agent.asked.isEmpty))
+        #expect(r.agent.asked.map(\.text) == ["what is due"])  // the room's sentence was refused, not taken as the key's
+    }
+
+    /// The pet starts for its corner at once: the resting tick can be half a second away.
+    @Test func aCallMovesThePetAtOnceNotAtTheNextRestingTick() {
+        let r = Rig()
+        defer { r.close() }
+        #expect(r.window.roamer.mode != .come)
+        r.window.onEvent(.listening(true))
+        #expect(r.window.roamer.mode == .come)
     }
 
     @Test func theResultsOfTheListenerThreadHopToTheMainThread() async {
@@ -865,11 +879,11 @@ private func wallNow() -> Double { Date().timeIntervalSince1970 }
             ear.onText("hello robo")
             done.value = true
         }
-        #expect(await pump(done.value && !r.hermes.asked.isEmpty))
-        #expect(r.hermes.asked[0].text == "hello robo")
+        #expect(await pump(done.value && !r.agent.asked.isEmpty))
+        #expect(r.agent.asked[0].text == "hello robo")
     }
 
-    @Test func theHermesLightFollowsTheHealthPoller() async {
+    @Test func theAgentLightFollowsTheHealthPoller() async {
         let r = Rig(health: "http://127.0.0.1:8765")
         defer { r.close() }
         let p = r.pollers[0]
@@ -892,16 +906,16 @@ extension Thread {
 // MARK: - robo chat
 
 @MainActor @Suite(.serialized) struct ChatTests {
-    private func chat(_ hermes: FakeHermes, lines: [String?]) async -> (code: Int32, out: String) {
+    private func chat(_ agent: FakeAgent, lines: [String?]) async -> (code: Int32, out: String) {
         var input = lines[...]
         var out = ""
-        let code = await runChat(hermes, session: "robo-chat-test", readLine: { input.popFirst() ?? nil },
+        let code = await runChat(agent, session: "robo-chat-test", readLine: { input.popFirst() ?? nil },
                                  write: { out += $0 }, handleCtrlC: false)
         return (code, out)
     }
 
     @Test func theTranscriptShowsFeelingsTextAndTools() async {
-        let h = FakeHermes([.event(.feeling("happy")), delta("Hello"), .event(.toolStarted("WebSearch")), delta(" there"),
+        let h = FakeAgent([.event(.feeling("happy")), delta("Hello"), .event(.toolStarted("WebSearch")), delta(" there"),
                             completed("Hello there")])
         let (code, out) = await chat(h, lines: ["hi", "", "  ", nil])
         #expect(code == 0)
@@ -910,15 +924,15 @@ extension Thread {
     }
 
     @Test func aFailedRunPrintsItsStatusAndError() async {
-        let h = FakeHermes([.event(.runEnded(status: "failed", error: "boom"))])
+        let h = FakeAgent([.event(.runEnded(status: "failed", error: "boom"))])
         let (_, out) = await chat(h, lines: ["x", nil])
         #expect(out == "you> \n[failed] boom\nyou> ")
     }
 
     @Test func aBrainErrorPrintsAndTheLoopGoesOn() async {
-        let h = FakeHermes(fail: BrainError("Hermes is not running"))
+        let h = FakeAgent(fail: BrainError("The agent is not running"))
         let (code, out) = await chat(h, lines: ["x", "y", nil])
-        #expect(code == 0 && out == "you> [error] Hermes is not running\nyou> [error] Hermes is not running\nyou> ")
+        #expect(code == 0 && out == "you> [error] The agent is not running\nyou> [error] The agent is not running\nyou> ")
         #expect(h.asked.count == 2)
     }
 }
@@ -932,21 +946,7 @@ extension Thread {
         #expect(!off.noVoice && !off.noWatch && !off.otherAgent)
         let on = DevSwitches(environment: ["ROBO_NO_VOICE": "1", "ROBO_NO_WATCH": "1", "ROBO_AGENT_URL": "http://127.0.0.1:9"])
         #expect(on.noVoice && on.noWatch && on.otherAgent)
-        #expect(!DevSwitches(environment: ["ROBO_HERMES_URL": "http://127.0.0.1:9"]).otherAgent)  // the old name means nothing now
         #expect(DevSwitches(environment: ["ROBO_NO_VOICE": "1"]).noWatch == false)  // each on its own
-    }
-
-    /// The card's header chip is the model of the agent's config.json, not a copy of its name.
-    @Test func theHeaderChipShowsTheModelOfTheAgentsConfig() throws {
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent("robo-chip-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: home) }
-        let model = Machine(home: home, environment: [:]).model
-        #expect(model == "claude-sonnet-5-5")  // no config yet: the default
-        #expect(Themes.chipText(Themes.glass, configuredModel: model) == String(model.dropFirst(7)))
-        let file = AgentHome(home: home, env: [:]).configFile
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("{\"model\": \"claude-opus-5-5\"}".utf8).write(to: file)
-        #expect(Machine(home: home, environment: [:]).model == "claude-opus-5-5")
     }
 
     /// The app's client: no Anthropic key = one clear line and nothing started; else the service is made sure of before the request.
@@ -955,7 +955,7 @@ extension Thread {
         let box = Box()
         let service = AgentService(command: ["uv"], environment: [:], log: URL(fileURLWithPath: "/dev/null"), healthy: { box.up },
                                    launch: { _, _, _ in box.launches += 1; box.up = true; return Process() }, sleep: { _ in })
-        let fake = FakeHermes([.event(.runEnded(status: "completed", output: "hi"))])
+        let fake = FakeAgent([.event(.runEnded(status: "completed", output: "hi"))])
         var hasKey = false
         let keeper = AgentKeeper(fake, service: service, hasKey: { hasKey })
         do {
@@ -982,12 +982,12 @@ extension Thread {
         #expect(m.vaultDir == Vault.dir(home: home) && m.vaultDir.path == "/Users/jane/Documents/Robo")
         #expect(m.themeFile == Themes.configPath() && m.watchPausedFile.lastPathComponent == "watch.paused")
         #expect(m.watchPausedFile.deletingLastPathComponent() == ActivityLog.dataDir)
-        // where robo-guard writes its receipts (`RECEIPTS` in hermes/plugins/robo-guard/__init__.py) and where the usage log goes
+        // where robo-guard writes its receipts (`self.receipts` in agent/robo_agent/guard.py) and where the usage log goes
         #expect(m.receiptsFile == ActivityLog.dataDir.appendingPathComponent("receipts.jsonl"))
         #expect(m.usageFile == ActivityLog.dataDir.appendingPathComponent("usage.jsonl"))
     }
 
-    /// The digest date lives in the checkout's data folder, the file the Python build writes too.
+    /// The digest date lives in the checkout's data folder.
     @Test func theDigestDateIsKeptInTheCheckoutsDataFolder() {
         let root = RoboApp.dataDir.deletingLastPathComponent()
         #expect(RoboApp.dataDir.lastPathComponent == "data")

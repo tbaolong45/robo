@@ -1,9 +1,6 @@
 // Local activity watcher: once a minute the focused app and window title, idle seconds, screen lock,
 // Brave site hostnames and files opened. No screenshots, no keystrokes, no URL paths or queries.
-// Kept only in ~/.local/share/robo/activity.db (dir 0700, file 0600) for 30 days. Port of
-// src/robo/activity.py, macOS branch only (Quartz, Spotlight); the GNOME readers are not ported.
-// The SQLite file is shared with the Python build: table and column names, the timestamp format and
-// the `robo activity` text must stay identical.
+// Kept only in ~/.local/share/robo/activity.db (dir 0700, file 0600) for 30 days.
 import CoreGraphics
 import Foundation
 import SQLite3
@@ -11,16 +8,7 @@ import os
 
 // MARK: - Calendar day
 
-/// What Python raises for a number or date out of range; `description` is the last line of its traceback.
-public struct ActivityRangeError: Error, CustomStringConvertible, Equatable {
-    public let description: String
-    static let cInt = ActivityRangeError(description: "OverflowError: Python int too large to convert to C int")
-    static let date = ActivityRangeError(description: "OverflowError: date value out of range")
-}
-
-/// A date in the proleptic Gregorian calendar, years 1...9999, with no time or zone (Python's
-/// `datetime.date`); midnight is local. Foundation's Gregorian calendar is Julian before 1582, so the date
-/// arithmetic here is done on day numbers instead.
+/// A date in years 1...9999, with no time or zone; midnight is local.
 public struct CalendarDay: Equatable, CustomStringConvertible {
     public let year: Int, month: Int, day: Int
 
@@ -31,7 +19,6 @@ public struct CalendarDay: Equatable, CustomStringConvertible {
         return c
     }
 
-    private static let maxOrdinal = 3_652_059  // 9999-12-31
     private static let monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     private static func isLeap(_ y: Int) -> Bool { y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) }
 
@@ -42,34 +29,13 @@ public struct CalendarDay: Equatable, CustomStringConvertible {
         (self.year, self.month, self.day) = (year, month, day)
     }
 
-    /// Python's `date.fromordinal`: 1 is 0001-01-01. Howard Hinnant's civil-from-days.
-    init(ordinal: Int) {
-        precondition((1...Self.maxOrdinal).contains(ordinal))
-        let z = ordinal + 305  // days since 0000-03-01
-        let era = z / 146_097
-        let doe = z - era * 146_097
-        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
-        let mp = (5 * doy + 2) / 153
-        let m = mp < 10 ? mp + 3 : mp - 9
-        (year, month, day) = (yoe + era * 400 + (m <= 2 ? 1 : 0), m, doy - (153 * mp + 2) / 5 + 1)
-    }
-
-    /// Python's `date.toordinal`.
-    var ordinal: Int {
-        let y = month <= 2 ? year - 1 : year
-        let yoe = y % 400
-        let doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1
-        return y / 400 * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 305
-    }
-
     /// The day `date` falls on in local time; today by default.
     public init(_ date: Date = Date()) {
         let c = Self.local.dateComponents([.year, .month, .day], from: date)
         (year, month, day) = (c.year!, c.month!, c.day!)
     }
 
-    /// "YYYY-MM-DD" only (Python also accepts "YYYYMMDD" and week dates); nil if it is not a real date.
+    /// "YYYY-MM-DD" only; nil if it is not a real date.
     public init?(iso s: String) {
         let p = s.split(separator: "-", omittingEmptySubsequences: false)
         guard p.count == 3, p[0].count == 4, p[1].count == 2, p[2].count == 2,
@@ -81,27 +47,13 @@ public struct CalendarDay: Equatable, CustomStringConvertible {
     public var iso: String { String(format: "%04d-%02d-%02d", year, month, day) }
     public var description: String { iso }
 
-    /// This day moved by `n` days (negative goes back); the result must stay within years 1...9999.
-    public func adding(days n: Int) -> CalendarDay { try! shifted(timedelta: n, subtracting: false) }
+    /// This day moved by `n` days (negative goes back).
+    public func adding(days n: Int) -> CalendarDay { CalendarDay(Self.local.date(byAdding: .day, value: n, to: start)!) }
 
-    /// Python's `self ± timedelta(days=n)`, with its errors: `n` must fit a C int and be at most 999999999
-    /// in magnitude, and the result a date in years 1...9999.
-    func shifted(timedelta n: Int, subtracting: Bool) throws -> CalendarDay {
-        if n > Int(Int32.max) || n < Int(Int32.min) { throw ActivityRangeError.cInt }
-        if abs(n) > 999_999_999 {
-            throw ActivityRangeError(description: "OverflowError: days=\(n); must have magnitude <= 999999999")
-        }
-        let o = ordinal + (subtracting ? -n : n)
-        guard (1...Self.maxOrdinal).contains(o) else { throw ActivityRangeError.date }
-        return CalendarDay(ordinal: o)
-    }
-
-    /// Local midnight at the start of this day. Before 1583 Foundation's calendar counts Julian days, so the
-    /// instant is off by days there; no row can be that old, it only has to be an instant.
+    /// Local midnight at the start of this day.
     var start: Date {
         let c = Self.local
-        return c.date(from: DateComponents(year: year, month: month, day: day)).map { c.startOfDay(for: $0) }
-            ?? Date(timeIntervalSince1970: Double(ordinal - 719_163) * 86_400)
+        return c.startOfDay(for: c.date(from: DateComponents(year: year, month: month, day: day))!)
     }
 }
 
@@ -137,7 +89,7 @@ final class SQLiteDB {
             throw e
         }
         handle = h
-        sqlite3_busy_timeout(h, 10_000)  // Python's connect(timeout=10)
+        sqlite3_busy_timeout(h, 10_000)
     }
 
     deinit { sqlite3_close(handle) }
@@ -185,7 +137,7 @@ final class SQLiteDB {
         guard sqlite3_exec(handle, script, nil, nil, nil) == SQLITE_OK else { throw failure }
     }
 
-    /// `body` between BEGIN and COMMIT, rolled back if it throws (Python's `with connection`).
+    /// `body` between BEGIN and COMMIT, rolled back if it throws.
     func transaction(_ body: () throws -> Void) throws {
         try exec("BEGIN")
         do {
@@ -283,7 +235,7 @@ public enum ActivityLog {
     public static let idleS = 120
     static let webkitEpoch = 11_644_473_600.0  // seconds from 1601-01-01 (Chromium's epoch) to 1970-01-01
 
-    /// $HOME as Python's `Path.home()` sees it: the variable first, so a test can point it at a temp dir.
+    /// $HOME first, so a test can point it at a temp dir.
     public static var home: String {
         URL(fileURLWithPath: ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()).path
     }
@@ -297,7 +249,7 @@ public enum ActivityLog {
 
     static func posixFailure() -> Error { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
 
-    /// `mkdir -p` where only the last directory is created 0700 (Python's `mkdir(mode=0o700, parents=True)`).
+    /// `mkdir -p` where only the last directory is created 0700.
     static func makePrivateDir(_ dir: URL) throws {
         let fm = FileManager.default
         if fm.fileExists(atPath: dir.path) { return }
@@ -306,8 +258,8 @@ public enum ActivityLog {
                                attributes: [.posixPermissions: 0o700])
     }
 
-    /// Create the study ledger private (0600) before Hermes writes it; Hermes keeps the mode of a file it
-    /// edits, while a file it creates would be readable by others. An existing ledger is never overwritten.
+    /// Create the study ledger private (0600) before the agent writes it: an edit keeps a file's mode, while
+    /// a file the agent creates could be readable by others. An existing ledger is never overwritten.
     public static func ensureLedger(at path: URL = ledger) throws {
         try makePrivateDir(path.deletingLastPathComponent())
         let fm = FileManager.default
@@ -429,17 +381,8 @@ public enum ActivityLog {
         return (session?["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue ?? false
     }
 
-    /// Python's `datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")`, including its rounding of the
-    /// microseconds (half to even, which can carry into the next second).
-    static func utc(_ t: Double) -> String {
-        var sec = t.rounded(.towardZero)
-        let us = ((t - sec) * 1e6).rounded(.toNearestOrEven)
-        if us >= 1e6 { sec += 1 } else if us < 0 { sec -= 1 }
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
-        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: Date(timeIntervalSince1970: sec))
-        return String(format: "%04d-%02d-%02dT%02d:%02d:%02dZ", c.year!, c.month!, c.day!, c.hour!, c.minute!, c.second!)
-    }
+    /// "2026-10-11T09:00:00Z", as Spotlight's `$time.iso` reads it.
+    static func utc(_ t: Double) -> String { Date(timeIntervalSince1970: t).ISO8601Format() }
 
     private struct SpotlightTimeout: Error {}
 
@@ -465,11 +408,8 @@ public enum ActivityLog {
     public static func macFiles(since: Double, now: Double, find: (String) throws -> String = mdfind) -> [String] {
         let query = "kMDItemLastUsedDate > $time.iso(\(utc(since))) && kMDItemLastUsedDate <= $time.iso(\(utc(now)))"
         guard let out = try? find(query) else { return [] }
-        // Python's str.splitlines(): not only \n, and on code points (Swift's "\r\n" is one Character).
-        let breaks = Set("\n\r\u{0B}\u{0C}\u{1C}\u{1D}\u{1E}\u{85}\u{2028}\u{2029}".unicodeScalars)
         var seen = Set<String>()
-        return out.unicodeScalars.split(whereSeparator: { breaks.contains($0) })
-            .map { String(String.UnicodeScalarView($0)) }
+        return out.split(whereSeparator: \.isNewline).map(String.init)
             .filter { $0.hasPrefix("/") && seen.insert($0).inserted }
     }
 
@@ -489,8 +429,7 @@ public enum ActivityLog {
 
     // MARK: Summary for the LLM
 
-    // Python's str indexes, slices and compares code points; Swift's String uses grapheme clusters and
-    // canonical equivalence ("é" == "e\u{301}"). The summary works on arrays of scalars where that shows.
+    // The summary counts and cuts code points, which keeps its limits simple; grouping is by the exact text.
     private typealias Scalars = [Unicode.Scalar]
 
     private static func str<S: Sequence>(_ s: S) -> String where S.Element == Unicode.Scalar {
@@ -503,7 +442,7 @@ public enum ActivityLog {
         return tail ? "…" + str(u.suffix(n - 1)) : str(u.prefix(n - 1)) + "…"
     }
 
-    /// Python's `Counter.most_common(n)`: highest count first, equal counts in order of first appearance.
+    /// The `n` most common: highest count first, equal counts in order of first appearance.
     private static func mostCommon<K: Hashable>(_ items: [K], _ n: Int) -> [(key: K, count: Int)] {
         var order: [K] = []
         var count: [K: Int] = [:]
@@ -522,16 +461,8 @@ public enum ActivityLog {
     public static func summary(_ store: ActivityStore, day: CalendarDay? = nil, days: Int = 1,
                                home: String = ActivityLog.home) throws -> String {
         let day = day ?? CalendarDay()
-        // Python: day - timedelta(days=days - 1), then the local midnights as timestamps, then day + 1; each can raise
-        let (back, overflow) = days.subtractingReportingOverflow(1)
-        if overflow { throw ActivityRangeError.cInt }
-        let first = try day.shifted(timedelta: back, subtracting: true)
+        let first = day.adding(days: 1 - days), next = day.adding(days: 1)
         let span = days == 1 ? day.iso : "\(first.iso)..\(day.iso)"
-        // datetime.timestamp() of the local midnight of 0001-01-01 looks a day back, into year 0, in every zone
-        if first.ordinal == 1 {
-            throw ActivityRangeError(description: "ValueError: year must be in 1..9999, not 0")
-        }
-        let next = try day.shifted(timedelta: 1, subtracting: false)
         let range: [SQLValue] = [.real(first.start.timeIntervalSince1970), .real(next.start.timeIntervalSince1970)]
         let active = try store.query(
             "SELECT ts, app, title FROM minutes WHERE ts >= ? AND ts < ? AND idle_s < ? "
@@ -639,8 +570,7 @@ public final class ActivityWatcher {
 
 /// `robo activity [--days N] [--day YYYY-MM-DD]`: prints the summary of what the user did on this Mac
 /// (read by the study skills). `args` are the arguments of the command, with or without "activity" itself;
-/// returns the exit status: 2 for bad arguments (as argparse does), 1 if the database cannot be read or if
-/// --day/--days are out of range (stderr then has the last line of the traceback Python would print).
+/// returns the exit status: 2 for bad arguments, 1 if the database cannot be read.
 public func runActivity(_ args: [String]) -> Int32 {
     let r = activityReport(args, store: { try ActivityStore() })
     FileHandle.standardOutput.write(Data(r.stdout.utf8))
@@ -651,16 +581,16 @@ public func runActivity(_ args: [String]) -> Int32 {
 /// What `runActivity` writes and returns; the store is opened only once the arguments are good.
 func activityReport(_ args: [String], store: () throws -> ActivityStore) -> (status: Int32, stdout: String, stderr: String) {
     guard let (day, days) = parseActivityArgs(args) else {
-        return (2, "", "usage: robo activity [--days DAYS] [--day YYYY-MM-DD]\n")
+        return (2, "", "usage: robo activity [--days 1-\(maxActivityDays)] [--day YYYY-MM-DD]\n")
     }
     do {
         return (0, try ActivityLog.summary(store(), day: day, days: days) + "\n", "")
-    } catch let e as ActivityRangeError {
-        return (1, "", "\(e)\n")
     } catch {
         return (1, "", "robo: \(error)\n")
     }
 }
+
+private let maxActivityDays = 366
 
 /// (last day, number of days) from `--days N` / `--days=N` / `--day D` / `--day=D`; nil if anything else is there.
 func parseActivityArgs(_ args: [String]) -> (CalendarDay?, Int)? {
@@ -672,11 +602,8 @@ func parseActivityArgs(_ args: [String]) -> (CalendarDay?, Int)? {
         switch name {
         case "activity": continue
         case "--days":
-            // Python's int() has no limit: a longer number is accepted there and fails in summary with an
-            // OverflowError, so it is clamped here (any clamped value is out of range there too)
-            guard let v = inline ?? rest.popFirst(), v.utf8.dropFirst(v.hasPrefix("-") || v.hasPrefix("+") ? 1 : 0).allSatisfy({ (48...57).contains($0) }),
-                  v.utf8.contains(where: { (48...57).contains($0) }) else { return nil }
-            days = Int(v) ?? (v.hasPrefix("-") ? .min : .max)
+            guard let v = inline ?? rest.popFirst(), let n = Int(v), (1...maxActivityDays).contains(n) else { return nil }
+            days = n
         case "--day":
             guard let v = inline ?? rest.popFirst(), let d = CalendarDay(iso: v) else { return nil }
             day = d

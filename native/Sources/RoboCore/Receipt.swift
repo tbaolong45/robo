@@ -1,5 +1,5 @@
 // What the reply says robo did, against what robo-guard recorded. The guard writes one JSON line per state-changing
-// tool call of Hermes (a labelled click, a send key, a file write) to `receipts.jsonl` in robo's data folder: label or
+// tool call of the agent (a labelled click, a send key, a file write) to `receipts.jsonl` in robo's data folder: label or
 // path, page host, ok. Typed text and page text are never in it, and never in a footer line either.
 // A claim ("sent", "đã gửi") with a record gets a "✓" line, a claim without one a "⚠ unverified" line, and a record of a
 // step the reply did not name still gets its "✓" line. The lines are the card's footer, a view the reply cannot write to.
@@ -82,7 +82,7 @@ public enum Receipt {
     }
 
     /// What a receipt shows: its kind, a word for it and where (the page's host, or the file's name); nil for a failed call or
-    /// one that backs nothing (a computer_use step has no label to read).
+    /// one that backs nothing.
     private static func step(_ e: Evidence) -> (kind: Kind, word: String, place: String)? {
         guard e.ok else { return nil }
         switch e.tool {

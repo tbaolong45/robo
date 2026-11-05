@@ -1,8 +1,6 @@
-// Port of tests/test_health.py. The poller is driven with an injected `fetch` and `sleep`: no
+// The poller is driven with an injected `fetch` and `sleep`: no
 // network and no real time, so the tests wait on events, never on a clock. The two tests that use
 // the default getter talk to a throwaway server on 127.0.0.1 (never the live gateway).
-// Not ported: a callback that raises (a Swift `onState` cannot throw) and a reply without a status
-// code (`fetch` returns an Int), both impossible here.
 import Darwin
 import Foundation
 import Testing
@@ -378,7 +376,7 @@ struct HealthTests {
         let r = HealthPoller.request(URL(string: "http://127.0.0.1:8765/health")!)
         #expect(r.timeoutInterval == 1.5 && r.httpShouldHandleCookies == false)
         #expect((r.allHTTPHeaderFields ?? [:]).isEmpty)
-        let config = HermesClient.makeSession().configuration
+        let config = AgentClient.makeSession().configuration
         #expect(config.connectionProxyDictionary?.isEmpty == true)
         #expect(config.httpCookieStorage == nil)
     }

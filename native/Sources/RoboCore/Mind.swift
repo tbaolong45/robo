@@ -1,5 +1,4 @@
-// What the face should show: a pure state machine fed Hermes events and clock ticks.
-// Port of src/robo/mind.py.
+// What the face should show: a pure state machine fed agent events and clock ticks.
 
 public struct Mind: Equatable, Sendable {
     public static let talkPause = 0.3  // s without a delta before the mouth closes
@@ -31,7 +30,7 @@ public struct Mind: Equatable, Sendable {
         lastInput = now
     }
 
-    // Hermes tool names (~/.hermes/hermes-agent/tools/) -> status label. browser_* -> "browsing…".
+    // The agent's tool names -> status label. browser_* -> "browsing…".
     private static let toolLabels = [
         "WebSearch": "searching the web…",
         "WebFetch": "reading a page…",

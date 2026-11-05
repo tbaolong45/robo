@@ -1,9 +1,5 @@
-// Port of tests/test_brain.py. httpx.MockTransport becomes a URLProtocol stub (no real network);
-// the one test that needs a real socket (events arrive while the connection is still open) talks to
+// A URLProtocol stub answers the client (no real network); the one test that needs a real socket (events arrive while the connection is still open) talks to
 // a throwaway server on 127.0.0.1, never the live gateway.
-// Not ported: "approve refuses unknown choices" (ApprovalChoice has no such case, so it cannot be
-// called) and the proxy-in-the-environment half of the real-server test (URLSession ignores the
-// environment; the session is built with no proxy at all, which is asserted instead).
 import Foundation
 import Testing
 @testable import RoboCore
@@ -68,11 +64,11 @@ private final class StubProtocol: URLProtocol {
     }
 }
 
-private func client(base: String = "http://h:8642", _ handler: @escaping (Seen) -> Reply) -> HermesClient {
+private func client(base: String = "http://h:8642", _ handler: @escaping (Seen) -> Reply) -> AgentClient {
     StubProtocol.handler = handler
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [StubProtocol.self]
-    return HermesClient(baseURL: base, key: KEY, session: URLSession(configuration: config))
+    return AgentClient(baseURL: base, key: KEY, session: URLSession(configuration: config))
 }
 
 private final class Log<T>: @unchecked Sendable {
@@ -145,7 +141,7 @@ struct BrainTests {
         #expect(try await collect(client { _ in .sse(body) }.events("r1")) == [.runEnded(status: "completed", output: "a")])
     }
 
-    // Hermes' run.completed: usage {input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens} and
+    // The agent's run.completed: usage {input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_write_tokens} and
     // runtime {provider, model} (gateway/platforms/api_server_runs.py `_USAGE_FIELDS`, `_sanitize_runtime_metadata`).
     private static let usage: [String: Any] = ["input_tokens": 1200, "output_tokens": 340, "total_tokens": 1540, "cache_read_tokens": 9000,
                                                "cache_write_tokens": 15]
@@ -169,14 +165,14 @@ struct BrainTests {
         ])
     }
 
-    @Test func usageIsReadFromWhatHermesSendsAndOnlyOnACompletedRun() {
-        #expect(HermesClient.usage(["event": "run.completed", "usage": Self.usage]) == UsageRecord(
+    @Test func usageIsReadFromWhatAgentSendsAndOnlyOnACompletedRun() {
+        #expect(AgentClient.usage(["event": "run.completed", "usage": Self.usage]) == UsageRecord(
             model: "", input: 1200, output: 340, total: 1540, cacheRead: 9000, cacheWrite: 15))  // no runtime: no model
-        #expect(HermesClient.usage(["event": "run.completed", "usage": ["input_tokens": 10, "output_tokens": 5]]) == UsageRecord(
+        #expect(AgentClient.usage(["event": "run.completed", "usage": ["input_tokens": 10, "output_tokens": 5]]) == UsageRecord(
             input: 10, output: 5, total: 15))  // no total: input and output
-        #expect(HermesClient.usage(["event": "run.completed"]) == nil && HermesClient.usage(["event": "run.completed", "usage": [:]]) == nil)
+        #expect(AgentClient.usage(["event": "run.completed"]) == nil && AgentClient.usage(["event": "run.completed", "usage": [:]]) == nil)
         for name in ["run.failed", "run.cancelled", "run.interrupted", "message.delta"] {  // none counts a run that did not complete
-            #expect(HermesClient.usage(["event": name, "usage": Self.usage]) == nil)
+            #expect(AgentClient.usage(["event": name, "usage": Self.usage]) == nil)
         }
     }
 
@@ -316,11 +312,11 @@ struct BrainTests {
         try await c.approve("r1", choice)
         try await c.stop("r1")
         let (approve, stop) = (seen.all[0], seen.all[1])
-        #expect(approve.url == "http://h/p/v1/runs/r1/approval" && approve.json == ["choice": choice.rawValue])  // no id: Hermes answers the oldest
+        #expect(approve.url == "http://h/p/v1/runs/r1/approval" && approve.json == ["choice": choice.rawValue])  // no id: the agent answers the oldest
         #expect(stop.method == "POST" && stop.url == "http://h/p/v1/runs/r1/stop")
     }
 
-    /// Two asks can be pending at once and Hermes answers the oldest unless told which: the answer names its request.
+    /// Two asks can be pending at once and the agent answers the oldest unless told which: the answer names its request.
     @Test(arguments: [ApprovalChoice.once, .session, .deny])
     func approveNamesTheRequestItAnswers(choice: ApprovalChoice) async throws {
         let seen = Log<Seen>()
@@ -387,23 +383,23 @@ struct BrainTests {
     }
 
     @Test func approvalShowsTheCommandNotJustTheCategory() {
-        #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete",
+        #expect(AgentClient.parse(["event": "approval.request", "description": "recursive delete",
                                     "command": "rm -rf ~/Documents"]) == .approvalNeeded("recursive delete: rm -rf ~/Documents"))
-        #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to open x.", "command": ""])
+        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open x.", "command": ""])
             == .approvalNeeded("Robo wants to open x."))
     }
 
     @Test func guardApprovalsShowOnlyTheGuardsOwnSentence() {
-        #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
+        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
                                     "command": "<browser_navigate> (plugin approval rule)"])
             == .approvalNeeded("Robo wants to open https://x.example/."))
     }
 
     @Test func approvalsCarryTheirRequestId() {
-        #expect(HermesClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
+        #expect(AgentClient.parse(["event": "approval.request", "description": "Robo wants to open https://x.example/.",
                                     "command": "<browser_navigate> (plugin approval rule)", "request_id": "9f2c"])
             == .approvalNeeded("Robo wants to open https://x.example/.", id: "9f2c"))
-        #expect(HermesClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
+        #expect(AgentClient.parse(["event": "approval.request", "description": "recursive delete", "command": "rm -rf x"])
             == .approvalNeeded("recursive delete: rm -rf x", id: ""))  // none sent: the answer is the oldest one's
     }
 
@@ -411,14 +407,14 @@ struct BrainTests {
 
     /// httpx `trust_env=False`: the key must never meet a proxy, a cookie jar or a redirect.
     @Test func theDefaultSessionHasNoProxyNoCookiesAndNoRedirects() async throws {
-        let config = HermesClient.makeSession().configuration
+        let config = AgentClient.makeSession().configuration
         #expect(config.connectionProxyDictionary?.isEmpty == true)
         #expect(config.httpCookieStorage == nil)
         let server = LoopbackServer { _, conn in
             conn.send("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
         }
         defer { server.close() }
-        let c = HermesClient(baseURL: "http://127.0.0.1:\(server.port)", key: KEY)
+        let c = AgentClient(baseURL: "http://127.0.0.1:\(server.port)", key: KEY)
         _ = try? await c.stop("r1")  // a 302 is no error to httpx either; what matters is where it went
         #expect(server.requests.map(\.path) == ["/v1/runs/r1/stop"])
     }
@@ -434,7 +430,7 @@ struct BrainTests {
             conn.send(String(decoding: frame(1, "run.completed", ["output": "first"]), as: UTF8.self) + ": stream closed\n\n")
         }
         defer { server.close() }
-        let c = HermesClient(baseURL: "http://127.0.0.1:\(server.port)", key: KEY)
+        let c = AgentClient(baseURL: "http://127.0.0.1:\(server.port)", key: KEY)
         var events = c.events("r1").makeAsyncIterator()
         #expect(try await events.next() == .delta("first"))
         gate.signal()

@@ -1,5 +1,4 @@
-// The face, painted with Core Graphics: a white disc with the features in emotion-coloured ink (it began as a port
-// of render_params in the Python build, whose dark-blue screen and neon glow it replaced on 2026-11-04).
+// The face, painted with Core Graphics: a white disc with the features in soft graphite, in colour only for a strong mood.
 //
 // The context is y-down (an NSView with isFlipped, or `image(...)` below), so the Qt coordinates port 1:1.
 // Qt angles are counter-clockwise on screen from 3 o'clock; here an angle is just the number in
@@ -13,14 +12,16 @@ enum FaceRender {
     static let W = 320.0  // width of the features' logical canvas (y-down, 240 high); `reach` scales it into the disc
     static let eyeX = 64.0, eyeY = 102.0, eyeW = 66.0, eyeH = 78.0
     static let mouthY = 176.0, mouthW = 46.0
-    // The body: a white disc, lit from the top left. `screen` is the highlight, `bg` the very light cool grey of its edge.
+    // The body: a white disc. `screen` is its highlight, `bg` its edge, barely off white; on a white backdrop the shadow and the rim
+    // below are what show where it ends.
     static let screen = RGBA(r: 255, g: 255, b: 255, a: 255)
-    static let bg = RGBA(r: 226, g: 230, b: 237, a: 255)
+    static let bg = RGBA(r: 246, g: 247, b: 249, a: 255)
     static let disc = 112.0 / 128  // the disc's diameter over the side of the view; the rest is room for its shadow
     static let reach = 155.0  // canvas units from the disc's centre to its edge: every feature and effect stays well inside
     static let centreY = 124.0  // the canvas y that lands on the disc's centre (eyes above it, mouth below)
     static let line = 7.0  // canvas units: the mouth's and the pulse's stroke
-    static let inkL = 0.13  // relative luminance of the features at most: >= 4.5:1 on the body's edge at every hue
+    static let inkL = 0.13  // relative luminance of a strong mood's colour at most: >= 4.5:1 on the body's edge at every hue
+    static let graphiteL = 0.045  // of the ink with no saturation: the face at rest
 
     private static let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
@@ -48,15 +49,16 @@ enum FaceRender {
         return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
     }
 
-    /// The emotion's colour as ink on the white body: its hue and saturation, with the HSV value lowered until the
-    /// luminance is about `inkL` (blue and red stay bright, yellow and cyan darken the most). `hue` in degrees.
+    /// The ink on the white body: its hue and saturation, with the HSV value lowered until the luminance is about `inkL` for a
+    /// colour (red stays bright, yellow darkens the most) and about `graphiteL` for the face at rest. `hue` in degrees.
     static func ink(hue: Double, sat: Double) -> (r: Double, g: Double, b: Double) {
         var h = hue.truncatingRemainder(dividingBy: 360)
         if h < 0 { h += 360 }
         let s = min(1, max(0, sat))
         let full = hsv(h / 360, s, 1)
         // luminance grows a little faster than v^2.2 above the sRGB toe, so this lands at or under inkL
-        let v = min(1, pow(inkL / max(luminance(full.r, full.g, full.b), 1e-6), 1 / 2.2))
+        let target = graphiteL + (inkL - graphiteL) * min(1, s / 0.3)
+        let v = min(1, pow(target / max(luminance(full.r, full.g, full.b), 1e-6), 1 / 2.2))
         return hsv(h / 360, s, v)
     }
 
@@ -204,7 +206,7 @@ enum FaceRender {
             arc(drop, in: CGRect(x: x - 8, y: y - 4, width: 16, height: 16), from: 0, sweep: .pi)  // through the bottom
             drop.addCurve(to: pt(x, y - 13), control1: pt(x - 8, y), control2: pt(x - 2, y - 6))
             ctx.addPath(drop)
-            ctx.setFillColor(rgb(RGBA(r: 52, g: 146, b: 235, a: 235)))
+            ctx.setFillColor(rgb(RGBA(r: 128, g: 142, b: 158, a: 235)))
             ctx.fillPath()
         }
         if fx.contains("question") {
@@ -275,7 +277,7 @@ enum FaceRender {
         ctx.setShouldAntialias(true)
         // the shadow: a ring of soft grey fading out under the disc, drawn by hand so it is the same at every scale
         let u = d / 112  // one point of the 112-point disc
-        let shade = CGGradient(colorsSpace: srgb, colors: [CGColor(gray: 0, alpha: 0.2), CGColor(gray: 0, alpha: 0)] as CFArray,
+        let shade = CGGradient(colorsSpace: srgb, colors: [CGColor(gray: 0, alpha: 0.3), CGColor(gray: 0, alpha: 0)] as CFArray,
                                locations: [0, 1])!
         let below = CGPoint(x: body.midX, y: body.midY + 2.5 * u)
         ctx.drawRadialGradient(shade, startCenter: below, startRadius: d / 2 - 3 * u, endCenter: below,
@@ -296,7 +298,7 @@ enum FaceRender {
         effects(ctx, p, t: t, oy: oy)
         ctx.restoreGState()
         let hair = 1 / max(abs(ctx.ctm.a), 1e-6)  // one device pixel
-        ctx.setStrokeColor(CGColor(gray: 0, alpha: 0.10))
+        ctx.setStrokeColor(CGColor(gray: 0, alpha: 0.16))
         ctx.setLineWidth(hair)
         ctx.strokeEllipse(in: body.insetBy(dx: hair / 2, dy: hair / 2))
         ctx.restoreGState()

@@ -1,8 +1,8 @@
-// Port of tests/test_templates.py: the agent's templates (agent/SOUL.md, agent/skills), which robo-agent fills
+// The agent's templates (agent/SOUL.md, agent/skills), which robo-agent fills
 // and loads in place. SKILL.md frontmatter, SOUL.md emotions, and the rules that keep the notes truthful.
 //
-// The frontmatter rules are the old Hermes validator's, kept because the skills still meet them (name +
-// description required, a short quoted description) and a value with an unquoted ': ' breaks YAML.
+// The frontmatter rules: name and description are required, a description is short and quoted, and a
+// value with an unquoted ': ' breaks YAML.
 import Foundation
 import Testing
 @testable import RoboSystem
@@ -14,7 +14,7 @@ private let emotions = ["neutral", "happy", "curious", "proud", "concerned", "co
 
 private func read(_ url: URL) throws -> String { try String(contentsOf: url, encoding: .utf8) }
 
-/// `sorted((HERMES / "skills").glob("*/*/SKILL.md"))`, as the skill folder names.
+/// `sorted((AGENT / "skills").glob("*/*/SKILL.md"))`, as the skill folder names.
 private let skillNames: [String] = Setup.files(under: agent.appendingPathComponent("skills"))
     .filter { $0.count == 3 && $0[2] == "SKILL.md" }.map { $0[1] }.sorted()
 

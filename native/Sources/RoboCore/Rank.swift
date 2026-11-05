@@ -248,14 +248,6 @@ public enum Rank {
             .sorted { ($0.element.weight, $1.offset) > ($1.element.weight, $0.offset) }
         return hits.isEmpty ? "outside your interests" : "matches: " + hits.prefix(3).map(\.element.text).joined(separator: ", ")
     }
-
-    /// The words of an item to add to the dislike list when you say "Not for me": its tags, then its title, without any word
-    /// that is part of an interest (so disliking one vision paper does not hide all vision).
-    public static func dislikeKeywords(for item: RadarItem, profile: Profile, limit: Int = 5) -> [String] {
-        let mine = Set(profile.interests.flatMap { tokens($0.text) })
-        var seen = Set<String>()
-        return Array((item.tags.flatMap(tokens) + tokens(item.title)).filter { !mine.contains($0) && seen.insert($0).inserted }.prefix(max(0, limit)))
-    }
 }
 
 private extension RadarItem {

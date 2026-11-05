@@ -1,8 +1,8 @@
-// Robo on the desktop: a floating face with a speech card. Port of the window half of src/robo/app.py
-// (layout, fit, roaming, dragging, menu, themes, screens); the conversation half is in App.swift.
+// Robo on the desktop: a floating face with a speech card.
+// This is layout, fit, roaming, dragging, menu, themes and screens; the conversation is in App.swift.
 //
 // Everything here runs on the main thread. The machine (displays, pointer, clock, files, the chat window)
-// comes in through `Machine`, Hermes, the microphone, the activity watcher and the health poll through
+// comes in through `Machine`, the agent, the microphone, the activity watcher and the health poll through
 // the protocols below, so the tests drive the whole window with fakes.
 import AppKit
 import RoboCore
@@ -24,7 +24,7 @@ final class RoboWindow {
     static let margin = 4.0, gap = 3.0  // around the card and the face, between them
     static let roamFast = 1.0 / 30, roamSlow = 0.5  // s between roam steps while it moves, and while it rests, is held or sleeps
 
-    let hermes: HermesAPI
+    let agent: AgentAPI
     let digest: DigestClock
     let persona: String
     let today: () -> CalendarDay
@@ -68,7 +68,7 @@ final class RoboWindow {
     var answeredAt = -Double.infinity  // when the last answer ended (the next question follows up)
     var followDue = false  // a completed answer is being typed: the follow-up window opens when it is all there
     var followUntil = 0.0  // the key-less follow-up window is open until then (the MIC light shows it)
-    var link = LedState.unknown, noted = false  // Hermes light; the listener reported a problem
+    var link = LedState.unknown, noted = false  // agent light; the listener reported a problem
     var press: Vec?  // where the pointer went down on the face
     var dragged = false
     var grabAt = Vec.zero  // where in the window the face was grabbed
@@ -107,11 +107,11 @@ final class RoboWindow {
     var shutdownWaiters: [() -> Void] = []
     var roamInterval = RoboWindow.roamSlow
 
-    init(hermes: HermesAPI, digest: DigestClock, persona: String = "",
+    init(agent: AgentAPI, digest: DigestClock, persona: String = "",
                 today: @escaping () -> CalendarDay = { CalendarDay() }, network: (() -> Bool)? = nil,
                 watchWake: Bool = true, listener: EarFactory? = nil, watcher: Watching? = nil, health: String = "",
                 poller makePoller: PollerFactory? = nil, hotkey: Hotkey? = nil, machine: Machine) {
-        self.hermes = hermes
+        self.agent = agent
         self.digest = digest
         self.persona = persona
         self.today = today
@@ -124,7 +124,7 @@ final class RoboWindow {
         mind = Mind(now: now)
         tw = Typewriter(Pace(cps: theme.cps))
         fidgetAt = now + Double.random(in: RoboWindow.fidgetEvery)
-        card = CardView(theme: theme, hasWatch: watcher != nil, model: machine.model)
+        card = CardView(theme: theme, hasWatch: watcher != nil)
         face = FaceView(clock: machine.clock)
 
         var displays = machine.displays()
@@ -151,7 +151,7 @@ final class RoboWindow {
         card.onMenu = { [unowned self] action in self.menu(action) }
         card.onApprove = { [unowned self] choice in self.approve(ApprovalChoice(rawValue: choice) ?? .deny) }
         card.onNudge = { [unowned self] outcome in self.nudgeAnswered(outcome) }
-        face.setTheme(hue: hueFunction(theme), bg: screenColours(theme), snap: true)
+        face.setTheme(bg: screenColours(theme))
         face.onMouse = { [unowned self] kind in self.faceMouse(kind) }
         layoutWindow(keeping: nil)  // just the face; the card is hidden and takes no room
 
@@ -169,9 +169,10 @@ final class RoboWindow {
             watcher.start()
         }
         if let listener {
-            let e = listener({ [bridge] in bridge.event(.listening(true)) }, { [bridge] in bridge.heard($0) },
+            let e = listener({ [bridge] in bridge.event(.listening(true)) }, { [bridge] in bridge.heard($0, handsFree: $1) },
                              { [bridge] in bridge.note($0) })
-            ear = e.start() ? e : nil
+            e.start()
+            ear = e
             hotkey?.onDown = { [weak self] in self?.talkDown() }
             hotkey?.onUp = { [weak self] in self?.ear?.release() }
         }
@@ -243,11 +244,12 @@ final class RoboWindow {
 
     // MARK: - roaming
 
+    /// It walks to a corner and stays; the right-click menu opens the card too, but it must not leave
+    /// before the user can press Stay. A nudge is not a call either, but it freezes the pet like a press: the card is attached
+    /// to it, and buttons that drift at 40 px/s are hard to hit (seen live: 1200 px in a minute)
+    var called: Bool { busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty) || chatOpen }  // the chat keeps it at its side
+
     func roam() {
-        // it walks to a corner and stays; the right-click menu opens the card too, but it must not leave
-        // before the user can press Stay. A nudge is not a call either, but it freezes the pet like a press: the card is attached
-        // to it, and buttons that drift at 40 px/s are hard to hit (seen live: 1200 px in a minute)
-        let called = busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty) || chatOpen  // the chat keeps it at its side
         let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil || !nudge.shown.isEmpty, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
@@ -342,10 +344,7 @@ final class RoboWindow {
             themeStamp = stamp
             applyTheme(Themes.load(path: machine.themeFile))
         }
-        let now = now()
-        card.showMenu(stay: roamer.stays(now: now) ? "🧭 Wander" : "📌 Stay",
-                      watch: watcher?.paused == true ? "▶ Watch" : "⏸ Watch",
-                      nudges: nudge.state.enabled ? "🔔 Nudges" : "🔕 Nudges")
+        card.showMenu(staying: roamer.stays(now: now()), watchPaused: watcher?.paused == true, nudgesOn: nudge.state.enabled)
         open(closeAfter: 8)
     }
 
@@ -382,19 +381,14 @@ final class RoboWindow {
 
     // MARK: - themes
 
-    func hueFunction(_ t: Theme) -> (String, String, Double) -> Double {
-        { activity, emotion, base in Themes.hueFor(t, activity: activity, emotion: emotion, base: base) }
-    }
-
     func screenColours(_ t: Theme) -> (RGBA, RGBA) { (Themes.rgba(t.faceBg.centre), Themes.rgba(t.faceBg.edge)) }
 
     /// Switch the look live (theme.json was edited), nothing restarts: face colours, card, typing speed, sizes.
     func applyTheme(_ t: Theme) {
         theme = t
-        face.setTheme(hue: hueFunction(t), bg: screenColours(t))
-        card.setTheme(t)  // restyles the header, quote, dots and caret too
+        face.setTheme(bg: screenColours(t))
+        card.setTheme(t)
         chat?.chat.setTheme(t)
-        card.setHue(Themes.liveHue(t, faceNow: face.params.hue, activity: mind.activity.rawValue))
         var pace = tw.pace
         pace.cps = t.cps
         tw.setPace(pace)
@@ -489,8 +483,8 @@ final class RoboWindow {
 
     private func stopAndWait(_ id: String) {
         let done = DispatchSemaphore(value: 0)
-        Task { [hermes] in
-            try? await hermes.stop(id)
+        Task { [agent] in
+            try? await agent.stop(id)
             done.signal()
         }
         _ = done.wait(timeout: .now() + 3)

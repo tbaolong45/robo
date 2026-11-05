@@ -1,4 +1,4 @@
-// While Robo is called (listening, or the chat window is up) the rest of the screen is blurred a little, so the pet and the chat stand out
+// While Robo listens, or the chat's text box has the keyboard, the rest of the screen is blurred a little, so the pet and the chat stand out
 // and nothing else pulls the eye. One see-through panel over the main display, one step BELOW the floating level the pet and the chat are
 // on (so they stay sharp) and above every other app's windows; it takes no clicks (what is under it still works) and no keyboard.
 // What it shows is a picture of the screen WITHOUT Robo's windows, blurred by a small radius (`Backdrop.blurSigma`) and taken again about

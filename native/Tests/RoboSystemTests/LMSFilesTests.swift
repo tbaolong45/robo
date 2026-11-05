@@ -1,6 +1,6 @@
 // The LMS scan's side files: `lms.json` (courses, the day each was last scanned: round trip, mode 0600, a missing or damaged file reads
 // as empty) and the check that decides whether the scan may run at all (the profile has a Moodle address AND the school-posts skill).
-// Only temp folders: no test reads the real data folder or the real Hermes profile.
+// Only temp folders: no test reads the real data folder or the real agent folder.
 import Foundation
 import RoboCore
 import Testing

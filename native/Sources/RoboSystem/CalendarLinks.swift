@@ -1,5 +1,5 @@
 // The calendar links (an Outlook "publish calendar" link, a Moodle export): each is a SECRET URL (anyone who has it can read the
-// calendar), so it is kept in a private file (`calendars.json`, 0600, in robo's data folder, like the Hermes key) and never in a
+// calendar), so it is kept in a private file (`calendars.json`, 0600, in robo's data folder, like the agent's keys) and never in a
 // log, an output or an error message. What may be shown of one is `scheme://host`. The fetcher is https only, with a cap on time
 // and size. `robo calendar add|list|remove|check` is `runCalendar`; the app reads the same store through
 // `CalendarSources.fetchAll`. (Not the Keychain: its partition list pins an item to the cdhash of the build that wrote it, so every

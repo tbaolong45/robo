@@ -1,5 +1,5 @@
-// Process, HTTP and file helpers shared by setup, the vault and robo's browser (port of the
-// subprocess/httpx/pathlib calls in setup.py, vault.py and browser.py). Everything that reaches the
+// Process, HTTP and file helpers shared by setup, the vault and robo's browser.
+// Everything that reaches the
 // machine takes these as default arguments, so tests pass fakes and a temp home instead.
 import Foundation
 
@@ -74,7 +74,7 @@ public enum Host {
                 }
             }
         }
-        let sig = exit! & 0x7f  // like Python's returncode: the exit code, or minus the signal that ended it
+        let sig = exit! & 0x7f  // the exit code, or minus the signal that ended it
         return ProcessOutput(status: sig == 0 ? (exit! >> 8) & 0xff : -sig,
                              stdout: String(decoding: chunks[0], as: UTF8.self),
                              stderr: String(decoding: chunks[1], as: UTF8.self))
@@ -142,7 +142,7 @@ public enum Host {
     }
 
     /// A path for text, command lines and files that other programs read. Foundation decomposes accents
-    /// in file URLs ("é" becomes "e" + U+0301); Python keeps what it was given, so compose them again.
+    /// in file URLs ("é" becomes "e" + U+0301), so compose them again.
     static func path(_ url: URL) -> String { url.path.precomposedStringWithCanonicalMapping }
 
     /// Write `text` to a temp file beside `link`, then rename it over `link` (`os.replace`). The temp file is
@@ -168,13 +168,6 @@ public enum Host {
     static func isDirectory(_ url: URL) -> Bool {
         var dir: ObjCBool = false
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &dir) && dir.boolValue
-    }
-
-    /// `str.splitlines()` for text already read with universal newlines: no empty last element.
-    static func splitLines(_ text: String) -> [String] {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if lines.last == "" { lines.removeLast() }
-        return lines
     }
 
     /// `str.partition(sep)` on code points: (before, found, after).

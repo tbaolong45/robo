@@ -1,6 +1,6 @@
 // The speech card, on a pane of Liquid Glass (`GlassSurface`, behind everything): the widgets laid out in one column, the
 // sizing of the text boxes, the right-click menu and the approval. The window (RoboWindow) owns the face, the clock and
-// the Hermes events; it drives this view through the setters below and gets callbacks back.
+// the agent's events; it drives this view through the setters below and gets callbacks back.
 //
 // Layout: the card is 340 wide with one column (margins 19, 42, 19, 19, spacing 8, 302 wide) in this order: menu,
 // quote, status row, reply, footer, approval, nudge. Hidden items take no room. The header is a child at (6, 6) of the frame,
@@ -30,8 +30,8 @@ final class MenuView: Placing {
     static let rowH: CGFloat = 28, spacing: CGFloat = 6
 
     init(hasWatch: Bool) {
-        digest = ButtonView("📚 Digest"); type = ButtonView("💬 Type"); stay = ButtonView("📌 Stay")
-        watch = ButtonView("⏸ Watch"); nudges = ButtonView("🔔 Nudges"); quit = ButtonView("✕ Quit")
+        digest = ButtonView("Digest", symbol: "books.vertical"); type = ButtonView("Type", symbol: "text.bubble"); stay = ButtonView("Stay", symbol: "pin")
+        watch = ButtonView("Watch", symbol: "pause"); nudges = ButtonView("Nudges", symbol: "bell"); quit = ButtonView("Quit", symbol: "xmark")
         self.hasWatch = hasWatch
         super.init(frame: .zero)
         for b in buttons { addSubview(b) }
@@ -57,16 +57,16 @@ final class MenuView: Placing {
     }
 }
 
-/// What you said: "YOU ▸", "↳ FOLLOW-UP", the text and the bar and hairline around them.
+/// What you said: "You", "Follow-up", the text and the bar and hairline around them.
 final class QuoteBlock: Placing {
     let background: QuoteView
     let label: MicroLabel, followUp: MicroLabel
     let text = TextBox(width: 291)
 
-    init(theme: Theme) {
-        background = QuoteView(theme: theme)
-        label = MicroLabel("YOU ▸")
-        followUp = MicroLabel("↳ FOLLOW-UP", tone: .dim)
+    init() {
+        background = QuoteView()
+        label = MicroLabel("You")
+        followUp = MicroLabel("Follow-up", bold: false)
         super.init(frame: .zero)
         for v in [background, label, followUp, text] { addSubview(v) }
         followUp.isHidden = true
@@ -87,9 +87,9 @@ final class QuoteBlock: Placing {
 /// The typing dots and the status line (e.g. "searching the web…"); each takes room only while it shows.
 final class StatusRow: Placing {
     let dots: TypingDotsView, label: MicroLabel
-    init(theme: Theme) {
-        dots = TypingDotsView(theme: theme)
-        label = MicroLabel("", px: 11, spacing: 0.2, bold: false)
+    init() {
+        dots = TypingDotsView()
+        label = MicroLabel("", bold: false)
         super.init(frame: .zero)
         addSubview(dots); addSubview(label)
         dots.isHidden = true; label.isHidden = true
@@ -104,15 +104,15 @@ final class StatusRow: Placing {
     }
 }
 
-/// "APPROVAL ▸", the request in a well, and Allow / Deny.
+/// "Approval", the request in a well, and Allow / Deny.
 final class ApprovalView: Placing {
     let label: MicroLabel, well: WrapLabelView
     let allow: ButtonView, deny: ButtonView
 
     override init(frame: NSRect = .zero) {
-        label = MicroLabel("APPROVAL ▸", tone: .warn)
+        label = MicroLabel("Approval")
         well = WrapLabelView(.well)
-        allow = ButtonView("Allow", kind: .allow)  // the system accent; Deny is the quiet one
+        allow = ButtonView("Allow", kind: .allow)  // filled; Deny is outlined
         deny = ButtonView("Deny", kind: .deny)
         super.init(frame: .zero)
         for v in [label, well, allow, deny] { addSubview(v) }
@@ -131,15 +131,15 @@ final class ApprovalView: Placing {
     }
 }
 
-/// A nudge: "HEADS-UP ▸", the title and why in a well, and Open (only when there is a link or a note to open) / Later / Not for me.
+/// A nudge: "Heads-up", the title and why in a note, and Open (only when there is a link or a note to open) / Later / Not for me.
 final class NudgeView: Placing {
     let label: MicroLabel, well: WrapLabelView
     let open: ButtonView, later: ButtonView, notForMe: ButtonView
 
     override init(frame: NSRect = .zero) {
-        label = MicroLabel("HEADS-UP ▸")
-        well = WrapLabelView(.well)
-        open = ButtonView("Open", kind: .allow)  // the system accent; Not for me is the quiet one
+        label = MicroLabel("Heads-up")
+        well = WrapLabelView(.note)
+        open = ButtonView("Open", kind: .allow)  // filled; Not for me is outlined
         later = ButtonView("Later")
         notForMe = ButtonView("Not for me", kind: .deny)
         super.init(frame: .zero)
@@ -170,7 +170,6 @@ final class CardView: NSView {
     override var isFlipped: Bool { true }
 
     private(set) var theme: Theme
-    private(set) var hue: Double
     /// Wraps every show or hide that changes the height: the window captures the face's place, runs `change`, then
     /// resizes to `fittingHeight`. The default just runs it.
     var fit: (_ change: () -> Void) -> Void = { $0() }
@@ -194,18 +193,16 @@ final class CardView: NSView {
     private var footerText = ""
     private var heardText = ""
 
-    /// `model` is the configured model name ("claude-sonnet-5.5"), for the header chip when the theme names none.
-    init(theme: Theme, hasWatch: Bool, model: String = "") {
+    init(theme: Theme, hasWatch: Bool) {
         self.theme = theme
-        hue = Chrome.quantised(theme.hue)
-        header = HeaderView(theme: theme, model: model)
+        header = HeaderView(theme: theme)
         chips = MenuView(hasWatch: hasWatch)
-        quote = QuoteBlock(theme: theme)
-        statusRow = StatusRow(theme: theme)
+        quote = QuoteBlock()
+        statusRow = StatusRow()
         footer = WrapLabelView(.footer)
         approval = ApprovalView()
         nudge = NudgeView()
-        caret = CaretView(theme: theme)
+        caret = CaretView()
         super.init(frame: NSRect(x: 0, y: 0, width: CardView.width, height: Chrome.margins.top + Chrome.margins.bottom))
         for v in [glass, chips, quote, statusRow, reply, footer, approval, nudge, caret, header] as [NSView] { addSubview(v) }
         for v in [chips, quote, statusRow, reply, footer, approval, nudge] as [NSView] { v.isHidden = true }
@@ -213,7 +210,6 @@ final class CardView: NSView {
         reply.textView.onClick = { [weak self] in self?.onReplyClick?() }
         wire()
         applyTheme()
-        applyHue()
         relayout()
     }
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -234,41 +230,20 @@ final class CardView: NSView {
 
     private func pressed(_ action: MenuAction) { hideMenu(); onMenu?(action) }
 
-    // MARK: theme and hue
+    // MARK: theme
 
     func setTheme(_ t: Theme) {
         theme = t
+        header.theme = t
         resumeAt = 0  // the window renders the reply again in the new look: now
         applyTheme()
-        applyHue()
         relayout()
     }
 
-    /// Follow the face's hue in 2 degree steps; true when the card repainted.
-    @discardableResult func setHue(_ hue: Double) -> Bool {
-        let q = Chrome.quantised(hue)
-        if q == self.hue { return false }
-        self.hue = q
-        applyHue()
-        return true
-    }
-
-    /// What follows the live hue: the glass's tint, the header, the quote's bar, the dots and the caret. Called at the face's
-    /// pace (a step of 2 degrees), so it touches nothing that holds text and paints nothing but a few small marks.
-    private func applyHue() {
-        glass.tint(Chrome.accent(theme, hue, Self.tint))
-        header.theme = theme; header.hue = hue
-        quote.background.theme = theme; quote.background.hue = hue
-        statusRow.dots.theme = theme; statusRow.dots.hue = hue
-        caret.theme = theme; caret.hue = hue
-    }
-
-    /// How much of the accent the glass takes: enough to follow the mood, not enough to cost the text its contrast.
-    static let tint = 0.10
-
-    /// Selection and link colours, the scroll bar and the quote's text.
+    /// Selection and link colours, the caret and the quote's text.
     private func applyTheme() {
-        quote.text.style(theme); reply.style(theme)
+        quote.text.style(); reply.style()
+        caret.shape = theme.caret
         quote.text.setContent(Markdown.plain(heardText, font: .systemFont(ofSize: 12).italic, colour: Chrome.textDim))
     }
 
@@ -447,7 +422,7 @@ final class CardView: NSView {
     /// buttons' help.
     func setApproval(_ text: String?, more: Int = 0) {
         if let text {
-            approval.label.text = more > 0 ? "APPROVAL ▸ +\(more) MORE" : "APPROVAL ▸"
+            approval.label.text = more > 0 ? "Approval +\(more) more" : "Approval"
             approval.well.text = text
             for b in [approval.allow, approval.deny] { b.setAccessibilityHelp(text) }
             refit { approval.isHidden = false }
@@ -476,8 +451,14 @@ final class CardView: NSView {
         }
     }
 
-    func showMenu(stay: String, watch: String, nudges: String = "🔔 Nudges") {
-        chips.stay.title = stay; chips.watch.title = watch; chips.nudges.title = nudges
+    /// The chips say what a press does next: `staying` offers Wander, `watchPaused` resumes, `nudgesOn` is a bell (crossed out when off).
+    func showMenu(staying: Bool = false, watchPaused: Bool = false, nudgesOn: Bool = true) {
+        chips.stay.title = staying ? "Wander" : "Stay"
+        chips.stay.symbol = staying ? "figure.walk" : "pin"
+        chips.watch.symbol = watchPaused ? "play" : "pause"
+        chips.watch.setAccessibilityLabel(watchPaused ? "Resume watching" : "Pause watching")
+        chips.nudges.symbol = nudgesOn ? "bell" : "bell.slash"
+        chips.nudges.setAccessibilityLabel(nudgesOn ? "Turn nudges off" : "Turn nudges on")
         refit { chips.isHidden = false }
     }
 

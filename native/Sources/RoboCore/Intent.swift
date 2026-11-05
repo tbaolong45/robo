@@ -33,18 +33,6 @@ public enum Intent {
         """))
     private static let leadsToVerb = words("to and then also or please just now can could will would should shall must ll mind about try keep")
 
-    // Vietnamese (typed, or what a recogniser makes of it): send, reply, delete, cancel, submit, post, move/forward, buy, pay,
-    // book/order, create, add, edit, accept, decline, share, upload, invite, save, write, mark, copy, agree. Matched as whole
-    // syllables of the sentence, so "gửia" is not "gửi".
-    private static let vietWrites = [
-        "gửi", "trả lời", "xóa", "xoá", "hủy", "huỷ", "nộp", "đăng", "chuyển", "mua", "thanh toán", "đặt", "tạo", "thêm", "sửa",
-        "chấp nhận", "từ chối", "chia sẻ", "tải lên", "mời", "lưu", "viết", "đánh dấu", "sao chép", "đồng ý",
-    ].map { $0.precomposedStringWithCanonicalMapping }
-    // Vietnamese puts the question word anywhere, often last ("hôm nay có gì"): what, which/when, where, how much, how many,
-    // why, not-yet/or-not particles, and read, look, find, check, summarise, list.
-    private static let vietAsks = words("gì nào đâu bao mấy sao không chưa đọc xem tìm kiểm tóm liệt")
-    private static let vietYes = words("ừ ờ vâng dạ")
-
     // A sentence that is only thanks or a greeting changes nothing (nothing in it agrees to a proposal).
     private static let pleasantries = words("thanks thank you so much very hello hi hey robo bye goodbye good morning afternoon evening night cheers")
     private static let greetings = words("thanks thank hello hi bye goodbye morning afternoon evening night cheers")
@@ -79,17 +67,16 @@ public enum Intent {
     /// order to show, read, find or explain something ("summarise the Moodle page"), thanks, or "close the chat". Everything
     /// else is taken to change something and needs the key when spoken hands-free: any write verb ("cancel", "what if you send
     /// it"), an order of any other kind ("email the professor", "schedule a session"), a "yes"/"ok"/"go ahead", and what this
-    /// cannot read. Empty text is false (there is nothing to refuse).
+    /// cannot read, which includes every language but English (the owner speaks English to Robo, and Parakeet only hears that). Empty text is false (there is nothing to refuse).
     public static func changesThings(_ text: String) -> Bool {
         let s = text.precomposedStringWithCanonicalMapping.lowercased()
         let w = s.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
         if w.isEmpty || closesChat(text) { return false }
         let line = " " + w.joined(separator: " ") + " "
-        if w.contains(where: writes.contains) || vietWrites.contains(where: { line.contains(" \($0) ") }) { return true }
+        if w.contains(where: writes.contains) { return true }
         for (before, word) in zip(w, w.dropFirst()) where maybeWrites.contains(word) && leadsToVerb.contains(before) { return true }
         if line.contains(" let s ") || line.contains(" let us ") { return true }  // "let's book it"
         if w.allSatisfy(pleasantries.contains) && w.contains(where: greetings.contains) { return false }
-        if !vietYes.contains(w[0]) && w.contains(where: vietAsks.contains) { return false }
         return !asksOnly(Array(w.drop { lead.contains($0) }))
     }
 

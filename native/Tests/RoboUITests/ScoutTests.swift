@@ -1,5 +1,5 @@
-// The LMS posts scan, end to end in the window: a fake Hermes answers each run with the reply a test gives it, the wall clock is a fake
-// (UTC, so 07:00 is exact), and the files are temp folders (no test touches the real data folder or the real Hermes profile).
+// The LMS posts scan, end to end in the window: a fake agent answers each run with the reply a test gives it, the wall clock is a fake
+// (UTC, so 07:00 is exact), and the files are temp folders (no test touches the real data folder or the real agent folder).
 // `LMSPostsTests` (RoboCore) pins what a reply may hold; this pins when a run starts, what a run may do, and what becomes of its answer.
 // 2026-10-20 is a Tuesday.
 import AppKit
@@ -55,9 +55,9 @@ private func post(_ change: [String: String] = [:]) -> [String: Any] {
     return o
 }
 
-private func completed(_ text: String) -> [FakeHermes.Step] { [.event(.runEnded(status: "completed", output: text, error: ""))] }
+private func completed(_ text: String) -> [FakeAgent.Step] { [.event(.runEnded(status: "completed", output: text, error: ""))] }
 
-/// Each run of the fake Hermes gets the next reply of the list (the last one again when it runs out).
+/// Each run of the fake agent gets the next reply of the list (the last one again when it runs out).
 private final class Replies: @unchecked Sendable {
     private let lock = NSLock()
     private var queue: [String]
@@ -67,7 +67,7 @@ private final class Replies: @unchecked Sendable {
 
 @MainActor private func serve(_ r: Rig, _ replies: [String]) {
     let queue = Replies(replies)
-    r.hermes.onAsk = { [hermes = r.hermes] in hermes.script = completed(queue.next()) }
+    r.agent.onAsk = { [agent = r.agent] in agent.script = completed(queue.next()) }
 }
 
 @MainActor private func launch(wall: Double = at(8), moodle: String? = "https://\(host)") async -> Rig {
@@ -88,7 +88,7 @@ private final class Replies: @unchecked Sendable {
 @MainActor private func settled(_ r: Rig) async -> Bool { await pump(r.window.scout.running == nil) }
 
 @MainActor private func state(_ r: Rig) -> LMSState { r.window.scout.state }
-@MainActor private func asked(_ r: Rig) -> [String] { r.hermes.asked.map(\.text) }
+@MainActor private func asked(_ r: Rig) -> [String] { r.agent.asked.map(\.text) }
 @MainActor private func lmsItems(_ r: Rig) -> [AgendaItem] { r.window.nudge.agenda.filter { $0.source == .lms } }
 
 @MainActor @Suite(.serialized) struct ScoutWindowTests {
@@ -103,7 +103,7 @@ private final class Replies: @unchecked Sendable {
         r.moodle = "https://\(host)"
         tick(r, at(6, 59))  // before 07:00
         #expect(r.window.scout.running == nil && asked(r).isEmpty)
-        r.window.nudge.state.enabled = false  // the menu's 🔔 Nudges chip is off
+        r.window.nudge.state.enabled = false  // the menu's Nudges chip is off
         tick(r, at(8))
         #expect(r.window.scout.running == nil && asked(r).isEmpty)
         r.window.nudge.state.enabled = true
@@ -116,12 +116,12 @@ private final class Replies: @unchecked Sendable {
     @Test func aRunOfTheUsersOwnHoldsTheScanBack() async {
         let r = await launch()
         defer { r.close() }
-        r.hermes.script = [.wait, .event(.runEnded(status: "completed", output: "ok", error: ""))]
+        r.agent.script = [.wait, .event(.runEnded(status: "completed", output: "ok", error: ""))]
         r.window.ask("what is due?")
         #expect(r.window.busy)
         tick(r, at(8))
         #expect(r.window.scout.running == nil)  // it waits for a free agent
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
     }
 
@@ -145,7 +145,7 @@ private final class Replies: @unchecked Sendable {
             LMSPosts.scanPrompt(courseA, since: "2026-10-19", today: "2026-10-20"),  // never scanned: one day back, no backfill
             LMSPosts.scanPrompt(courseB, since: "2026-10-19", today: "2026-10-20"),
         ])
-        #expect(Set(r.hermes.asked.map(\.session)).count == 3 && r.hermes.asked.allSatisfy { $0.session.hasPrefix("robo-posts-") })
+        #expect(Set(r.agent.asked.map(\.session)).count == 3 && r.agent.asked.allSatisfy { $0.session.hasPrefix("robo-posts-") })
         #expect(state(r).scanned == [courseA.url: "2026-10-20", courseB.url: "2026-10-20"])
         #expect(lmsItems(r).map(\.title) == ["Problem set 4 moved", "Lab report 2"])
         // the files: what a restart would read
@@ -173,7 +173,7 @@ private final class Replies: @unchecked Sendable {
         let well = r.window.card.nudge.well.text
         #expect(r.window.nudge.shown.count == 1 && !r.window.card.isHidden)
         #expect(well.hasPrefix("MATH201 · Problem set 4 moved\nin 3 hours · 11:00\n“Problem set 4 is now due Friday 23 October at 23:59.”\nfrom a post: check the date"))
-        #expect(r.window.card.nudge.label.text == "HEADS-UP ▸" && well.contains("↗ \(host)"))
+        #expect(r.window.card.nudge.label.text == "Heads-up" && well.contains("↗ \(host)"))
     }
 
     @Test func aDeadlineFoundInAPostIsAnnouncedAtTheNextSlotAsNewAndNotAgain() async {
@@ -187,7 +187,7 @@ private final class Replies: @unchecked Sendable {
         #expect(r.window.nudge.shown.isEmpty)  // 08:01 is no slot: it waits for 09:00
         tick(r, at(9))
         let well = r.window.card.nudge.well.text
-        #expect(r.window.nudge.shown.count == 1 && r.window.card.nudge.label.text == "HEADS-UP ▸")
+        #expect(r.window.nudge.shown.count == 1 && r.window.card.nudge.label.text == "Heads-up")
         #expect(well.hasPrefix("MATH201 · Problem set 4 moved\nnew · Sun 23:59\n“Problem set 4 is now due Friday 23 October at 23:59.”\nfrom a post: check the date"))
         r.window.nudge.shown = []  // the card goes away
         r.window.closeBubble()
@@ -219,13 +219,14 @@ private final class Replies: @unchecked Sendable {
     @Test func everyAskOfAScanIsDeniedAtOnceAndNoCardShows() async {
         let r = await launch()
         defer { r.close() }
-        r.hermes.script = [.event(.approvalNeeded("terminal: rm -rf notes", id: "ask1")),
+        r.agent.script = [.event(.approvalNeeded("terminal: rm -rf notes", id: "ask1")),
                            .event(.approvalNeeded("click Submit", id: "ask2")),
                            .event(.runEnded(status: "completed", output: courses([courseA]), error: ""))]
         tick(r, at(8))
         #expect(await settled(r))
-        #expect(await pump(r.hermes.approved.count == 2))
-        #expect(r.hermes.approved.map(\.id) == ["ask1", "ask2"] && r.hermes.approved.allSatisfy { $0.choice == .deny })
+        #expect(await pump(r.agent.approved.count == 2))
+        // Each denial is its own Task, so they may arrive in either order; each carries its request id.
+        #expect(Set(r.agent.approved.map(\.id)) == ["ask1", "ask2"] && r.agent.approved.allSatisfy { $0.choice == .deny })
         #expect(r.window.approvals.isEmpty && r.window.card.isHidden)  // nobody was asked
         #expect(state(r).courses == [courseA])  // the run itself went on
     }
@@ -233,18 +234,18 @@ private final class Replies: @unchecked Sendable {
     @Test func theUsersRequestStopsTheScanAndCountsNothingAgainstIt() async {
         let r = await launch()
         defer { r.close() }
-        r.hermes.script = [.wait, .event(.runEnded(status: "completed", output: courses([courseA]), error: ""))]
+        r.agent.script = [.wait, .event(.runEnded(status: "completed", output: courses([courseA]), error: ""))]
         tick(r, at(8))
         #expect(await pump(asked(r).count == 1))
         r.window.ask("hello")  // the user comes first
-        #expect(await pump(r.hermes.stopped.contains("run_1")))
-        r.hermes.gate.signal()
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped.contains("run_1")))
+        r.agent.gate.signal()
+        r.agent.gate.signal()
         #expect(await settled(r))
         #expect(await pump(!r.window.busy))
         #expect(state(r).courses.isEmpty && state(r).coursesDay.isEmpty)  // a cancelled reply is not used
         #expect(r.window.scout.failures.isEmpty && r.window.scout.retryAt == 0)  // and is no failure: the next tick goes on
-        r.hermes.script = completed(courses([courseA]))
+        r.agent.script = completed(courses([courseA]))
         tick(r, at(8, 2))
         #expect(await settled(r) && state(r).courses == [courseA])
     }
@@ -252,12 +253,12 @@ private final class Replies: @unchecked Sendable {
     @Test func aRunThatNeverEndsIsStoppedAtTheLimit() async {
         let r = Rig()
         defer { r.close() }
-        r.hermes.script = [.wait]  // never answers
-        let scout = Scout(hermes: r.hermes)
-        let hermes = r.hermes
+        r.agent.script = [.wait]  // never answers
+        let scout = Scout(agent: r.agent)
+        let agent = r.agent
         let run = Task { await scout.run("MODE: list", session: "robo-posts-test", limit: 0.2) }
-        #expect(await pump(hermes.stopped == ["run_1"], timeout: 3))  // the limit asked Hermes to stop it
-        hermes.gate.signal()  // and Hermes ends a stopped run (the fake does not on its own)
+        #expect(await pump(agent.stopped == ["run_1"], timeout: 3))  // the limit asked the agent to stop it
+        agent.gate.signal()  // and the agent ends a stopped run (the fake does not on its own)
         let reply = await run.value
         #expect(reply.status == "timed out" && !reply.cancelled)
     }
@@ -307,7 +308,7 @@ private final class Replies: @unchecked Sendable {
     @Test func aFailedRunIsNotUsedEvenWithAGoodLookingAnswer() async {
         let r = await launch()
         defer { r.close() }
-        r.hermes.script = [.event(.runEnded(status: "failed", output: courses([courseA]), error: "boom"))]
+        r.agent.script = [.event(.runEnded(status: "failed", output: courses([courseA]), error: "boom"))]
         tick(r, at(8))
         #expect(await settled(r))
         #expect(state(r).courses.isEmpty && r.window.scout.failures["list"] == 1)

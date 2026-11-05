@@ -21,17 +21,17 @@ import RoboSystem
         write([old: "old"], bump: false)
         try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: old.path)
         let note = r.vault.appendingPathComponent("Drafts/Email to Prof Lee.md")
-        r.hermes.onAsk = { write([note: "Hi"]) }
+        r.agent.onAsk = { write([note: "Hi"]) }
         await request(r)
         #expect(r.notes.map(\.url) == [note] && r.notes.map(\.front) == [true] && r.files.isEmpty)
-        #expect(shown(r) == "It is in Obsidian." && r.window.card.footerShown == "📓 In Obsidian: Email to Prof Lee")
+        #expect(shown(r) == "It is in Obsidian." && r.window.card.footerShown == "In Obsidian: Email to Prof Lee")
     }
 
     @Test func theAutomaticDigestsNoteOpensBehindWhatYouAreDoing() async {
         let r = Rig([completed("Digest ready.")], digestDue: true)
         defer { r.close() }
         let note = r.vault.appendingPathComponent("Notes/School digest.md")
-        r.hermes.onAsk = { write([note: "x"]) }
+        r.agent.onAsk = { write([note: "x"]) }
         #expect(await pump(r.notes.count == 1 && !r.window.busy))
         #expect(r.notes.map(\.front) == [false])
         await request(r, "and the plan?")  // a request of your own opens in front again
@@ -42,7 +42,7 @@ import RoboSystem
         let r = Rig([completed("Digest ready.")])
         defer { r.close() }
         let note = r.vault.appendingPathComponent("Notes/School digest.md")
-        r.hermes.onAsk = { write([note: "x"]) }
+        r.agent.onAsk = { write([note: "x"]) }
         await request(r, RoboWindow.digestPrompt)  // the right-click Digest entry
         #expect(r.notes.map(\.front) == [true])
     }
@@ -52,7 +52,7 @@ import RoboSystem
         defer { r.close() }
         let names = ["a.html", "b.html", "c.html"].map { r.out.appendingPathComponent($0) }
             + [r.vault.appendingPathComponent("Notes/n1.md"), r.vault.appendingPathComponent("Plans/n2.md")]
-        r.hermes.onAsk = {  // later ones are newer
+        r.agent.onAsk = {  // later ones are newer
             let now = Date().timeIntervalSince1970
             for (i, f) in names.enumerated() {
                 write([f: "x"], bump: false)
@@ -63,7 +63,7 @@ import RoboSystem
         #expect(RoboWindow.openMax == 3)
         #expect(r.notes.map(\.url) == [names[4], names[3]])  // newest first
         #expect(r.files == [names[2]])  // what is left of the limit
-        #expect(r.window.card.footerShown == "📓 In Obsidian: n2, n1\n📂 Opened c.html")
+        #expect(r.window.card.footerShown == "In Obsidian: n2, n1\nOpened c.html")
     }
 
     @Test func aFullLimitOfNotesLeavesNoRoomForAPage() async {
@@ -71,7 +71,7 @@ import RoboSystem
         defer { r.close() }
         let notes = (0..<4).map { r.vault.appendingPathComponent("Notes/n\($0).md") }
         let page = r.out.appendingPathComponent("page.html")
-        r.hermes.onAsk = {
+        r.agent.onAsk = {
             let now = Date().timeIntervalSince1970
             for (i, f) in ([page] + notes).enumerated() {
                 write([f: "x"], bump: false)
@@ -80,7 +80,7 @@ import RoboSystem
         }
         await request(r)
         #expect(r.notes.map(\.url) == [notes[3], notes[2], notes[1]])  // newest three
-        #expect(r.files.isEmpty && !r.window.card.footerShown.contains("📂"))
+        #expect(r.files.isEmpty && !r.window.card.footerShown.contains("Opened"))
     }
 
     @Test func aPageInTheOutputFolderStillOpensAsAFile() async {
@@ -90,10 +90,10 @@ import RoboSystem
         let old = r.out.appendingPathComponent("old-notes.html")  // made before this request: not reopened
         write([old: "old"], bump: false)
         try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: old.path)
-        r.hermes.onAsk = { write([page: "<svg/>"]) }
+        r.agent.onAsk = { write([page: "<svg/>"]) }
         await request(r)
         #expect(r.files == [page] && r.notes.isEmpty)
-        #expect(r.window.card.footerShown == "📂 Opened diagram.html")
+        #expect(r.window.card.footerShown == "Opened diagram.html")
     }
 
     @Test func onlyNotesInTheThreeFoldersOpen() async {
@@ -102,7 +102,7 @@ import RoboSystem
         let stray = [r.vault.appendingPathComponent(".obsidian/plugins/readme.md"),  // Obsidian's own folder
                      r.vault.appendingPathComponent("loose.md"),  // not in Drafts, Plans or Notes
                      r.vault.appendingPathComponent("Notes/data.json")]  // not a note
-        r.hermes.onAsk = { write(Dictionary(uniqueKeysWithValues: stray.map { ($0, "x") })) }
+        r.agent.onAsk = { write(Dictionary(uniqueKeysWithValues: stray.map { ($0, "x") })) }
         await request(r)
         #expect(r.notes.isEmpty && r.files.isEmpty && r.window.card.footerShown == "")
     }
@@ -110,7 +110,7 @@ import RoboSystem
     @Test func aFailedRequestOpensNothing() async {
         let r = Rig([.event(.runEnded(status: "failed", error: "boom"))])
         defer { r.close() }
-        r.hermes.onAsk = {
+        r.agent.onAsk = {
             write([r.vault.appendingPathComponent("Notes/half.md"): "x", r.out.appendingPathComponent("half.html"): "x"])
         }
         await request(r)
@@ -136,7 +136,7 @@ import RoboSystem
         let real = r.dir.appendingPathComponent("elsewhere")
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: r.out, withDestinationURL: real)
-        r.hermes.onAsk = { write([r.out.appendingPathComponent("page.html"): "x"]) }
+        r.agent.onAsk = { write([r.out.appendingPathComponent("page.html"): "x"]) }
         await request(r)
         #expect(r.files.map(\.lastPathComponent) == ["page.html"])
     }
@@ -148,7 +148,7 @@ import RoboSystem
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: r.vault, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: r.vault.appendingPathComponent("Notes"), withDestinationURL: real)
-        r.hermes.onAsk = { write([r.vault.appendingPathComponent("Notes/n.md"): "x"]) }
+        r.agent.onAsk = { write([r.vault.appendingPathComponent("Notes/n.md"): "x"]) }
         await request(r)
         #expect(r.notes.map(\.url.lastPathComponent) == ["n.md"])
     }

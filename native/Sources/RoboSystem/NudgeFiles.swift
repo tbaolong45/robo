@@ -1,8 +1,8 @@
 // The files of the nudges, in robo's data folder (`~/.local/share/robo`, 0700): `agenda.json` (what is coming up, from
 // `Agenda.encode`), `nudges.json` (the budget: what was shown today, snoozes, mutes, on/off; `NudgeState`), `reminders.json`
 // (which reminders were already shown), `radar.json` (the daily radar: the day of its last run, what it already showed, what it
-// offers) and `lms.json` (the LMS scan: its courses and the day each was last scanned). They live here and not in `robo_state.json`, which is shared with the Python build
-// and has one key. Every write is atomic (a temp file in the folder, 0600, renamed over the old one), so a crash or a power cut
+// offers) and `lms.json` (the LMS scan: its courses and the day each was last scanned). They live here and not in `robo_state.json`, which
+// has one key. Every write is atomic (a temp file in the folder, 0600, renamed over the old one), so a crash or a power cut
 // leaves the old file or the new one, never half; a file that is missing or unreadable reads as empty.
 import Foundation
 import RoboCore

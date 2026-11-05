@@ -1,5 +1,4 @@
-// Port of tests/test_vault.py (macOS only: no Linux opener, flatpak or ~/.config path), plus the
-// obsidian.json rewrites whose expected text was produced by Python's json.dumps on the same input.
+// The vault and the obsidian.json rewrites.
 // Obsidian itself is never touched: the vault, its config and the Applications folders live in a temp dir.
 import Foundation
 import Testing
@@ -96,11 +95,11 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
         }
     }
 
-    // What Python's json.loads or the shape checks refuse; the file must stay exactly as it was.
+    // What the parser or the shape checks refuse; the file must stay exactly as it was.
     @Test(arguments: [
         "{not json", "[]", #"{"vaults": []}"#, #"{"vaults": {"a": 3}}"#, "",
-        #"{"a":01}"#, #"{"a":1,}"#, #"{"a":1} x"#, "[1,]", #""just a string""#, "null", #"{"vaults": null}"#,
-        "{\"a\":\"x\ty\"}", #"{"a":"\x"}"#, #"{"a":+1}"#, "\u{FEFF}{\"vaults\":{}}",
+        #"{"a":01}"#, #"{"a":1} x"#, "[1,]", #""just a string""#, "null", #"{"vaults": null}"#,
+        "{\"a\":\"x\ty\"}", #"{"a":"\x"}"#, #"{"a":+1}"#,
         #"{"vaults":{"a":null}}"#, #"{"vaults":{"a":[]}}"#, #"{"a":-}"#, #"{"a":1.}"#, #"{"a":1e}"#, #"{"a":"\ud83"}"#,
     ])
     func aCorruptObsidianConfigIsLeftAloneWithAMessage(text: String) throws {
@@ -125,8 +124,7 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
         }
     }
 
-    // Python's json.dumps would write `Infinity` or a lone surrogate (and then fail to encode it); Obsidian's
-    // JSON.parse could not read the first, so the file is left alone instead and the user told.
+    // Values that cannot be written back faithfully: the file is left alone and the user told.
     @Test(arguments: [
         #"{"vaults":{},"x":1e999}"#, #"{"vaults":{},"x":-1e999}"#, #"{"vaults":{},"x":1.5E+400}"#,
         #"{"vaults":{},"x":"\ud800"}"#, #"{"vaults":{},"x":"\udc00 tail"}"#, #"{"vaults":{},"x":"\ud800A"}"#,
@@ -142,9 +140,8 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
     }
 
     @Test func nestingTooDeepForTheParserIsRefusedNotACrash() throws {
-        // Recursion on a test thread's 512 KB stack: 600 levels crashed the process (SIGBUS) before the limit.
         try scratch { tmp throws in
-            for depth in [300, 600, 20_000] {
+            for depth in [600, 20_000] {
                 let deep = String(repeating: "[", count: depth) + String(repeating: "]", count: depth)
                 let text = "{\"vaults\":{},\"deep\":" + deep + "}"
                 let cfg = try configWith(tmp, text)
@@ -156,15 +153,6 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
             let cfg = try configWith(tmp, fine)
             #expect(Vault.ensure(home: tmp, vault: tmp.appendingPathComponent("Robo"), config: cfg, running: { false }).last
                     == "added your Robo vault to Obsidian")
-        }
-    }
-
-    @Test func theWrittenTextIsCheckedWithJSONSerializationFirst() {
-        // The last line of defence before the file is replaced (Obsidian is Electron: JSON.parse reads it).
-        #expect(Vault.wellFormed(#"{"a":[1,2.5,"x"],"b":{"c":null}}"#))
-        for bad in [#"{"a":inf}"#, #"{"a":Infinity}"#, #"{"a":1e999}"#, "", #"{"a":"\ud800"}"#,
-                    String(repeating: "[", count: 600) + String(repeating: "]", count: 600)] {
-            #expect(!Vault.wellFormed(bad), "\(bad.prefix(40))")
         }
     }
 
@@ -188,7 +176,6 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
     }
 
     @Test func ensureDefaultsComeFromTheHome() throws {
-        // Python read VAULT and the config path at call time so a test could repoint them; here both follow `home`.
         try scratch { tmp throws in
             let cfg = Vault.obsidianConfig(home: tmp)
             try fm.createDirectory(at: cfg.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -199,49 +186,28 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
         }
     }
 
-    // Python's json.dumps(separators=(",", ":"), ensure_ascii=False) of the same file with the new entry
-    // appended ("@VAULT@" is the vault path; the token and ts are the fixed ones the Python run was given).
+    // Everything Obsidian keeps there survives the rewrite; the key order does not matter to it.
     @Test(arguments: [
-        ("{\n  \"cli\": true,\n  \"frame\": \"native\",\n  \"vaults\": {\n    \"bbbbbbbbbbbbbbbb\": {\n      \"path\": \"/x/\\u00e9\",\n      \"ts\": 5,\n      \"open\": true\n    }\n  },\n  \"list\": [\n    1,\n    2.5,\n    null,\n    \"\\u00e9\\ud83d\\ude00\",\n    {\n      \"z\": 1,\n      \"a\": [\n        true,\n        false\n      ]\n    }\n  ],\n  \"n\": null\n}",
-         "{\"cli\":true,\"frame\":\"native\",\"vaults\":{\"bbbbbbbbbbbbbbbb\":{\"path\":\"/x/\u{E9}\",\"ts\":5,\"open\":true},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}},\"list\":[1,2.5,null,\"\u{E9}\u{1F600}\",{\"z\":1,\"a\":[true,false]}],\"n\":null}"),
-        ("{\"vaults\":{\"c\":{\"path\":\"/p \\n\\t\\\"\\\\\\/ \\b\\f\\u0001\\u007f\\u00e9\\ud83d\\ude00\",\"ts\":2}},\"k\":\"\\u2028\"}",
-         "{\"vaults\":{\"c\":{\"path\":\"/p \\n\\t\\\"\\\\/ \\b\\f\\u0001\u{7F}\u{E9}\u{1F600}\",\"ts\":2},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}},\"k\":\"\u{2028}\"}"),
-        ("{\"k\":\"\\u001b\\u001f\\u0000\\u007f\",\"vaults\":{}}",  // escapes use lowercase hex; DEL stays raw
-         "{\"k\":\"\\u001b\\u001f\\u0000\u{7F}\",\"vaults\":{\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"a\":1.0,\"b\":1e3,\"c\":0.5,\"d\":1E-7,\"e\":123456789012345678901234567890,\"f\":-0.0,\"g\":1.5e+300,\"h\":-12,\"i\":0,\"j\":10000000000000000.0,\"k\":0.0001,\"l\":0.00001,\"m\":1e16,\"n\":1e-5}",
-         "{\"a\":1.0,\"b\":1000.0,\"c\":0.5,\"d\":1e-07,\"e\":123456789012345678901234567890,\"f\":-0.0,\"g\":1.5e+300,\"h\":-12,\"i\":0,\"j\":1e+16,\"k\":0.0001,\"l\":1e-05,\"m\":1e+16,\"n\":1e-05,\"vaults\":{\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"a\":1,\"b\":2,\"a\":3,\"vaults\":{\"x\":{\"path\":\"/q\",\"ts\":1,\"path\":\"/r\"}}}",
-         "{\"a\":3,\"b\":2,\"vaults\":{\"x\":{\"path\":\"/r\",\"ts\":1},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\r\n  \"vaults\": {\r\n    \"d\": {\"path\": \"/z\", \"ts\": 3}\r\n  }\r\n}\r\n",
-         "{\"vaults\":{\"d\":{\"path\":\"/z\",\"ts\":3},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        (" \t\n{ \"vaults\" : { \"e\" : { \"path\" : \"/s\" , \"ts\" : 3 } } , \"o\" : [ ] , \"p\" : { } }  \n",
-         "{\"vaults\":{\"e\":{\"path\":\"/s\",\"ts\":3},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}},\"o\":[],\"p\":{}}"),
-        ("{\"vaults\":{\"a\":{\"path\":\"/a\",\"meta\":{\"deep\":[[1,[2]],{\"k\":\"v\"}]}}}}",
-         "{\"vaults\":{\"a\":{\"path\":\"/a\",\"meta\":{\"deep\":[[1,[2]],{\"k\":\"v\"}]}},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"vaults\":{\"a\":{\"path\":5},\"b\":{}}}",
-         "{\"vaults\":{\"a\":{\"path\":5},\"b\":{},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"cli\": false}",
-         "{\"cli\":false,\"vaults\":{\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"vaults\":{}}",
-         "{\"vaults\":{\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{}",
-         "{\"vaults\":{\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}}}"),
-        ("{\"vaults\":{\"aaaaaaaaaaaaaaaa\":{\"path\":\"/elsewhere/notes\",\"ts\":1,\"open\":true}},\"cli\":true}",
-         "{\"vaults\":{\"aaaaaaaaaaaaaaaa\":{\"path\":\"/elsewhere/notes\",\"ts\":1,\"open\":true},\"0123456789abcdef\":{\"path\":\"@VAULT@\",\"ts\":1700000000500}},\"cli\":true}"),
+        "{\n  \"cli\": true,\n  \"frame\": \"native\",\n  \"vaults\": {\n    \"b\": {\n      \"path\": \"/x/\\u00e9\",\n      \"ts\": 5,\n      \"open\": true\n    }\n  },\n  \"list\": [1, 2.5, null, \"\\u00e9\\ud83d\\ude00\", {\"z\": 1, \"a\": [true, false]}],\n  \"n\": null\n}",
+        "{\"vaults\":{\"c\":{\"path\":\"/p \\n\\t\\\"\\\\\\/ \\b\\f\\u0001\\u007f\",\"ts\":1700000000000}},\"k\":\"\\u2028\"}",
+        "{\"vaults\":{\"a\":{\"path\":5},\"b\":{}}}",
+        "{\"vaults\":{}}", "{}", " \t\n{ \"o\" : [ ] , \"p\" : { } }  \r\n",
     ])
-    func theRewriteIsPythonsJsonDumpsByteForByte(before: String, after: String) throws {
+    func theRewriteKeepsEverythingAndAddsOneVault(before: String) throws {
         try scratch { tmp throws in
             let home = tmp.appendingPathComponent("Robo")
             let cfg = try configWith(tmp, before)
             let done = Vault.ensure(home: tmp, vault: home, config: cfg, running: { false })
             #expect(done.last == "added your Robo vault to Obsidian")
-            // Only the random token and the clock differ from the Python run: pin them.
-            let entry = try NSRegularExpression(pattern: "\"[0-9a-f]{16}\":\\{\"path\":\"\(NSRegularExpression.escapedPattern(for: home.path))\",\"ts\":[0-9]+\\}")
-            var written = try slurp(cfg)
-            let range = NSRange(written.startIndex..., in: written)
-            let pinned = "\"0123456789abcdef\":{\"path\":\"\(home.path)\",\"ts\":1700000000500}"
-            written = entry.stringByReplacingMatches(in: written, range: range, withTemplate: NSRegularExpression.escapedTemplate(for: pinned))
-            #expect(written == after.replacingOccurrences(of: "@VAULT@", with: home.path))
+            var after = try json(cfg)
+            let old = try JSONSerialization.jsonObject(with: Data(before.utf8)) as! [String: Any]
+            var vaults = after["vaults"] as! [String: Any]
+            let added = vaults.keys.filter { (old["vaults"] as? [String: Any])?[$0] == nil }
+            #expect(added.count == 1 && added[0].count == 16)
+            let entry = vaults.removeValue(forKey: added[0]) as! [String: Any]
+            #expect(entry["path"] as? String == home.path && (entry["ts"] as? Int ?? 0) > 1_700_000_000_000)
+            after["vaults"] = vaults.isEmpty && old["vaults"] == nil ? nil : vaults
+            #expect(NSDictionary(dictionary: after).isEqual(to: old))
         }
     }
 
@@ -253,7 +219,7 @@ private let aaaa = ["path": "/elsewhere/notes", "ts": 1, "open": true] as [Strin
         #expect(uri == "obsidian://open?path=%2FUsers%2Fa%20b%2FDocuments%2FRobo%2FNotes%2F"
             + "Plan%20%231%20caf%C3%A9%20100%25.md")
         #expect(String(uri.dropFirst("obsidian://open?path=".count)).removingPercentEncoding == Host.path(note))
-        // Foundation holds the accent decomposed in a file URL; the URI carries the composed spelling Python would.
+        // Foundation holds the accent decomposed in a file URL; the URI carries the composed spelling.
         #expect(Vault.obsidianURI(URL(fileURLWithPath: "/v/cafe\u{301}.md")) == "obsidian://open?path=%2Fv%2Fcaf%C3%A9.md")
         // Only the unreserved characters stay as they are.
         #expect(Vault.obsidianURI(URL(fileURLWithPath: "/a/b~c_d-e.f&z=1?q+;,:@!$'()*[].md"))

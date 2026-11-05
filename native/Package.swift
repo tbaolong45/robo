@@ -13,7 +13,7 @@ let package = Package(
         .package(url: "https://github.com/mgriebling/SwiftMath.git", exact: "1.7.3"),
     ],
     targets: [
-        .target(name: "RoboCore"),  // pure logic and Hermes client: no AppKit, time comes in as an argument
+        .target(name: "RoboCore"),  // pure logic and agent client: no AppKit, time comes in as an argument
         .target(name: "RoboVoice", dependencies: [
             .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
         ]),

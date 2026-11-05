@@ -1,5 +1,5 @@
-// Port of tests/test_feelings.py, plus a few cases on Python-specific string handling (Unicode
-// whitespace, combining marks) whose expected results were produced by the Python code.
+// The feeling filter, with a few cases on string handling (Unicode whitespace, combining marks) whose
+// expected results were generated once by the retired Python build.
 import Testing
 @testable import RoboCore
 
@@ -161,7 +161,7 @@ struct FeelingsTests {
 
     // MARK: Python's str semantics (expected values computed by FeelingFilter in Python)
 
-    @Test func pythonWhitespaceAndCombiningMarks() {
+    @Test func unicodeWhitespaceAndCombiningMarks() {
         // lstrip() takes NBSP and U+3000; a combining mark after the tag is the next text
         #expect(shown(runFilter("\u{a0}\u{3000}[[feel:sad]]\u{301}Oh")) == ["feel:sad", "text:\\u{301}Oh"])
         // the one skipped character after the leading tag is only " " or "\n", not U+2028

@@ -1,11 +1,10 @@
 // First-wake-of-the-day trigger: a persisted digest date, a resume watcher, a net wait.
-// Port of src/robo/wake.py (macOS): NSWorkspace says when the Mac wakes, so Python's wall-versus-monotonic
-// clock-gap trick (and the Linux login1 source) is gone. Python's wait for the user after a wake stays.
+// NSWorkspace says when the Mac wakes.
 import AppKit
 import Foundation
 
 /// Remembers the local date of the last digest in a 0600 JSON file, `{"last_digest": "YYYY-MM-DD"}`
-/// (the same file format as Python's, e.g. data/robo_state.json).
+/// (data/robo_state.json).
 public struct DigestClock {
     public let path: URL
 

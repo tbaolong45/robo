@@ -1,10 +1,9 @@
 // Pure time-stepped face animation: springs, blinks, glances, breathing, talking.
-// Port of src/robo/face/animator.py.
 import Foundation
 
-/// Python's `random.Random` (Mersenne Twister, `init_by_array` seeding), so a seed gives the same
-/// blinks and glances as the Python animator; that is what lets the tests compare traces.
-struct PyRandom {
+/// A seedable generator (`init_by_array` seeding), so a seed gives the same blinks and glances as the
+/// tests' golden traces.
+struct MersenneTwister {
     private var mt = [UInt32](repeating: 0, count: 624)
     private var index = 624
 
@@ -81,7 +80,7 @@ public final class Animator {
     static let shape: [FaceKey] = [\.eyeRound, \.lidTop, \.lidAngle, \.lidBottom, \.skew, \.wink, \.mouthCurve]
     private static let sprung = FaceParams.floats.filter { !shape.contains($0) }
 
-    var rng: PyRandom
+    var rng: MersenneTwister
     /// The eased values and their velocities (nil until the first step); the app may set `x` to snap.
     public var x: [FaceKey: Double]?
     public var v = Dictionary(uniqueKeysWithValues: FaceParams.floats.map { ($0, 0.0) })
@@ -92,16 +91,16 @@ public final class Animator {
     var phase = 0.0
     var shape: [FaceKey: Double]?  // the expression shape the eyes show now
 
-    /// A seed makes the blinks and glances repeat, and match Python's `Animator(seed)`.
+    /// A seed makes the blinks and glances repeat.
     public init(seed: UInt64? = nil) {
-        rng = PyRandom(seed: seed ?? .random(in: .min ... .max))
+        rng = MersenneTwister(seed: seed ?? .random(in: .min ... .max))
         nextBlink = rng.uniform(2, 6)
     }
 
     /// `look` (see `lookAt`) replaces the free glances; poses that keep their own gaze
     /// (wander 0: thinking, working, asleep) ignore it.
     public func step(_ target: FaceParams, dt: Double, talking: Bool, now: Double, look: Vec? = nil) -> FaceParams {
-        let dt = max(dt, 0)  // Python's callers never pass dt < 0; exp(-14 dt) would overflow to NaN, so it counts as no time
+        let dt = max(dt, 0)  // exp(-14 dt) would overflow to NaN, so a negative step counts as no time
         var x = self.x ?? Dictionary(uniqueKeysWithValues: FaceParams.floats.map { ($0, target[keyPath: $0]) })
         let asleep = target.effects.contains("zzz")
         var goal = Dictionary(uniqueKeysWithValues: FaceParams.floats.map { ($0, target[keyPath: $0]) })

@@ -42,7 +42,7 @@ private let standup = vevent("sync-1", "Team standup", at(15, day: 22))
 private let feed = calendar(exam, standup)
 
 /// A window with the calendar fetch answered, at wall time `wall`.
-@MainActor private func launch(_ ics: String?, at wall: Double = at(8, 30), script: [FakeHermes.Step] = [], cps: Double = 0) async -> Rig {
+@MainActor private func launch(_ ics: String?, at wall: Double = at(8, 30), script: [FakeAgent.Step] = [], cps: Double = 0) async -> Rig {
     let r = Rig(script, cps: cps)
     r.fake.wall = wall
     r.fake.ics = ics
@@ -57,7 +57,7 @@ private let feed = calendar(exam, standup)
 }
 
 /// The exam's nudge, up on the card at 09:00 (the day-before reminder: its week-before one is covered by it).
-@MainActor private func examNudge(script: [FakeHermes.Step] = []) async -> Rig {
+@MainActor private func examNudge(script: [FakeAgent.Step] = []) async -> Rig {
     let r = await launch(feed, script: script)
     tick(r, at(9))
     #expect(r.window.nudge.shown.count == 1 && !r.window.card.isHidden)
@@ -80,7 +80,7 @@ private let feed = calendar(exam, standup)
         tick(r, at(9))
         let w: RoboWindow = r.window
         #expect(!w.card.isHidden && w.nudge.shown.count == 1 && !w.card.nudge.isHidden)
-        #expect(w.card.nudge.label.text == "HEADS-UP ▸" && !w.card.nudge.open.isHidden)
+        #expect(w.card.nudge.label.text == "Heads-up" && !w.card.nudge.open.isHidden)
         #expect(w.card.nudge.well.text == "MATH201 midterm exam\ntomorrow 09:00\n↗ moodle.example.edu")
         #expect(w.mind.emotion == "concerned" && w.closeAt != 0 && w.closeAfter == 60)
         // the tick that is not due yet does nothing, and one that is due finds the card held
@@ -205,11 +205,11 @@ enum Hold: String, CaseIterable, Sendable { case card, run, approval, typing, li
         let r = await launch(feed)
         defer { r.close() }
         r.window.showMenu()
-        #expect(r.window.card.chips.nudges.title == "🔔 Nudges" && r.window.card.chips.height == 62)
+        #expect(r.window.card.chips.nudges.symbol == "bell" && r.window.card.chips.height == 62)
         r.window.menu(.nudges)
         #expect(!r.window.nudge.state.enabled && !files(r).loadNudges().enabled)
         r.window.showMenu()
-        #expect(r.window.card.chips.nudges.title == "🔕 Nudges" && r.window.card.chips.height == 62)  // the menu keeps its height
+        #expect(r.window.card.chips.nudges.symbol == "bell.slash" && r.window.card.chips.height == 62)  // the menu keeps its height
         r.window.closeBubble()
         tick(r, at(9))
         #expect(r.window.nudge.shown.isEmpty)

@@ -1,8 +1,4 @@
-// Port of tests/test_wake.py. The login1 source and the clock-gap source are gone (NSWorkspace tells us
-// when the Mac wakes), so the FakeSource cases become notifications on a private NotificationCenter and
-// the ClockGap cases that are about the user coming back become cases of the wake watcher. Not ported,
-// because nothing in Swift can fail that way: a bus error that reconnects, a callback that throws, the
-// wake source per OS, and the clock gap that tells a CPU stall or a clock change from a sleep.
+// The wake watcher, driven by notifications on a private NotificationCenter, and the digest clock.
 import AppKit
 import Foundation
 import Testing
@@ -45,7 +41,7 @@ private func inode(_ url: URL) -> UInt64 {
     try withTemp { dir in
         let p = dir.appendingPathComponent("sub/d.json")
         try DigestClock(path: p).mark(D1)
-        // byte for byte what Python's json.dump writes, so either build reads the other's file
+        // the file's exact format
         #expect(try Data(contentsOf: p) == Data(#"{"last_digest": "2026-10-11"}"#.utf8))
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: p)) as? [String: String]
         #expect(json == ["last_digest": "2026-10-11"])

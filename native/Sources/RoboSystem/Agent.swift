@@ -1,4 +1,4 @@
-// Robo's own agent (`robo-agent`, a local Python service that serves the run API `HermesClient` speaks): where its files live,
+// Robo's own agent (`robo-agent`, a local Python service that serves the run API `AgentClient` speaks): where its files live,
 // how the app reaches it, `robo key`, and keeping the service running while the app runs.
 //
 // Everything is in `R = ~/.local/share/robo/agent/` (0700): `config.json` (written by `robo setup`, see `Setup.writeConfig`) and
@@ -22,7 +22,7 @@ public struct AgentHome {
     public var home: URL
     public var env: [String: String]
 
-    /// Without `home`, `$HOME` (like Python's `Path.home()`; Foundation's own home call ignores it).
+    /// Without `home`, `$HOME` (Foundation's own home call ignores it).
     public init(home: URL? = nil, env: [String: String] = ProcessInfo.processInfo.environment) {
         self.env = env
         let fallback = env["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
@@ -89,7 +89,7 @@ public struct AgentHome {
 
     // MARK: the connection
 
-    /// (base URL, server key) for HermesClient; `ROBO_AGENT_URL` overrides the URL (and then a missing key is no error: a dead
+    /// (base URL, server key) for AgentClient; `ROBO_AGENT_URL` overrides the URL (and then a missing key is no error: a dead
     /// address needs none).
     public func connection() throws -> (url: String, key: String) {
         if otherAgent { return (env["ROBO_AGENT_URL"]!, readKey(Self.serverKeyFile) ?? "") }

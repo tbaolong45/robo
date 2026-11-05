@@ -1,5 +1,5 @@
 // `robo setup`: robo's agent settings (`AgentHome`: config.json and the server key), the login item and the vault.
-// Port of the macOS parts of src/robo/setup.py. The agent fills its own SOUL.md and skills (`<checkout>/agent/`) when it loads them,
+// The agent fills its own SOUL.md and skills (`<checkout>/agent/`) when it loads them,
 // so setup installs no templates; the app starts the agent itself (`AgentService`). The ai.robo LaunchAgent starts this app's
 // executable, not `uv run`.
 import Foundation
@@ -12,28 +12,13 @@ public struct SetupError: Error, CustomStringConvertible {
 public enum Setup {
     static let launchAgentLabel = "ai.robo"  // ~/Library/LaunchAgents/ai.robo.plist starts robo at login
 
-    /// This checkout, wherever it was cloned (Python: `Path(__file__).resolve().parents[2]`).
+    /// This checkout, wherever it was cloned.
     static let checkout = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath()
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
     /// Robo's agent may ask before an irreversible step ("manual": Allow/Deny on the card) or not ("off", the user's choice since
     /// 2026-10-23). Only a new config.json gets it; a value the user set stays.
     static let defaultApprovals = "off"
-
-    // MARK: dotenv files
-
-    /// KEY=VALUE lines of a dotenv file (comments and bare words skipped, quotes trimmed).
-    static func readEnv(_ url: URL) throws -> [String: String] {
-        guard Host.exists(url) else { return [:] }
-        var out: [String: String] = [:]
-        for line in Host.splitLines(try Host.readText(url)) {
-            let (key, found, value) = Host.partition(Host.trimmed(line), "=")
-            if found, !key.isEmpty, !key.hasPrefix("#") {
-                out[Host.trimmed(key)] = Host.trimmed(value).trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
-            }
-        }
-        return out
-    }
 
     // MARK: files
 
@@ -54,7 +39,7 @@ public enum Setup {
         return found
     }
 
-    /// Python orders paths component by component (so "a/x" < "a-b/x", unlike the plain strings).
+    /// Paths in order, component by component (so "a/x" < "a-b/x", unlike the plain strings).
     static func pathOrder(_ a: [String], _ b: [String]) -> Bool {
         a.lexicographicallyPrecedes(b) { $0.utf8.lexicographicallyPrecedes($1.utf8) }
     }
@@ -116,16 +101,8 @@ public enum Setup {
         a.servicePATH.split(separator: ":").map { "\($0)/uv" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// The Moodle address the Hermes build kept in its profile (`MOODLE_BASE_URL` of `~/.hermes/profiles/robo/.env`, that key only),
-    /// normalised; nil when there is none or it is not an https address. Reads only.
-    static func hermesMoodle(home: URL) -> String? {
-        let env = home.appendingPathComponent(".hermes/profiles/robo/.env")
-        guard let url = (try? readEnv(env))?["MOODLE_BASE_URL"], !url.isEmpty else { return nil }
-        return try? moodleURL(url)
-    }
-
     /// Write `R/config.json`, keeping what is already there: `port`, `model`, `approvals`, `vault` and `learn` get a default only when
-    /// missing, `moodle_url` is `moodle` when given, else the one there, else the Hermes profile's, else null; `robo_cmd` and `uv_path`
+    /// missing, `moodle_url` is `moodle` when given, else the one there, else null; `robo_cmd` and `uv_path`
     /// always name this build and this uv (like the LaunchAgent). Keys it does not know stay. The "..." lines of what changed.
     static func writeConfig(_ a: AgentHome, executable: URL, uv: String, moodle: String?) throws -> [String] {
         let old = try a.readConfig()
@@ -136,7 +113,7 @@ public enum Setup {
         if let moodle {
             config["moodle_url"] = moodle
         } else if (config["moodle_url"] as? String ?? "").isEmpty {
-            config["moodle_url"] = hermesMoodle(home: a.home) ?? NSNull()
+            config["moodle_url"] = NSNull()
         }
         config["robo_cmd"] = Host.path(executable)
         config["uv_path"] = uv
@@ -147,7 +124,7 @@ public enum Setup {
         }
         var done = [old.isEmpty ? "wrote robo's agent settings (\(Host.path(a.configFile)))" : "updated robo's agent settings"]
         if (old["moodle_url"] as? String) != (config["moodle_url"] as? String), config["moodle_url"] is String {
-            done.append(moodle == nil ? "kept your Moodle address from the Hermes profile" : "set your Moodle address")
+            done.append("set your Moodle address")
         }
         return done
     }

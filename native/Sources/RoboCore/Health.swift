@@ -1,5 +1,4 @@
 // Is robo's agent answering? One tiny GET now and then, reported as ok / warn / bad.
-// Port of src/robo/health.py.
 import Foundation
 
 /// What the agent's header light shows: answering, one miss (amber), two misses in a row (red).
@@ -19,7 +18,7 @@ public final class HealthPoller: @unchecked Sendable {
     private let lock = NSLock()
     private var napping: Task<Void, Never>?  // the wait in progress, so a poke can cut it short
     private var poked = false
-    private var stopped = false  // like Python's _stop: nothing clears it, so stop() before start() sticks
+    private var stopped = false  // nothing clears it, so stop() before start() sticks
     private(set) var task: Task<Void, Never>?
 
     /// `fetch` and `sleep` are injectable so tests need no network and no real time.
@@ -36,7 +35,7 @@ public final class HealthPoller: @unchecked Sendable {
         self.sleep = sleep
     }
 
-    /// Begin polling. Only the first call does anything (Python raises on a second one), and none
+    /// Begin polling. Only the first call does anything, and none
     /// does after `stop()`.
     public func start() {
         lock.withLock {
@@ -80,7 +79,7 @@ public final class HealthPoller: @unchecked Sendable {
 
     // MARK: the default getter
 
-    private static let session = HermesClient.makeSession()
+    private static let session = AgentClient.makeSession()
 
     /// A GET with a short timeout and no credentials, so no key can leak to a health check.
     static func request(_ url: URL) -> URLRequest {

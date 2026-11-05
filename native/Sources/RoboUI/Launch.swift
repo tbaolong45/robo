@@ -46,12 +46,12 @@ final class RoboAppDelegate: NSObject, NSApplicationDelegate {
 /// The agent's client with the service made sure of before each request: started again if it died (off the main thread, bounded
 /// by `AgentService.ensure`), and with no Anthropic key the request fails at once with the one line that says how to add it. With no
 /// service (ROBO_AGENT_URL) it is the client itself.
-final class AgentKeeper: HermesAPI {
-    let client: HermesAPI
+final class AgentKeeper: AgentAPI {
+    let client: AgentAPI
     let service: AgentService?
     let hasKey: () -> Bool
 
-    init(_ client: HermesAPI, service: AgentService?, hasKey: @escaping () -> Bool) {
+    init(_ client: AgentAPI, service: AgentService?, hasKey: @escaping () -> Bool) {
         self.client = client
         self.service = service
         self.hasKey = hasKey
@@ -124,7 +124,7 @@ public enum RoboApp {
         let hotkey = Hotkey()  // Ctrl+Q wakes robo; if the system refuses it, robo wakes by name as before
         let byKey = !dev.noVoice && hotkey.register()
         let window = RoboWindow(
-            hermes: AgentKeeper(HermesClient(baseURL: connection.url, key: connection.key), service: service,
+            agent: AgentKeeper(AgentClient(baseURL: connection.url, key: connection.key), service: service,
                                 hasKey: { agent.hasAnthropicKey }),
             digest: DigestClock(path: dataDir.appendingPathComponent("robo_state.json")),
             persona: agent.personaStamp(),
@@ -140,7 +140,7 @@ public enum RoboApp {
         return 0
     }
 
-    /// <checkout>/data: the digest date, shared with the Python build until the cutover.
+    /// <checkout>/data: the digest date.
     static var dataDir: URL {
         URL(fileURLWithPath: #filePath).resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("data")

@@ -1,5 +1,4 @@
 // Does robo take the sentences that call it and ignore the rest? Real speech model, real matcher.
-// Port of scripts/voice_eval.py.
 //
 //   robo voice-eval OUT_DIR       macOS `say` voices (model must be cached)
 //   robo voice-eval --record DIR  YOU read 10 prompted phrases, saved as DIR/*.wav
@@ -43,22 +42,8 @@ private let notForRobo = [
 
 struct EvalError: Error { let message: String }
 
-/// Python's repr() of a str, for lines that can be compared with voice_eval.py's.
-func pyRepr(_ s: String?) -> String {
-    guard let s else { return "None" }
-    let quote: Character = s.contains("'") && !s.contains("\"") ? "\"" : "'"
-    var out = String(quote)
-    for c in s {
-        switch c {
-        case quote, "\\": out += "\\\(c)"
-        case "\n": out += "\\n"
-        case "\t": out += "\\t"
-        case "\r": out += "\\r"
-        default: out.append(c)
-        }
-    }
-    return out + String(quote)
-}
+/// A heard or expected sentence as the voice-eval lines print it.
+func quoted(_ s: String?) -> String { s.map { "\"\($0)\"" } ?? "nothing" }
 
 private func pad(_ s: String, _ width: Int) -> String { s + String(repeating: " ", count: max(0, width - s.count)) }
 
@@ -123,13 +108,13 @@ private func synthetic(_ out: URL) throws {
                 total += 1
                 let ok = (request != nil) == wanted
                 print("\(ok ? "ok " : "BAD") \(pad(voice, 9)) \(wanted ? "for robo" : "other  ") | "
-                      + "\(pyRepr(text)) -> \(pyRepr(heard)) -> \(pyRepr(request))")
+                      + "\(quoted(text)) -> \(quoted(heard)) -> \(quoted(request))")
                 if !ok { wrong.append((wanted ? "MISS" : "FALSE-POSITIVE", voice, text, heard)) }
             }
         }
     }
     print("\n\(total - wrong.count)/\(total) correct")
-    for w in wrong { print("\(pad(w.kind, 14)) \(pad(w.voice, 9)) \(pyRepr(w.text)) => \(pyRepr(w.heard))") }
+    for w in wrong { print("\(pad(w.kind, 14)) \(pad(w.voice, 9)) \(quoted(w.text)) => \(quoted(w.heard))") }
 }
 
 /// Score your clips: `robo_*` must be taken, `other_*` ignored; does each reach the model?
@@ -149,7 +134,7 @@ private func scoreClips(_ folder: URL) throws {
         let ok = (request != nil) == wanted
         let gate = loud >= Listen.minSpeechFrames ? "" : "  BELOW THE GATE: robo would not listen"
         print("\(ok ? "ok " : "BAD") \(pad(name, 12)) loud frames \(String(format: "%2d", loud)) "
-              + "peak \(String(format: "%.3f", levels.max() ?? 0)) | \(pyRepr(heard)) -> \(pyRepr(request))\(gate)")
+              + "peak \(String(format: "%.3f", levels.max() ?? 0)) | \(quoted(heard)) -> \(quoted(request))\(gate)")
         if !ok { wrong.append(name) }
         if !gate.isEmpty { silent.append(name) }
     }
@@ -164,7 +149,7 @@ private let prompts = [("robo", "Robo, what time is it?"), ("robo", "Hey robo, w
                        ("other", "I bought a robot yesterday."), ("other", "The weather is nice today."),
                        ("other", "Let's watch the game tonight."), ("other", "Turn the volume up a little bit.")]
 
-/// 16-bit mono 16 kHz PCM wav of `audio` (what `readWav` and Python's `wave` read).
+/// 16-bit mono 16 kHz PCM wav of `audio` (what `readWav` reads).
 func writeWav(_ audio: [Float], to url: URL) throws {
     var d = Data()
     func put<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
@@ -177,18 +162,18 @@ func writeWav(_ audio: [Float], to url: URL) throws {
 }
 
 /// You read each prompt, as you would to robo, from where you normally sit. `mic` is opened for each
-/// prompt, like Python's `sd.rec`; `input` is Enter, or with `wait` the seconds to pause instead.
+/// prompt; `input` is Enter, or with `wait` the seconds to pause instead.
 func recordClips(to out: URL, mic: () throws -> AudioSource, seconds: Double = 4.0, wait: Double? = nil,
                  input: () -> String? = { readLine() }) throws {
     try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
     for (i, (kind, text)) in prompts.enumerated() {
         let head = "[\(i + 1)/\(prompts.count)]"
         if let wait {
-            print("\(head) Say in \(wait) s: \(pyRepr(text))")
+            print("\(head) Say in \(wait) s: \(quoted(text))")
             fflush(stdout)
             Thread.sleep(forTimeInterval: wait)
         } else {
-            print("\(head) Press Enter, then say: \(pyRepr(text))  ", terminator: "")
+            print("\(head) Press Enter, then say: \(quoted(text))  ", terminator: "")
             fflush(stdout)
             guard input() != nil else { throw EvalError(message: "\nno input to read: use --wait SECONDS to record without Enter") }
         }

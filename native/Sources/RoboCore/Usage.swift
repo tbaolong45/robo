@@ -1,9 +1,9 @@
-// What a run cost, and a daily cap on it. Hermes reports the tokens of a run that completed (in its
+// What a run cost, and a daily cap on it. The agent reports the tokens of a run that completed (in its
 // `run.completed` event; failed and cancelled runs carry none), robo logs one JSON line per finished run
 // in `usage.jsonl` of its data folder, and a cap in ROBO_DAILY_TOKENS stops new runs once today's tokens reach it.
 import Foundation
 
-/// The tokens of one completed run as Hermes counted them, and the model that served it.
+/// The tokens of one completed run as the agent counted them, and the model that served it.
 public struct UsageRecord: Equatable, Sendable {
     public var model: String
     public var input: Int, output: Int, total: Int, cacheRead: Int, cacheWrite: Int
@@ -32,7 +32,7 @@ public enum Usage {
     }
 
     /// One log line (JSON, no newline) for a run that ended `status`, after `seconds` and `steps` tool calls.
-    /// Without a record (the run failed or was cancelled: Hermes counted nothing) the tokens are 0.
+    /// Without a record (the run failed or was cancelled: the agent counted nothing) the tokens are 0.
     public static func line(_ record: UsageRecord?, status: String, seconds: Double, steps: Int, wall: Double,
                             zone: TimeZone = .current) -> String {
         let r = record ?? UsageRecord()

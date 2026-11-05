@@ -47,7 +47,7 @@ struct NudgeText: Equatable {
     var body: String { ([title] + lines + (domain.map { ["↗ \($0)"] } ?? [])).joined(separator: "\n") }
 
     init(_ batch: [NudgeCandidate]) {
-        label = batch.allSatisfy { $0.category == .deadline || $0.category == .event } ? "HEADS-UP ▸" : "WORTH A LOOK ▸"
+        label = batch.allSatisfy { $0.category == .deadline || $0.category == .event } ? "Heads-up" : "Worth a look"
         if let only = batch.first, batch.count == 1 {
             title = only.title
             lines = only.detail.isEmpty ? [] : [only.detail]
@@ -300,7 +300,7 @@ extension RoboWindow {
         card.setNudge(nil)
     }
 
-    /// The menu's 🔔 chip: nudges on or off, kept across restarts.
+    /// The menu's Nudges chip: nudges on or off, kept across restarts.
     func toggleNudges() {
         nudge.state.enabled.toggle()
         nudgeFiles.save(nudge.state)

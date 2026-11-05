@@ -1,5 +1,5 @@
-// Port of tests/test_mind.py, plus the fuzz run replayed on Python's own random sequence and
-// compared with what the Python state machine did (a digest of every state it passed through).
+// The mind, plus a fuzz run on Python's random sequence, compared with a golden digest of every state
+// the retired Python state machine passed through.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -14,8 +14,8 @@ private func runMind(_ events: Event..., start: Double = 0) -> (m: Mind, t: Doub
     return (m, t)
 }
 
-extension PyRandom {
-    /// Python's `Random.choice`: rejection sampling on `getrandbits(k)`, k = bit length of the count.
+extension MersenneTwister {
+    /// Rejection sampling on `getrandbits(k)`, k = bit length of the count.
     fileprivate mutating func choice<T>(_ items: [T]) -> T {
         let k = Int.bitWidth - items.count.leadingZeroBitCount
         var r: Int
@@ -27,7 +27,7 @@ extension PyRandom {
 /// test_fuzz_stays_in_vocab: 200 runs of 50 random events and ticks. Returns FNV-1a of every state
 /// (activity/emotion/talking/label), the visits per activity, and a sum of the clocks.
 private func fuzz(seed: UInt64) -> (digest: UInt64, visits: String, clocks: Double, inVocab: Bool) {
-    var rng = PyRandom(seed: seed)
+    var rng = MersenneTwister(seed: seed)
     var digest: UInt64 = 0xcbf2_9ce4_8422_2325
     var visits: [String: Int] = [:]
     var clocks = 0.0, inVocab = true
@@ -242,12 +242,12 @@ struct MindTests {
         #expect(asleep.activity == .asleep && r.mode == .sleep)
     }
 
-    @Test func eventsCarryPythonsDefaults() {
+    @Test func eventsCarryTheirDefaults() {
         #expect(Event.approvalNeeded("x") == .approvalNeeded("x", id: ""))
         #expect(Event.runEnded(status: "failed") == .runEnded(status: "failed", output: "", error: ""))
     }
 
-    // MARK: golden parity with Python
+    // MARK: goldens
 
     /// Python's `random.Random(seed)` drove the same events through robo.mind; its states hash alike.
     @Test(arguments: [
@@ -256,7 +256,7 @@ struct MindTests {
         (99, 0xb3617f41f324e30e,
          "asleep:167,error:739,idle:681,sleepy:145,talking:1634,thinking:3200,waiting:1742,working:1692", 155084174.24999872),
     ])
-    func fuzzStaysInVocabAndMatchesPython(seed: UInt64, digest: UInt64, visits: String, clocks: Double) {
+    func fuzzStaysInVocabAndMatchesItsGolden(seed: UInt64, digest: UInt64, visits: String, clocks: Double) {
         let got = fuzz(seed: seed)
         #expect(got.inVocab)
         #expect(got.visits == visits)

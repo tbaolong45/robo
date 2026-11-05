@@ -1,8 +1,7 @@
-// Talk to robo's agent (`robo-agent`, which serves the run API Hermes Agent had) over HTTP (`/v1/runs` + SSE events).
-// Port of src/robo/brain.py.
+// Talk to robo's agent (`robo-agent`) over HTTP (`/v1/runs` + SSE events).
 import Foundation
 
-/// A Hermes request failed; the message is safe to show the user.
+/// An agent request failed; the message is safe to show the user.
 public struct BrainError: Error, LocalizedError, Equatable, CustomStringConvertible {
     public let message: String
     public init(_ message: String) { self.message = message }
@@ -55,16 +54,16 @@ struct SSEParser {
     }
 }
 
-/// Minimal client for one Hermes API server. It keeps no per-run state (the caller tracks the run id
+/// Minimal client for one agent server. It keeps no per-run state (the caller tracks the run id
 /// that `ask` reports), only immutable settings, so any number of runs may use one client at once.
-public final class HermesClient: Sendable {
+public final class AgentClient: Sendable {
     private static let terminal = ["run.completed", "run.failed", "run.cancelled", "run.interrupted"]
 
     private let base: String
     private let auth: String
     private let session: URLSession
 
-    public init(baseURL: String, key: String, session: URLSession = HermesClient.makeSession()) {
+    public init(baseURL: String, key: String, session: URLSession = AgentClient.makeSession()) {
         var base = baseURL
         while base.hasSuffix("/") { base.removeLast() }
         self.base = base
@@ -72,7 +71,7 @@ public final class HermesClient: Sendable {
         self.session = session
     }
 
-    /// A session no proxy, cookie jar or redirect can get between robo and Hermes (httpx `trust_env=False`:
+    /// A session no proxy, cookie jar or redirect can get between robo and the agent (httpx `trust_env=False`:
     /// a proxy from the environment must never see the key). URLSession has no separate connect
     /// timeout; a refused loopback connect fails at once, and each request carries its own idle timeout.
     public static func makeSession() -> URLSession {
@@ -90,12 +89,12 @@ public final class HermesClient: Sendable {
         return id
     }
 
-    /// Ask Hermes to stop a run.
+    /// Ask the agent to stop a run.
     public func stop(_ runId: String) async throws {
         _ = try await send("POST", "/v1/runs/\(runId)/stop")
     }
 
-    /// Answer a pending approval. `requestId` (from the `approval.request` event) names the request; without it Hermes
+    /// Answer a pending approval. `requestId` (from the `approval.request` event) names the request; without it the agent
     /// answers the oldest one it has pending, which is not always the one the user saw.
     public func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String = "") async throws {
         var body = ["choice": choice.rawValue]
@@ -105,7 +104,7 @@ public final class HermesClient: Sendable {
 
     /// The run's events; always ends with exactly one `.runEnded` and never throws.
     ///
-    /// A dropped stream is resumed once from the last event id (Hermes replays the rest). If
+    /// A dropped stream is resumed once from the last event id (the agent replays the rest). If
     /// that fails too the run is stopped, so it never keeps going with nobody watching.
     public func events(_ runId: String) -> AsyncThrowingStream<Event, Error> {
         AsyncThrowingStream { out in
@@ -241,7 +240,7 @@ public final class HermesClient: Sendable {
                            cacheWrite: u["cache_write_tokens"] as? Int ?? 0)
     }
 
-    /// Map one Hermes run event to a robo event (nil for ones robo ignores).
+    /// Map one agent run event to a robo event (nil for ones robo ignores).
     static func parse(_ d: [String: Any]) -> Event? {
         guard let name = d["event"] as? String else { return nil }
         switch name {

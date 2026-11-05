@@ -6,20 +6,19 @@ import RoboCore
 import RoboSystem
 import RoboVoice
 
-/// What the window needs from robo's agent: `HermesClient` (behind `AgentKeeper` in the app), or a fake in tests.
-protocol HermesAPI: AnyObject {
+/// What the window needs from robo's agent: `AgentClient` (behind `AgentKeeper` in the app), or a fake in tests.
+protocol AgentAPI: AnyObject {
     func ask(_ text: String, sessionId: String, started: (@Sendable (String) -> Void)?) -> AsyncThrowingStream<Event, Error>
     func stop(_ runId: String) async throws
     func approve(_ runId: String, _ choice: ApprovalChoice, requestId: String) async throws
 }
-extension HermesClient: HermesAPI {}
+extension AgentClient: AgentAPI {}
 
 /// The microphone side: `Listener`, or a fake.
 protocol Ear: AnyObject {
     var running: Bool { get }
     var ready: Bool { get }
-    var handsFree: Bool { get }  // the text being delivered was spoken in a key-less follow-up window
-    func start() -> Bool
+    func start()
     func listenNow()
     func hold()
     func release()
@@ -28,8 +27,8 @@ protocol Ear: AnyObject {
 }
 extension Listener: Ear {}
 
-/// Builds the ear with the window's three callbacks (called from the listener's thread).
-typealias EarFactory = (_ onWake: @escaping () -> Void, _ onText: @escaping (String) -> Void,
+/// Builds the ear with the window's three callbacks (called from the listener's thread). `onText`'s Bool: the text was spoken in a key-less follow-up window.
+typealias EarFactory = (_ onWake: @escaping () -> Void, _ onText: @escaping (String, Bool) -> Void,
                                _ onNote: @escaping (String) -> Void) -> Ear
 
 /// Activity watching: `ActivityWatcher`, or a fake.
@@ -78,8 +77,6 @@ struct Machine {
     /// The LMS posts scan (Scout.swift): the Moodle address when the scan may run (the agent's config.json has one), else nil. The
     /// real one reads that file (read only); the rig answers nil, so no test reads it.
     var postsMoodle: () -> String? = { nil }
-    /// The model robo's agent runs (config.json), for the card's header chip.
-    var model = AgentHome.defaultModel
     var confirmLink: (URL, String) -> Bool = BoxTextView.askToOpen  // the same alert as a link in a reply
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     static let awayS = 300.0
@@ -91,7 +88,7 @@ struct Machine {
     var vaultDir: URL
     var themeFile: URL
     var watchPausedFile: URL  // exists = watching paused
-    var receiptsFile: URL  // what robo-guard recorded of Hermes' state-changing steps (the footer's "✓ sent")
+    var receiptsFile: URL  // what robo-guard recorded of the agent's state-changing steps (the footer's "✓ sent")
     var usageFile: URL  // one line per finished run: tokens, seconds, steps
     var nudgeDir: URL  // agenda.json, nudges.json and reminders.json
     var studyFile: URL  // the study ledger: exams and "snooze nudges until"
@@ -101,7 +98,10 @@ struct Machine {
     /// its text box takes the keyboard. The rig records both and shows nothing.
     var chatOn = true
     var showChat: (ChatPanel, CGRect) -> Void = { $0.present(on: $1) }
-    /// The light blur over the main display while Robo is called (BlurVeil.swift): on or off, and the display's frame (AppKit coordinates).
+    /// Whether the chat's text box has the keyboard (the rig answers for it: its panel is never key).
+    var chatTyping: (ChatPanel) -> Bool = { $0.inputActive }
+    /// The light blur over the main display while Robo listens or the chat's text box has the keyboard (BlurVeil.swift): on or off, and
+    /// the display's frame (AppKit coordinates).
     var blurBackground: (Bool, CGRect) -> Void = { on, frame in
         BlurVeil.shared.set(on, over: frame, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
@@ -131,7 +131,6 @@ struct Machine {
         dailyTokens = Usage.cap(environment, file: ActivityLog.dataDir.appendingPathComponent("daily_tokens"))
         let agent = AgentHome(home: home, env: environment)
         postsMoodle = { Setup.postsMoodle(agent) }
-        model = agent.model
         outputDir = home.appendingPathComponent("Robo")
         vaultDir = Vault.dir(home: home)
         themeFile = Themes.configPath()

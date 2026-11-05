@@ -1,4 +1,4 @@
-// The painting and widget parts of the face (begun as a port of tests/test_face.py and test_look.py; the maths are in
+// The painting and widget parts of the face (the maths are in
 // RoboCoreTests). ROBO_FACE_SHEET=<folder> writes face_sheet.png there: every expression and effect, to look at.
 import AppKit
 import Foundation
@@ -123,65 +123,32 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
             f.setState(activity: a, emotion: e)
             #expect(f.goal == FaceParams.target(a, e))
         }
-        #expect(f.hueFn == nil && f.bg == nil)
+        #expect(f.bg == nil)
     }
 
-    @Test func theHueFunctionGetsTheStateAndTheBaseHue() {
+    @Test func voiceOversShowMenuIsTheRightClick() {
         let f = face()
-        var seen: [(String, String, Double)] = []
-        f.setTheme(hue: { a, e, h in seen.append((a, e, h)); return 99 }, bg: nil)
-        f.setState(activity: .working, emotion: "sad")
-        #expect(seen.last! == ("working", "sad", 216))  // the table's hue, before the theme's
-        #expect(f.goal.hue == 99)
-        var plain = f.goal
-        plain.hue = 216
-        #expect(plain == FaceParams.target(.working, "sad"))  // nothing else changes
-        #expect(f.talking == false)
-        f.setState(activity: .idle, emotion: "neutral", talking: true)
-        #expect(f.talking == true && seen.last! == ("idle", "neutral", 188))
+        var seen: [FaceMouse] = []
+        f.onMouse = { seen.append($0) }
+        #expect(f.accessibilityPerformShowMenu())
+        #expect(seen == [.rightPress])
     }
 
-    @Test func setThemeAppliesToTheStateTheFaceIsIn() {
-        let f = face()
-        f.setState(activity: .idle, emotion: "happy", talking: true)
-        f.setTheme(hue: { _, _, _ in 7 }, bg: nil)
-        #expect(f.goal.hue == 7 && f.talking)
-        #expect(f.frameMS == 40)  // idle's rate: setState ran again
-        f.setTheme(hue: nil, bg: nil)  // back to the plain face
-        #expect(f.goal == FaceParams.target(.idle, "happy") && f.hueFn == nil)
-    }
-
-    // The resting hues the five retired themes had (188, 128, 38, 268, 196): the hue token still moves every neutral pose
-    // and keeps the signal emotions 14 degrees away from it (proud gold lands near 38).
-    @Test(arguments: [(188.0, 168.0, 44.0, 216.0), (128, 108, 44, 216),
-                      (38, 18, 52, 216), (268, 248, 44, 216),
-                      (196, 176, 44, 216)])
-    func theFaceTakesTheThemesHues(_ restingHue: Double, _ happy: Double, _ proud: Double, _ sad: Double) {
-        let neutral = restingHue
-        let key = "hue \(Int(restingHue))"
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("robo-face-theme-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: file) }
-        try? "{\"tokens\": {\"hue\": \(Int(restingHue))}}".write(to: file, atomically: true, encoding: .utf8)
-        let t = Themes.load(path: file)
-        let f = face()
-        f.setTheme(hue: { a, e, h in Themes.hueFor(t, activity: a, emotion: e, base: h) }, bg: nil)
-        for (a, e, hue) in [(Activity.idle, "neutral", neutral), (.idle, "happy", happy), (.idle, "proud", proud),
-                            (.idle, "sad", sad), (.error, "sad", 356)] {  // an error is red in every theme
-            f.setState(activity: a, emotion: e)
-            #expect(abs(f.goal.hue - hue) < 1e-9, "\(key) \(a) \(e)")
+    /// Soft graphite at rest; a colour only for a strong mood, and no royal blue among them.
+    @Test func theFaceIsGraphiteAtRestAndInColourOnlyForAStrongMood() {
+        func chroma(_ a: Activity, _ e: String) -> Double {
+            let g = FaceParams.target(a, e), c = FaceRender.ink(hue: g.hue, sat: g.sat)
+            return max(c.r, c.g, c.b) - min(c.r, c.g, c.b)
         }
-    }
-
-    @Test func snapSkipsTheSweepToTheNewHue() {
-        let c = Clock()
-        let f = face(c)
-        f.setTheme(hue: { _, _, _ in 128 }, bg: nil)
-        #expect(f.params.hue == 188)  // the spring would take about 0.3 s
-        f.setTheme(hue: { _, _, _ in 128 }, bg: nil, snap: true)
-        #expect(f.params.hue == 128 && f.anim.x?[\.hue] == 128 && f.anim.v[\.hue] == 0)
-        c.now += 1.0 / 30
-        f.tick()
-        #expect(abs(f.params.hue - 128) < 0.5)  // and it stays there
+        for (a, e) in [(Activity.idle, "neutral"), (.idle, "happy"), (.idle, "calm"), (.idle, "curious"), (.idle, "confused"),
+                       (.working, "neutral"), (.listening, "neutral"), (.sleepy, "neutral"), (.asleep, "neutral")] {
+            #expect(chroma(a, e) < 0.05, "\(a) \(e)")
+        }
+        for (a, e) in [(Activity.idle, "proud"), (.idle, "concerned"), (.idle, "playful"), (.idle, "sad"), (.error, "neutral")] {
+            #expect(chroma(a, e) > 0.1, "\(a) \(e)")
+        }
+        let sad = FaceParams.target(.idle, "sad")
+        #expect(!(200...240).contains(sad.hue))
     }
 
     @Test func theViewPaintsTheThemesBody() {
@@ -195,10 +162,10 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
             return (Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()),
                     Int((c.blueComponent * 255).rounded()), Int((c.alphaComponent * 255).rounded()))
         }
-        f.setTheme(hue: nil, bg: (blue, blue))
+        f.setTheme(bg: (blue, blue))
         let c = body()
         #expect(abs(c.r - 0x33) <= 1 && abs(c.g - 0x66) <= 1 && abs(c.b - 0x99) <= 1 && c.a == 255)
-        f.setTheme(hue: nil, bg: nil)
+        f.setTheme(bg: nil)
         let white = body()
         #expect(white.r > 220 && white.g > 220 && white.b > 220)
     }
@@ -213,7 +180,7 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
         #expect(seen == [.press, .release])  // what the window reads as a click
     }
 
-    /// The window hands the look to the animator (tests/test_look.py).
+    /// The window hands the look to the animator.
     @Test func theWidgetHandsTheLookToTheAnimator() {
         let c = Clock()
         let f = face(c)
@@ -244,7 +211,7 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
 
 @Suite struct FaceRenderTests {
     @Test func theDefaultBodyIsTheThemesWhite() {
-        #expect(FaceRender.screen == RGBA(r: 255, g: 255, b: 255, a: 255) && FaceRender.bg == RGBA(r: 226, g: 230, b: 237, a: 255))
+        #expect(FaceRender.screen == RGBA(r: 255, g: 255, b: 255, a: 255) && FaceRender.bg == RGBA(r: 246, g: 247, b: 249, a: 255))
         for (a, e) in [(Activity.idle, "neutral"), (.talking, "happy"), (.error, "sad")] {
             let p = FaceParams.target(a, e)
             let plain = paint(p)
@@ -298,7 +265,7 @@ private func contrast(_ a: Double, _ b: Double) -> Double { (max(a, b) + 0.05) /
         func blue(_ x: Double, _ y: Double) -> Bool {
             let (i, j) = canvas(x, y, side: side)
             let c = rgb(px, side, i, j)
-            return c.b > 180 && c.r < 120
+            return c.b > c.r + 15 && c.b < 200  // slate, not the white body
         }
         #expect(blue(270, 80))  // the round part, below the middle of the drop (x = 270, tip at y = 59)
         #expect(!blue(270, 95))  // and nothing hangs below it

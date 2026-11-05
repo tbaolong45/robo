@@ -15,6 +15,8 @@ final class BubbleText: NSView {
     private(set) var contentHeight: CGFloat = 0
     /// The width the text really takes (a short line is narrower than the box), for bubbles that shrink to fit.
     private(set) var usedWidth: CGFloat = 0
+    /// The text draws across the whole box (a code box, a rule, a table, a centred formula): its bubble keeps the box's width.
+    private(set) var spansBox = false
 
     init(width: CGFloat) {
         boxWidth = width
@@ -36,9 +38,9 @@ final class BubbleText: NSView {
     var string: String { textView.string }
     var isBlank: Bool { (textView.textStorage?.length ?? 0) == 0 }
 
-    func style(_ t: Theme) {
-        textView.selectedTextAttributes = [.backgroundColor: Chrome.accent(t, t.hue, 0.35), .foregroundColor: NSColor.labelColor]
-        textView.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
+    func style() {
+        textView.selectedTextAttributes = [.backgroundColor: Chrome.wash(0.2, nil), .foregroundColor: NSColor.labelColor]
+        textView.linkTextAttributes = [.foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
     }
 
     /// Show `s` and lay it out; returns the height it needs (0 when empty).
@@ -48,6 +50,15 @@ final class BubbleText: NSView {
         let trailing = s.length > 0 ? s.attribute(.trailing, at: s.length - 1, effectiveRange: nil) as? [NSAttributedString.Key: Any] : nil
         if let trailing { textView.typingAttributes = trailing }  // the empty last line takes its height from these
         layout.ensureLayout(for: container)
+        spansBox = false
+        let all = NSRange(location: 0, length: s.length)
+        s.enumerateAttributes(in: all) { a, _, stop in
+            let p = a[.paragraphStyle] as? NSParagraphStyle
+            if a[.codeBox] != nil || a[.rule] != nil || a[.ruleEnd] != nil || p?.alignment == .center || p?.textBlocks.isEmpty == false {
+                spansBox = true
+                stop.pointee = true
+            }
+        }
         if s.length == 0 {
             (contentHeight, usedWidth) = (0, 0)
         } else {
@@ -63,8 +74,8 @@ final class BubbleText: NSView {
     }
 }
 
-/// One turn as a rounded bubble: yours on the right in a tint of the face's colour, Robo's on the left in a quiet wash, a failure in
-/// red. The view is `side` wider than the body at each side, room for the soft shadow.
+/// One turn as a rounded bubble: yours on the right in a neutral wash, Robo's on the left in a brighter one, a failure in red. The view
+/// is `side` wider than the body at each side, room for the soft shadow.
 final class BubbleView: NSView {
     enum Look { case you, robo, failed }
 
@@ -75,7 +86,7 @@ final class BubbleView: NSView {
 
     let turnID: Int
     private(set) var look: Look
-    var theme: Theme { didSet { text.style(theme); dots?.theme = theme; needsDisplay = true } }
+    var theme: Theme { didSet { needsDisplay = true } }
     let text: BubbleText
     let reduceMotion: () -> Bool
     private let footerLabel = NSTextField(wrappingLabelWithString: "")
@@ -92,13 +103,13 @@ final class BubbleView: NSView {
         self.reduceMotion = reduceMotion
         text = BubbleText(width: textWidth)
         super.init(frame: .zero)
-        text.style(theme)
+        text.style()
         text.textView.contextMenu = { [weak self] in self?.contextMenu() }
         addSubview(text)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         footerLabel.font = .systemFont(ofSize: 11)
-        footerLabel.textColor = .secondaryLabelColor
+        footerLabel.textColor = Chrome.textDim(nil)
         footerLabel.isSelectable = true
         footerLabel.maximumNumberOfLines = 0
         footerLabel.lineBreakMode = .byWordWrapping
@@ -135,7 +146,8 @@ final class BubbleView: NSView {
     /// Turn the "typing" dots on or off (a Robo turn that has no text yet; what it is doing is in the chat's status line).
     func setWorking(_ working: Bool) {
         if working && dots == nil {
-            let d = TypingDotsView(theme: theme)
+            let d = TypingDotsView()
+            d.colour = { Chrome.textDim(nil) }
             d.reduceMotion = reduceMotion
             addSubview(d)
             dots = d
@@ -178,26 +190,27 @@ final class BubbleView: NSView {
         footerLabel.isHidden = lines.isEmpty
     }
 
-    /// Place the pieces for a column `maxWidth` wide and return the size the view needs. A bubble of yours shrinks to its text; Robo's
-    /// keeps the full width while it is written (so it does not change shape under the reader) and so does a finished one.
-    func measure(maxWidth: CGFloat, shrink: Bool) -> CGSize {
+    /// Place the pieces for a column `maxWidth` wide and return the size the view needs. A bubble is as wide as its text, or the whole
+    /// column when the text draws across it (`BubbleText.spansBox`).
+    func measure(maxWidth: CGFloat) -> CGSize {
         let pad = Self.pad
         let working = dots != nil
         let innerMax = maxWidth - pad.left - pad.right
-        var inner = CGSize(width: shrink ? min(innerMax, max(text.usedWidth, 0)) : innerMax, height: text.contentHeight)
+        var inner = CGSize(width: text.spansBox ? innerMax : min(innerMax, text.usedWidth), height: text.contentHeight)
         if working { inner = CGSize(width: 32, height: 16) }
         let size = CGSize(width: (inner.width + pad.left + pad.right).rounded(.up), height: (inner.height + pad.top + pad.bottom).rounded(.up))
         bubbleSize = size
         let inset = Self.side  // room at both sides for the shadow: the body is drawn this far in
         text.setFrameOrigin(NSPoint(x: inset + pad.left, y: Self.shadowTop + pad.top))
         text.isHidden = working
-        dots?.frame = CGRect(x: inset + pad.left - 5, y: Self.shadowTop + pad.top - 1, width: 32, height: 16)
+        dots?.frame = CGRect(x: inset + pad.left, y: Self.shadowTop + pad.top, width: 32, height: 16)
         var total = CGSize(width: size.width, height: size.height + Self.shadowTop + Self.shadowBottom)
         if !footerLabel.isHidden {
             footerLabel.preferredMaxLayoutWidth = maxWidth
             let h = footerLabel.sizeThatFits(NSSize(width: maxWidth, height: .greatestFiniteMagnitude)).height.rounded(.up)
             footerLabel.frame = CGRect(x: inset + 4, y: Self.shadowTop + size.height + Self.footerGap, width: maxWidth - 4, height: h)
             total.height += Self.footerGap + h
+            total.width = max(total.width, maxWidth)  // the footer may be wider than a short bubble
         }
         return total
     }
@@ -206,22 +219,18 @@ final class BubbleView: NSView {
         let body = CGRect(origin: CGPoint(x: Self.side, y: Self.shadowTop), size: bubbleSize)
         guard body.width > 0 else { return }
         let shape = NSBezierPath(roundedRect: body, xRadius: Chrome.bubbleRadius, yRadius: Chrome.bubbleRadius)
-        // Liquid: a tinted body, a sheen across its upper half like light on a drop, and a thin rim that is bright on top and fades below.
         let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let (top, bottom, rim): (NSColor, NSColor, NSColor)
+        let fill: NSColor, rim: NSColor
         switch look {
         case .you:
-            top = Chrome.accent(theme, theme.hue, dark ? 0.62 : 0.70)
-            bottom = Chrome.accent(theme, theme.hue, dark ? 0.40 : 0.48)
-            rim = NSColor.white.withAlphaComponent(dark ? 0.30 : 0.65)
+            fill = dark ? NSColor.white.withAlphaComponent(0.2) : NSColor.black.withAlphaComponent(0.1)
+            rim = dark ? NSColor.white.withAlphaComponent(0.1) : NSColor.black.withAlphaComponent(0.05)
         case .robo:
-            top = NSColor.white.withAlphaComponent(dark ? 0.16 : 0.74)
-            bottom = NSColor.white.withAlphaComponent(dark ? 0.07 : 0.46)
-            rim = NSColor.white.withAlphaComponent(dark ? 0.26 : 0.85)
+            fill = NSColor.white.withAlphaComponent(dark ? 0.09 : 0.8)
+            rim = dark ? NSColor.white.withAlphaComponent(0.1) : NSColor.black.withAlphaComponent(0.06)
         case .failed:
-            top = NSColor.systemRed.withAlphaComponent(dark ? 0.40 : 0.34)
-            bottom = NSColor.systemRed.withAlphaComponent(dark ? 0.24 : 0.20)
-            rim = NSColor.white.withAlphaComponent(dark ? 0.2 : 0.5)
+            fill = NSColor.systemRed.withAlphaComponent(dark ? 0.36 : 0.18)
+            rim = NSColor.systemRed.withAlphaComponent(0.3)
         }
         // a soft shadow, drawn only outside the bubble (under a translucent body it would show through and dirty the glass)
         NSGraphicsContext.saveGraphicsState()
@@ -230,29 +239,18 @@ final class BubbleView: NSView {
         outside.windingRule = .evenOdd
         outside.addClip()
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.34 : 0.15)
-        shadow.shadowBlurRadius = 7
-        shadow.shadowOffset = NSSize(width: 0, height: -2)  // down, whichever way the view runs
+        shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.28 : 0.10)
+        shadow.shadowBlurRadius = 6
+        shadow.shadowOffset = NSSize(width: 0, height: -1)  // down, whichever way the view runs
         shadow.set()
         NSColor.black.setFill()
         shape.fill()
         NSGraphicsContext.restoreGraphicsState()
-        NSGraphicsContext.saveGraphicsState()
-        shape.addClip()
-        NSGradient(starting: top, ending: bottom)?.draw(in: body, angle: 90)  // flipped view: 90 runs from the top down
-        NSGradient(colors: [NSColor.white.withAlphaComponent(dark ? 0.14 : 0.40), NSColor.white.withAlphaComponent(0)])?
-            .draw(in: CGRect(x: body.minX, y: body.minY, width: body.width, height: body.height * 0.55), angle: 90)
-        NSGraphicsContext.restoreGraphicsState()
-        // the rim: bright over the upper half, a hint below
+        fill.setFill()
+        shape.fill()
+        rim.setStroke()
         shape.lineWidth = 1
-        for (zone, alpha) in [(CGRect(x: body.minX - 1, y: body.minY - 1, width: body.width + 2, height: body.height * 0.5 + 1), 1.0),
-                              (CGRect(x: body.minX - 1, y: body.midY, width: body.width + 2, height: body.height * 0.5 + 1), 0.16)] {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: zone).addClip()
-            rim.withAlphaComponent(rim.alphaComponent * alpha).setStroke()
-            shape.stroke()
-            NSGraphicsContext.restoreGraphicsState()
-        }
+        shape.stroke()
     }
 
     /// The pop-in of a new bubble: it rises a few points and fades in with a spring. Reduce Motion skips it.

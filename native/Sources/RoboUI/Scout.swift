@@ -3,7 +3,7 @@
 // reminders and the nudge budget take over. The strict half (what a reply may hold, the plan of the day) is `LMSPosts` in RoboCore;
 // this is the window's side of it:
 //   - OFF until the agent's config.json has a Moodle address (`machine.postsMoodle`, `robo setup --moodle URL`), and while the
-//     🔔 Nudges chip is off. The first tick after 07:00 local starts the day's first step, one run at a time: the course list (read
+//     Nudges chip is off. The first tick after 07:00 local starts the day's first step, one run at a time: the course list (read
 //     again every 7 days), then one run per course (the user chose a daily scan and no backfill: a course never scanned reads back
 //     one day, a course scanned before reads back to its last good scan).
 //   - a run is read-only and unattended: its own session (post text from one course never reaches the next run's context), every
@@ -31,12 +31,12 @@ struct ScoutReply: Sendable {
 final class Scout: @unchecked Sendable {
     static let limitS = 20.0 * 60
 
-    private let hermes: HermesAPI
+    private let agent: AgentAPI
     private let lock = NSLock()
     private var runID: String?
     private var cancelled = false, timedOut = false
 
-    init(hermes: HermesAPI) { self.hermes = hermes }
+    init(agent: AgentAPI) { self.agent = agent }
 
     /// The user asked for something: stop the run (now, or as soon as it has an id).
     func cancel() { halt(timedOut: false) }
@@ -46,7 +46,7 @@ final class Scout: @unchecked Sendable {
             if late { timedOut = true } else { cancelled = true }
             return runID
         }
-        if let id { Task { [hermes] in try? await hermes.stop(id) } }
+        if let id { Task { [agent] in try? await agent.stop(id) } }
     }
 
     private func started(_ id: String) {
@@ -54,13 +54,13 @@ final class Scout: @unchecked Sendable {
             runID = id
             return cancelled || timedOut
         }
-        if stopNow { Task { [hermes] in try? await hermes.stop(id) } }
+        if stopNow { Task { [agent] in try? await agent.stop(id) } }
     }
 
     /// Nobody can answer during an unattended run: every ask is denied at once, by its id.
     private func deny(_ id: String) {
         guard let run = lock.withLock({ runID }) else { return }
-        Task { [hermes] in try? await hermes.approve(run, .deny, requestId: id) }
+        Task { [agent] in try? await agent.approve(run, .deny, requestId: id) }
     }
 
     /// Ask the agent `prompt` in a session of its own and wait for the end of the run.
@@ -72,7 +72,7 @@ final class Scout: @unchecked Sendable {
             if !Task.isCancelled { halt(timedOut: true) }
         }
         do {
-            for try await event in hermes.ask(prompt, sessionId: session, started: { [self] id in started(id) }) {
+            for try await event in agent.ask(prompt, sessionId: session, started: { [self] id in started(id) }) {
                 switch event {
                 case .delta(let text): streamed += text
                 case .toolStarted: reply.steps += 1
@@ -142,7 +142,7 @@ extension RoboWindow {
         case .list: prompt = LMSPosts.listPrompt
         case .scan(let course, let since): prompt = LMSPosts.scanPrompt(course, since: since, today: day)
         }
-        let run = Scout(hermes: hermes)
+        let run = Scout(agent: agent)
         scout.running = run
         let (usageFile, bridge, clock) = (machine.usageFile, bridge, machine.wall)
         let session = "robo-posts-\(UUID().uuidString.prefix(8))"
