@@ -1,10 +1,10 @@
-// Typewriter reveal of Robo's reply. Port of src/robo/typewriter.py: pure, and the class never reads a clock.
+// Typewriter reveal of Robo's reply: pure, and the class never reads a clock.
 //
-// A reply is a Markdown string that grows while Hermes streams it. `Typewriter` decides how much of
+// A reply is a Markdown string that grows while the agent streams it. `Typewriter` decides how much of
 // it is on screen at each moment; `markdownPrefix` turns "the first k characters" into a Markdown
 // string that renders cleanly (no `**` or empty bullets flashing by).
 //
-// Python indexes code points, so everything here works on arrays of Unicode scalars, never on
+// Everything here works on arrays of Unicode scalars, never on
 // Characters (Swift's grapheme clusters would give other positions for emoji and combining marks).
 //
 // Schedule: every character gets a reveal time r[i] (seconds of "base pace"):
@@ -14,7 +14,7 @@
 //     fence) WITH the previous one, so a prefix never ends inside a mark;
 //   * pauses (added before the NEXT character): after . ? ! and an ellipsis 0.20 s, after , ; :
 //     0.07 s, after a newline 0.08 s, after a blank line 0.18 s; none inside code blocks.
-// Playback: a position `played` (schedule seconds) moves at 1x, faster when Hermes is ahead of the
+// Playback: a position `played` (schedule seconds) moves at 1x, faster when the agent is ahead of the
 // reveal: speed = clamp(backlog / time constant, 1, cap). One rule, an exponential catch-up, so a
 // long reply eases back to base pace instead of ending in a flash.
 import Foundation
@@ -27,7 +27,7 @@ public struct Pace: Equatable {
     public var line = 0.08  // after a newline
     public var para = 0.18  // after a blank line
     public var codeSpeed = 2.2  // code blocks type this many times faster
-    public var lag = 2.0  // time constant of the catch-up while Hermes streams (s)
+    public var lag = 2.0  // time constant of the catch-up while the agent streams (s)
     public var maxStream = 6.0  // speed cap while streaming (x base)
     public var finish = 1.0  // time constant once the run has ended (s)
     public var maxFinish = 8.0  // speed cap once the run has ended (x base)
@@ -65,7 +65,7 @@ public final class Typewriter {
     public var started: Bool { k > 0 }
     public var pending: Bool { k < chars.count }
     public var done: Bool { ended && !pending }
-    /// Caught up with Hermes but the run goes on: the caret blinks.
+    /// Caught up with the agent but the run goes on: the caret blinks.
     public var waiting: Bool { !ended && k >= m }
     /// A visible character appeared in the last `talkGap` s: the mouth moves.
     public var revealing: Bool { clock - lastVis <= pace.talkGap }
@@ -142,7 +142,7 @@ public final class Typewriter {
 }
 
 /// First index whose element satisfies `isPast`, in an array where that is false and then true:
-/// Python's `bisect`.
+/// Binary search: the first index whose reveal time is past.
 private func firstIndex(in r: [Double], where isPast: (Double) -> Bool) -> Int {
     var lo = 0, hi = r.count
     while lo < hi {
@@ -251,9 +251,9 @@ extension Typewriter {
                 carry = ch == "\n" ? 0.03 : 0
             } else if ch == "\n" {
                 carry = nxt == "\n" ? 0 : (prev == "\n" ? pace.para : pace.line)
-            } else if stops.contains(ch) && (nxt.isPySpace || closers.contains(nxt)) {
+            } else if stops.contains(ch) && (nxt.isSpace || closers.contains(nxt)) {
                 carry = pace.sentence
-            } else if clauses.contains(ch) && nxt.isPySpace {
+            } else if clauses.contains(ch) && nxt.isSpace {
                 carry = pace.clause
             }
             prev = ch
@@ -280,7 +280,7 @@ extension Typewriter {
     }
 }
 
-// The line scanners below replace Python's regexes. They are written for code points, as `re` is.
+// The line scanners below are written for code points.
 
 /// A code-fence line: up to 3 spaces, then a run of 3 or more backticks or tildes.
 private func fenceRun(_ line: [Unicode.Scalar]) -> (ch: Unicode.Scalar, len: Int)? {
@@ -349,7 +349,7 @@ private func links(_ line: [Unicode.Scalar]) -> [(a: Int, z: Int, close: Int?)] 
 
 /// The inline marks of `line` from `start` on, left to right and not overlapping. A `*` is a mark
 /// when a non-space follows it or a non-space, non-`*` precedes it (the look-behind may see
-/// characters before `start`, as in Python).
+/// characters before `start`).
 private func inlineMarks(_ s: [Unicode.Scalar], from start: Int) -> [(at: Int, mark: Typewriter.Mark)] {
     var out: [(at: Int, mark: Typewriter.Mark)] = []
     var i = start
@@ -359,8 +359,8 @@ private func inlineMarks(_ s: [Unicode.Scalar], from start: Int) -> [(at: Int, m
         switch s[i] {
         case "*":
             if next == "*" { mark = .bold }
-            else if let c = next, !c.isPySpace { mark = .star }
-            else if i > 0, !s[i - 1].isPySpace, s[i - 1] != "*" { mark = .star }
+            else if let c = next, !c.isSpace { mark = .star }
+            else if i > 0, !s[i - 1].isSpace, s[i - 1] != "*" { mark = .star }
         case "_": if next == "_" { mark = .under }
         case "~": if next == "~" { mark = .strike }
         case "`": mark = .tick
@@ -407,7 +407,7 @@ extension Typewriter {
     /// the line wraps when its first letter appears, not when its last one does.
     static func markdownPrefix(_ text: [Unicode.Scalar], _ kind: [Kind], _ k: Int) -> (markdown: String, hidden: Int) {
         var i = k
-        while i < text.count, i - k < wordMax, kind[i] == .visible, !text[i].isPySpace { i += 1 }
+        while i < text.count, i - k < wordMax, kind[i] == .visible, !text[i].isSpace { i += 1 }
         let body = Array(text[..<i])
         let close = closing(body)
         var cut = body.count
@@ -418,4 +418,9 @@ extension Typewriter {
         let hidden = text[k..<i].reduce(0) { $0 + ($1.value > 0xFFFF ? 2 : 1) }  // UTF-16 units
         return (String(String.UnicodeScalarView(md)), hidden)
     }
+}
+
+extension Unicode.Scalar {
+    /// Unicode White_Space plus the four ASCII separators U+001C-U+001F.
+    var isSpace: Bool { properties.isWhitespace || (0x1c...0x1f).contains(value) }
 }

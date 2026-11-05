@@ -1,4 +1,4 @@
-// Expression table: (activity, emotion) -> target FaceParams. Port of src/robo/face/expressions.py.
+// Expression table: (activity, emotion) -> target FaceParams.
 //
 // Units: eyeW/eyeH/mouthW are scale factors (1 = default), gaze in -1..1, lids 0..1,
 // lidAngle > 0 lowers the inner lid edge (focused/cross), < 0 raises it (sad/worried),
@@ -21,8 +21,8 @@ public struct FaceParams: Equatable, Sendable {
     public var mouthCurve = 0.15
     public var mouthOpen = 0.0
     public var mouthW = 1.0
-    public var hue = 188.0
-    public var sat = 0.85
+    public var hue = 215.0  // a whisper of cool in the graphite; a strong mood brings its own hue and saturation
+    public var sat = 0.08
     public var glow = 0.8
     public var wander = 0.0  // how much the animator lets the gaze drift
     public var bob = 0.0  // breathing offset, set by the animator
@@ -55,9 +55,9 @@ public struct FaceParams: Equatable, Sendable {
                                 \.mouthCurve: 0.25]),
         .error: Spec(values: [\.eyeW: 0.9, \.eyeH: 0.75, \.lidTop: 0.15, \.lidAngle: -0.35, \.mouthCurve: -0.45,
                               \.mouthW: 0.8, \.hue: 356.0, \.sat: 0.75], fx: ["sweat"]),
-        .sleepy: Spec(values: [\.lidTop: 0.55, \.gazeY: 0.3, \.glow: 0.5, \.sat: 0.65, \.mouthW: 0.6,
+        .sleepy: Spec(values: [\.lidTop: 0.55, \.gazeY: 0.3, \.glow: 0.5, \.mouthW: 0.6,
                                \.mouthCurve: 0.05]),
-        .asleep: Spec(values: [\.eyeH: 0.1, \.eyeRound: 1.0, \.gazeY: 0.45, \.glow: 0.35, \.sat: 0.55,
+        .asleep: Spec(values: [\.eyeH: 0.1, \.eyeRound: 1.0, \.gazeY: 0.45, \.glow: 0.35,
                                \.mouthW: 0.45, \.mouthCurve: 0.0], fx: ["zzz"]),
     ]
 
@@ -65,7 +65,7 @@ public struct FaceParams: Equatable, Sendable {
     // (unless the activity owns the colour, e.g. error).
     private static let emotionSpecs: [String: Spec] = [
         "neutral": Spec(values: [:]),
-        "happy": Spec(values: [\.lidBottom: 0.55, \.eyeH: 0.05, \.mouthCurve: 0.85, \.mouthW: 0.15, \.hue: 168.0],
+        "happy": Spec(values: [\.lidBottom: 0.55, \.eyeH: 0.05, \.mouthCurve: 0.85, \.mouthW: 0.15],
                       fx: ["blush"]),
         "curious": Spec(values: [\.skew: 0.4, \.gazeX: 0.35, \.gazeY: -0.15, \.eyeH: 0.12, \.mouthW: -0.5,
                                  \.mouthOpen: 0.2, \.mouthCurve: -0.05]),
@@ -78,9 +78,9 @@ public struct FaceParams: Equatable, Sendable {
         "playful": Spec(values: [\.lidBottom: 0.45, \.wink: 1.0, \.gazeX: -0.3, \.mouthCurve: 0.75,
                                  \.mouthOpen: 0.35, \.hue: 318.0, \.sat: 0.45], fx: ["blush"]),
         "sad": Spec(values: [\.lidTop: 0.22, \.lidAngle: -0.6, \.gazeY: 0.4, \.eyeH: -0.08, \.mouthCurve: -0.85,
-                             \.mouthW: -0.2, \.glow: -0.2, \.hue: 216.0, \.sat: 0.8]),
+                             \.mouthW: -0.2, \.glow: -0.2, \.hue: 258.0, \.sat: 0.3]),  // dusk, not blue
         "calm": Spec(values: [\.lidTop: 0.4, \.mouthCurve: 0.35, \.mouthW: -0.25, \.glow: -0.2,
-                              \.wander: -0.6, \.hue: 176.0, \.sat: 0.6]),
+                              \.wander: -0.6]),
     ]
 
     private static let limits: [(FaceKey, ClosedRange<Double>)] = [

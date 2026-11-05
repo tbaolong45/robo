@@ -1,11 +1,10 @@
-// Is the Hermes gateway answering? One tiny GET now and then, reported as ok / warn / bad.
-// Port of src/robo/health.py.
+// Is robo's agent answering? One tiny GET now and then, reported as ok / warn / bad.
 import Foundation
 
-/// What the HERMES header light shows: answering, one miss (amber), two misses in a row (red).
+/// What the agent's header light shows: answering, one miss (amber), two misses in a row (red).
 public enum HealthState: String, Sendable { case ok, warn, bad }
 
-/// Polls `<gateway>/health` on its own task and calls `onState` from there (the app must hop to
+/// Polls `<agent>/health` on its own task and calls `onState` from there (the app must hop to
 /// the main actor). The first failure is `.warn`, the second in a row `.bad`; failures re-poll
 /// after `retry` seconds, a good poll waits `every`.
 public final class HealthPoller: @unchecked Sendable {
@@ -19,14 +18,16 @@ public final class HealthPoller: @unchecked Sendable {
     private let lock = NSLock()
     private var napping: Task<Void, Never>?  // the wait in progress, so a poke can cut it short
     private var poked = false
-    private var stopped = false  // like Python's _stop: nothing clears it, so stop() before start() sticks
+    private var stopped = false  // nothing clears it, so stop() before start() sticks
     private(set) var task: Task<Void, Never>?
 
     /// `fetch` and `sleep` are injectable so tests need no network and no real time.
     public init(url: String, onState: @escaping @Sendable (HealthState) -> Void, every: Double = 20,
                 retry: Double = 5, fetch: @escaping Fetch = HealthPoller.status,
                 sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
-        health = url.components(separatedBy: "/p/")[0] + "/health"  // as setup._wait_healthy; no key needed
+        var base = url
+        while base.hasSuffix("/") { base.removeLast() }
+        health = base + "/health"  // no key needed
         self.onState = onState
         self.every = every
         self.retry = retry
@@ -34,7 +35,7 @@ public final class HealthPoller: @unchecked Sendable {
         self.sleep = sleep
     }
 
-    /// Begin polling. Only the first call does anything (Python raises on a second one), and none
+    /// Begin polling. Only the first call does anything, and none
     /// does after `stop()`.
     public func start() {
         lock.withLock {
@@ -78,7 +79,7 @@ public final class HealthPoller: @unchecked Sendable {
 
     // MARK: the default getter
 
-    private static let session = HermesClient.makeSession()
+    private static let session = AgentClient.makeSession()
 
     /// A GET with a short timeout and no credentials, so no key can leak to a health check.
     static func request(_ url: URL) -> URLRequest {

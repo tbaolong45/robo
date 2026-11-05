@@ -45,7 +45,7 @@ final class RoboPanel: NSPanel {
         let function = event.characters?.unicodeScalars.first.map { (0xF700...0xF8FF).contains($0.value) } ?? false
         if event.keyCode == 53 {
             onEscape?()
-        } else if flags.contains(.command) || function {
+        } else if flags.contains(.command) || function || firstResponder is ButtonView {  // a focused button takes Tab, Space, Return
             super.sendEvent(event)
         }
     }
@@ -60,12 +60,7 @@ final class RootView: NSView {
 final class Bridge {
     weak var window: RoboWindow?
     func event(_ ev: Event) { DispatchQueue.main.async { [weak window] in window?.onEvent(ev) } }
-    func heard(_ text: String) { DispatchQueue.main.async { [weak window] in window?.onHeard(text) } }
+    func heard(_ text: String, handsFree: Bool) { DispatchQueue.main.async { [weak window] in window?.onHeard(text, handsFree: handsFree) } }
     func note(_ text: String) { DispatchQueue.main.async { [weak window] in window?.onNote(text) } }
     func link(_ state: HealthState) { DispatchQueue.main.async { [weak window] in window?.onLink(state) } }
-    func calendar(_ fetched: CalendarRefresh) { DispatchQueue.main.async { [weak window] in window?.onCalendar(fetched) } }
-    func radar(_ found: RadarOutcome, day: String) { DispatchQueue.main.async { [weak window] in window?.onRadar(found, day: day) } }
-    func scout(_ step: LMSPosts.Step, _ reply: ScoutReply, host: String, day: String) {
-        DispatchQueue.main.async { [weak window] in window?.onScout(step, reply, host: host, day: day) }
-    }
 }

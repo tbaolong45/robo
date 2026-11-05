@@ -1,28 +1,19 @@
-// `robo` opens the floating robo. `robo setup` prepares Hermes, `robo signin` opens robo's Brave for school
-// sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on this laptop,
-// `robo plan` packs study blocks into free time (JSON in, JSON out), `robo calendar` keeps the calendar links
-// of the deadline nudges, `robo voice-eval` scores the voice pipeline. Thin on purpose: every command lives in its own module (cli.py).
+// `robo` opens the floating robo. `robo setup` prepares its chat service and the login item, `robo key` stores the DeepSeek key,
+// `robo chat` is a text-only REPL, `robo voice-eval` scores the voice pipeline. Thin on purpose: every command lives in its own module.
 import Foundation
-import RoboCore
 import RoboSystem
 import RoboUI
 import RoboVoice
 
 let usage = """
-    usage: robo [-h] [--moodle URL] [--days DAYS] [--day DAY]
-                [{setup,signin,chat,activity,plan,calendar,voice-eval}]
+    usage: robo [-h] [{setup,key,chat,voice-eval}]
 
-    `robo` opens the floating robo. `robo setup` prepares Hermes, `robo signin` opens robo's Brave
-    for school sign-ins, `robo chat` is a text-only REPL, `robo activity` summarises what you did on
-    this laptop, `robo plan` packs study blocks into free time (JSON in, JSON out), `robo calendar`
-    keeps your calendar links for the deadline nudges (`add URL [--label NAME]`, `list`, `remove LABEL`,
-    `check`; the links go into a private file and are never printed).
+    `robo` opens the floating robo. `robo setup` prepares robo's chat service and the login item, `robo key`
+    stores the DeepSeek API key (`set deepseek`: the key is read from the terminal, not shown, or from stdin;
+    `status` says only set or not set), `robo chat` is a text-only REPL, `robo voice-eval` scores the voice pipeline.
 
     options:
       -h, --help    show this help message and exit
-      --moodle URL  with setup: your Moodle address
-      --days DAYS   with activity: how many days
-      --day DAY     with activity: last day
 
     """
 
@@ -31,19 +22,10 @@ let command = args.isEmpty ? nil : args.removeFirst()
 switch command {
 case nil:
     exit(RoboApp.run())
-case "plan":  // robo plan --tasks ... --busy ... (used by the study-plan skill)
-    let out = planMain(args)
-    FileHandle.standardOutput.write(Data(out.stdout.utf8))
-    FileHandle.standardError.write(Data(out.stderr.utf8))
-    exit(out.status)
-case "activity":
-    exit(runActivity(args))
 case "setup":
     exit(runSetup(args))
-case "signin":
-    exit(runSignin())
-case "calendar":
-    exit(await runCalendar(args))
+case "key":
+    exit(runKey(args))
 case "chat":
     exit(await chatMain())
 case "voice-eval":
@@ -53,6 +35,6 @@ case "-h", "--help":
     exit(0)
 default:
     Host.warn("\(usage)robo: error: argument command: invalid choice: '\(command!)' "
-              + "(choose from setup, signin, chat, activity, plan, calendar, voice-eval)")
+              + "(choose from setup, key, chat, voice-eval)")
     exit(2)
 }

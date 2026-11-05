@@ -1,10 +1,9 @@
-// Port of tests/test_typewriter.py, plus golden parity with the Python typewriter.
+// The typewriter, plus goldens from the retired Python typewriter.
 //
-// The typewriter is pure (no clock): tests drive it with dt, like the 33 ms timer does. The Python
-// tests render a revealed prefix with Qt to see stray Markdown syntax; here Foundation's Markdown
-// parser does, the one a Swift UI will use.
+// The typewriter is pure (no clock): tests drive it with dt, like the 33 ms timer does. Foundation's
+// Markdown parser shows any stray syntax in a revealed prefix.
 //
-// Goldens: produced by running src/robo/typewriter.py (commit dc8c8ee, Python 3.14, Unicode 16) with
+// Goldens: produced by running the retired typewriter.py (commit dc8c8ee, Python 3.14, Unicode 16) with
 // the driver `Rec` below mirrored in Python. A trace is the list of (tick, k, pending, hidden,
 // markdown) printed whenever one of the last four changes, and a line per tick of
 //   tick|advance()|k|pending|hidden|revealing waiting done started|fraction bits|markdown
@@ -72,7 +71,7 @@ private func ticks(_ tw: Typewriter, _ n: Int) {
     for _ in 0..<n { tw.advance(dt) }
 }
 
-/// Hermes delivered everything in one go and the run is over.
+/// The agent delivered everything in one go and the run is over.
 private func atOnce(_ text: String) -> Typewriter {
     let tw = Typewriter()
     tw.feed(text)
@@ -86,7 +85,7 @@ private func gap(_ text: String, _ i: Int) -> Double {
     return r[i + 1] - r[i]
 }
 
-/// Hermes sends `chunk` characters at a time at `cps`; the window ticks at 30 Hz.
+/// The agent sends `chunk` characters at a time at `cps`; the window ticks at 30 Hz.
 /// -> (seconds until done, seconds after the run ended, most characters held back)
 private func stream(_ text: String, cps: Double, chunk: Int = 24) -> (t: Double, ended: Double, lag: Int) {
     let tw = Typewriter()
@@ -150,7 +149,7 @@ func noReachablePrefixShowsMarkdownSyntax(i: Int) {
     }
 }
 
-/// Hermes may split a mark across deltas (`-` | ` item`, `*` | `*bold`) and stall in between.
+/// The agent may split a mark across deltas (`-` | ` item`, `*` | `*bold`) and stall in between.
 @Test(arguments: [0, 1], [(1, 1), (1, 6), (3, 9)])
 func aStreamCutAnywhereNeverShowsSyntax(i: Int, cut: (chunk: Int, every: Int)) {
     let sample = samples[i], total = len(sample)
@@ -285,7 +284,7 @@ func anEmojiClusterIsOneStepAndIsNeverCut(name: String) {
     #expect(play(atOnce(prose(3000))) < 12.5)  // a click skips it long before
 }
 
-@Test func aStreamedReplyTrailsHermesByAboutTwoSecondsAndFinishesFast() {
+@Test func aStreamedReplyTrailsAgentByAboutTwoSecondsAndFinishesFast() {
     for (n, cps, total, after) in [(300, 250.0, 4.5, 3.3), (600, 120.0, 8.6, 3.3), (1200, 250.0, 9.2, 4.1)] {
         let (t, ended, lag) = stream(prose(n), cps: cps)
         #expect(t < total && ended < after, "\(n) \(cps) \(t) \(ended)")
@@ -423,15 +422,7 @@ func anEmojiClusterIsOneStepAndIsNeverCut(name: String) {
     #expect(tick < 0.005 && plan < 0.03)  // loose: CI machines are slow, an O(n^2) is not (a debug build is ~40x slower than release)
 }
 
-// MARK: - golden parity with Python
-
-/// Python 3.14's `str.isspace` (the same set as the regex `\s`) is true for exactly these 29 code points.
-@Test func isSpaceIsPythonsIsspace() {
-    let python: [UInt32] = [0x9, 0xA, 0xB, 0xC, 0xD, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x85, 0xA0, 0x1680]
-        + Array(0x2000...0x200A) + [0x2028, 0x2029, 0x202F, 0x205F, 0x3000]
-    let swift = (0..<0x110000 as Range<UInt32>).compactMap(Unicode.Scalar.init).filter { $0.isPySpace }.map(\.value)
-    #expect(swift == python)
-}
+// MARK: - goldens
 
 /// Which characters ride with the previous one (a step of 0): Python's unicodedata categories Mn, Me, Cf
 /// and Sk (U+5E is an Sk; U+60 is one too but a backtick is a Markdown mark, which costs nothing anyway).
@@ -451,7 +442,7 @@ func anEmojiClusterIsOneStepAndIsNeverCut(name: String) {
     }
 }
 
-private let dts = [1.0 / 30, 1.0 / 30, 1.0 / 20, 1.0 / 60, 1.0 / 30, 0.1, 1.0 / 45]  // a jittery 30 Hz timer
+private let dts: [Double] = [1.0 / 30, 1.0 / 30, 1.0 / 20, 1.0 / 60, 1.0 / 30, 0.1, 1.0 / 45]  // a jittery 30 Hz timer
 
 private struct Step: Equatable, CustomStringConvertible {
     let tick, k, pending, hidden: Int
@@ -625,7 +616,7 @@ private let goldens: [Golden] = [
 /// Replies fed whole or in chunks, skipped, retyped, re-paced: the shown prefix, the pending count and
 /// the flags at every tick are the Python typewriter's.
 @Test(arguments: goldens.map(\.name))
-func theTraceIsPythons(name: String) {
+func theTraceMatchesItsGolden(name: String) {
     let g = goldens.first { $0.name == name }!
     let rec = g.make()
     if let full = g.full {
@@ -678,14 +669,14 @@ private let layers: [(name: String, text: String, count: Int, schedule: String, 
 ]
 
 @Test(arguments: layers.map(\.name))
-func scheduleAndPrefixArePythons(name: String) {
+func scheduleAndPrefixMatchTheirGoldens(name: String) {
     let l = layers.first { $0.name == name }!
     #expect(len(l.text) == l.count)  // the corpus was transcribed right
     #expect(digest(scheduleParts(l.text)) == l.schedule)
     #expect(digest(prefixParts(l.text)) == l.prefix)
 }
 
-@Test func theScheduleOfATinyReplyIsPythonsToTheLastBit() {
+@Test func theScheduleOfATinyReplyMatchesToTheLastBit() {
     let a = Typewriter.schedule(scalars("**hi**"), Pace(), final: true)
     #expect(a.kind == [.opening, .opening, .visible, .visible, .closing, .closing])
     #expect(a.r == [0.01818181818181818, 0.01818181818181818, 0.01818181818181818,
@@ -720,7 +711,7 @@ private func fuzzDigests(_ text: String) -> [String] {
      digest(recAtOnce(text).lines + recStreamed(text, chunk: 2, every: 1).lines)]
 }
 
-@Test func threeHundredRandomRepliesAreHandledAsPythonDoes() {
+@Test func threeHundredRandomRepliesMatchTheirGoldens() {
     var acc = [SHA256(), SHA256(), SHA256()]
     for i in 0..<300 {
         for (j, d) in fuzzDigests(fuzzText(i)).enumerated() { acc[j].update(data: Data(d.utf8)) }

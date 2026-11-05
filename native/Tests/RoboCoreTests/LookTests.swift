@@ -1,6 +1,5 @@
-// Port of tests/test_look.py: where robo's eyes point (at the cursor while it moves, along its walk,
-// else free glances), plus golden values from the Python `look_at` and animator.
-// Not ported: test_the_widget_hands_the_look_to_the_animator (it needs FaceWidget/QApplication).
+// Where robo's eyes point (at the cursor while it moves, along its walk,
+// else free glances), plus golden values from the retired Python build.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -84,10 +83,10 @@ struct LookTests {
         #expect(r.heading == 0)
     }
 
-    // MARK: golden parity with Python
+    // MARK: goldens
 
     // look_at(centre (500, 500), cursor, still_s, heading), printed with "%.13g"
-    @Test func lookAtMatchesPython() {
+    @Test func lookAtMatchesItsGolden() {
         let golden: [(Vec, Double, Int, Vec?)] = [
             (Vec(900, 500), 0, 0, Vec(0.72, 0)),
             (Vec(500, 100), 0, 0, Vec(0, -0.72)),
@@ -111,7 +110,7 @@ struct LookTests {
     }
 
     /// The eyes follow a look for 100 frames, free-glance for 100, then follow another.
-    @Test func lookTraceMatchesPython() {
+    @Test func lookTraceMatchesItsGolden() {
         let idle = FaceParams.target(.idle, "neutral")
         let frames = goldenFrames(300, dt: 1.0 / 30, target: { _ in idle },
                                   look: { $0 <= 100 ? Vec(0.9, 0) : $0 <= 200 ? nil : Vec(-0.4, 0.3) })

@@ -293,7 +293,7 @@ final class ParakeetModel {
 
     /// The text of 16 kHz mono `audio`, as onnx-asr's `recognize` writes it (no levelling, no strip).
     func transcribe(_ audio: [Float]) throws -> String {
-        if audio.count < MelFrontEnd.hop { return "" }  // no feature frame (Python gives "" or raises IndexError)
+        if audio.count < MelFrontEnd.hop { return "" }  // no feature frame ()
         let tokens = try decode(encode(mel.features(audio)))
         return spaced(tokens.map { vocab[$0] }.joined())
     }
@@ -344,7 +344,7 @@ final class ParakeetModel {
 }
 
 /// Parakeet TDT 0.6B v2 on this laptop. Loads in a second or two from the Hugging Face cache
-/// (~650 MB, downloaded once by the Python app: this port does not download).
+/// (~650 MB, fetched by hand: the app does not download it).
 public final class Parakeet {
     private let recognize: ([Float]) throws -> String
 
@@ -362,7 +362,7 @@ public final class Parakeet {
             .appendingPathComponent(".cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx")
         guard let revision = try? String(contentsOf: repo.appendingPathComponent("refs/main"), encoding: .utf8) else {
             throw VoiceError("the speech model is not downloaded yet (expected in \(repo.path)); "
-                             + "start the Python robo once to fetch it")
+                             + "download it once with `uvx --from huggingface_hub hf download istupakov/parakeet-tdt-0.6b-v2-onnx`")
         }
         return repo.appendingPathComponent("snapshots/\(trimmed(revision))")
     }

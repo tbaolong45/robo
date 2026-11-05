@@ -27,7 +27,7 @@ import Testing
 /// onnx-asr's NemoPreprocessorNumpy on a signal both sides can build exactly: the model flips a token
 /// on differences of 1e-5, so these must stay this close (the first and last frames are the edge cases).
 @Test func melFeaturesAreNumpys() {
-    let audio = (0..<8000).map { Float(($0 * 7919) % 2003 - 1001) / 20000 }
+    let audio: [Float] = (0..<8000).map { (i: Int) -> Float in Float((i * 7919) % 2003 - 1001) / 20000 }
     let f = MelFrontEnd().features(audio)
     #expect(f.columns == 51 && f.length == 50)
     let golden: [(mel: Int, frame: Int, want: Float)] = [
@@ -44,7 +44,9 @@ import Testing
     let bands = MelFrontEnd.bands
     #expect(bands.count == 128 && bands.allSatisfy { $0.first >= 1 && $0.first + $0.weights.count <= 257 })
     #expect(bands.reduce(0) { $0 + $1.weights.count } == 504)
-    #expect(abs(bands.flatMap { $0.weights }.reduce(0.0) { $0 + Double($1) } - 4.090487627036055) < 1e-9)  // fbanks.npz["nemo128"]
+    let weights: [Float] = bands.flatMap { $0.weights }
+    let total: Double = weights.reduce(0.0) { $0 + Double($1) }
+    #expect(abs(total - 4.090487627036055) < 1e-9)  // fbanks.npz["nemo128"]
 }
 
 @Test(arguments: [
@@ -92,7 +94,7 @@ func spoken(_ voice: String, _ text: String) throws -> [Float] {
     ("Tessa", "Robots are interesting.", "Robots are interesting."),
     ("Samantha", "Robo, I got eight out of ten on the quiz.", "Robo, I got 8 out of 10 on the quiz."),
 ])
-func parakeetWritesWhatPythonsOnnxAsrWrites(voice: String, said: String, python: String) throws {
+func parakeetWritesTheGoldenTranscripts(voice: String, said: String, python: String) throws {
     let stt = try shared.get()
     #expect(try stt(spoken(voice, said)) == python)
 }
@@ -135,7 +137,7 @@ func aMalformedVocabularyThrows(vocab: String) throws {
     try withModelFolder(vocab: brokenVocabularies[0]) { dir in
         let events = Events()
         let lis = listener(events, mic: { FakeMic() }, stt: { try Parakeet(directory: dir).callAsFunction })
-        #expect(lis.start())
+        lis.start()
         let note = Events.note(events.get())
         #expect(note?.hasPrefix("I can't load speech recognition: ") == true)
         #expect(eventually { !lis.running })

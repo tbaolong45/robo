@@ -1,6 +1,5 @@
-// Port of tests/test_widgets.py (`style_markdown`, `md_look`, `_text_height`) and of the character counts Qt's QTextDocument gave
-// (checked in Python: the typewriter's `hidden` is a count of them). Not ported: the "default look" tests (there is only the themed
-// look), the "styling twice changes nothing" tests become "the function is pure", and the font-family/no-QApplication tests (Qt-only).
+// The styled Markdown, and the character counts Qt's QTextDocument gave in the retired Python build (the
+// typewriter's `hidden` is a count of them).
 import AppKit
 import Foundation
 import Testing
@@ -85,9 +84,11 @@ private func glass(_ tokens: String) -> Theme {
 /// Runs `body` under the dark appearance, so dynamic system colours resolve the same way for the expectation and the drawing.
 @MainActor private func dark(_ body: () -> Void) {
     let old = NSApp.appearance
-    NSApp.appearance = NSAppearance(named: .darkAqua)
+    let appearance = NSAppearance(named: .darkAqua)!
+    NSApp.appearance = appearance
     defer { NSApp.appearance = old }
-    body()
+    // a dynamic colour read outside drawing follows the current appearance, not the app's: on a Mac in light mode it would be black
+    appearance.performAsCurrentDrawingAppearance(body)
 }
 
 /// The paragraphs of a styled text: the string without its separator, and the attributes of its first character.
@@ -160,7 +161,7 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
         let s = md("run `ls -l` or see [the notes](https://example.com) now")
         let code = run(s, "ls -l"), link = run(s, "the notes"), plain = run(s, "run ")
         #expect(rgb((code[.inlineBox] as! InlineBox).colour) == rgb(Chrome.wash(0.10)) && font(code).pointSize == 12)
-        #expect(rgb(link[.foregroundColor] as! NSColor) == rgb(.linkColor) && link[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
+        #expect(rgb(link[.foregroundColor] as! NSColor) == rgb(Chrome.text) && link[.underlineStyle] as? Int == NSUnderlineStyle.single.rawValue)
         #expect((link[.link] as? URL)?.absoluteString == "https://example.com")
         #expect(plain[.inlineBox] == nil && plain[.link] == nil && plain[.underlineStyle] == nil)  // plain text untouched
         #expect(rgb(code[.foregroundColor] as! NSColor) == rgb(Chrome.text))  // inline code keeps the text colour; the tint is a wash over the glass
@@ -223,7 +224,7 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
         #expect(rgb(head[.foregroundColor] as! NSColor) == rgb(Chrome.text) && bold(font(head)))
         let para = b[1].attrs
         #expect(rgb((run(s, "code")[.inlineBox] as! InlineBox).colour) == rgb(Chrome.wash(0.10)))
-        #expect(rgb(run(s, "link")[.foregroundColor] as! NSColor) == rgb(.linkColor))
+        #expect(rgb(run(s, "link")[.foregroundColor] as! NSColor) == rgb(Chrome.text))
         #expect(rgb(b[5].attrs[.codeBox] as! NSColor) == rgb(Chrome.wash(0.07)) && rgb(b[5].attrs[.foregroundColor] as! NSColor) == rgb(Chrome.text))
         let levelOne = indent(b[2].attrs), nested = indent(b[3].attrs)
         #expect(levelOne == 18 && nested == 2 * levelOne)
@@ -239,7 +240,7 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
     }
 
     @Test func headingsAreBoldInTheHeadColourAtTheirLevelsSize() {
-        // widgets.HEAD_PX: 17/16/15 px for H1-H3, 14 below; body text is 14 (Python's card, with the FontSizeAdjustment fix)
+        // 17/16/15 px for H1-H3, 14 below; body text is 14 (Python's card, with the FontSizeAdjustment fix)
         let s = md("# one\n\n## two\n\n### three\n\n#### four\n\nbody")
         let b = blocks(s)
         #expect(b.map { font($0.attrs).pointSize } == [17, 16, 15, 14, 14])
@@ -379,6 +380,22 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
         }
     }
 
+    /// A column never gets narrower than its longest word: the prose column gives up the room instead (found on the chat's tables:
+    /// a word broke across lines inside a narrow column).
+    @Test func aTableColumnIsNeverNarrowerThanItsLongestWord() {
+        let source = "| Course | Note |\n|---|---|\n| Thermodynamics | " + String(repeating: "a long remark that can wrap ", count: 12) + "|"
+        let s = Markdown.attributed(source, theme: Themes.glass, mathWidth: 300)
+        var widths: [CGFloat] = []
+        s.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: s.length)) { v, _, _ in
+            guard let b = (v as? NSParagraphStyle)?.textBlocks.first as? NSTextTableBlock else { return }
+            if widths.count <= b.startingColumn { widths.append(b.value(for: .width)) }
+        }
+        let word = NSAttributedString(string: "Thermodynamics", attributes: [.font: NSFont.systemFont(ofSize: CGFloat(Themes.glass.textPx))]).size().width
+        let total: CGFloat = widths.reduce(0, +) + 2 * 9 + 1
+        #expect(widths.count == 2 && widths[0] >= word && widths[0] < 150, "\(widths)")
+        #expect(total <= 300, "\(widths)")
+    }
+
     @Test func aTaskIsABoxNotABulletWithBrackets() {
         let s = md("- [ ] todo\n- [x] done\n- [X] big\n- plain [ ] inside")
         #expect(s.string == "todo\ndone\nbig\nplain [ ] inside")
@@ -476,13 +493,13 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
         #expect(box.wantedHeight(cap: 300) == 0 && !box.overflows && box.documentHeight == 0)
     }
 
-    @Test func theTextWidthIsTheBoxWidthMinusTheScrollBarWhenItShows() {
+    @Test func theTextWidthIsTheBoxWidthMinusTheScrollerWhenItShows() {
         let box = TextBox(width: 291)
         box.setContent(md("short"))
         _ = box.wantedHeight(cap: 90)
         #expect(box.textView.frame.width == 291)
         box.setContent(md(String(repeating: "a long question that wraps ", count: 30)))
-        #expect(box.wantedHeight(cap: 90) == 90 && box.textView.frame.width == 286)
+        #expect(box.wantedHeight(cap: 90) == 90 && box.textView.frame.width == 291 - TextBox.scrollerRoom)
     }
 
     @Test func theCursorRectIsOnTheLineOfTheCharacter() {
@@ -500,7 +517,7 @@ private func md(_ text: String, _ t: Theme = Themes.glass, hidden: Int = 0) -> N
 
     @Test func aLineWithAnEmojiIsNotTallerThanOneWithout() {
         let plain = TextBox(width: 302), emoji = TextBox(width: 302)
-        plain.setContent(md("In Obsidian: Plan")); emoji.setContent(md("📓 In Obsidian: Plan 📂"))
+        plain.setContent(md("The plan")); emoji.setContent(md("The plan 📂"))
         #expect(abs(plain.wantedHeight(cap: 300) - emoji.wantedHeight(cap: 300)) <= 1)
     }
 

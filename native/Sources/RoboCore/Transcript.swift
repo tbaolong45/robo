@@ -1,5 +1,5 @@
 // The conversation shown in the chat window: your turns and Robo's answers, in order. Pure, and in memory only (nothing is written
-// to disk). The agent keeps the real history on its side, per Hermes session id (one a day), so this is only what the window displays;
+// to disk). The agent keeps the real history on its side, per agent session id (one a day), so this is only what the window displays;
 // when the session id changes (a new day, a new persona) the conversation starts again, as the agent's does.
 import Foundation
 
@@ -9,7 +9,7 @@ public struct Turn: Equatable, Sendable, Identifiable {
     public let id: Int
     public let role: Role
     public var text: String
-    /// Small lines under a Robo turn: the notes it opened, what the guard recorded of a send.
+    /// Small lines under a Robo turn ("stopped" on an answer cut short).
     public var footer: [String]
     /// The run failed or was stopped: the text is the reason, shown as such.
     public var failed: Bool

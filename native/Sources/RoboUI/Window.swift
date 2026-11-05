@@ -1,22 +1,19 @@
-// Robo on the desktop: a floating face with a speech card. Port of the window half of src/robo/app.py
-// (layout, fit, roaming, dragging, menu, themes, screens); the conversation half is in App.swift.
+// Robo on the desktop: a floating face with a speech card.
+// This is layout, fit, roaming, dragging, menu, themes and screens; the conversation is in App.swift.
 //
-// Everything here runs on the main thread. The machine (displays, pointer, clock, files, the Type window)
-// comes in through `Machine`, Hermes, the microphone, the activity watcher and the health poll through
-// the protocols below, so the tests drive the whole window with fakes.
+// Everything here runs on the main thread. The machine (displays, pointer, clock, files, the chat window)
+// comes in through `Machine`, the agent, the microphone and the health poll through the protocols in
+// Machine.swift, so the tests drive the whole window with fakes.
 import AppKit
 import RoboCore
 import RoboSystem
 import RoboVoice
 
 final class RoboWindow {
-    static let digestPrompt = "Give me my school digest for today (use the school digest skill)."
-    static let approvalMax = 300  // characters of an approval request (a long command) shown
     static let closeAfter = 20.0  // s a reply stays up after its last letter (longer while the mouse is over it)
     static let typeS = 0.033  // s between typing steps (30 Hz; 0.030 if a slow machine struggles)
     static let solidS = 0.5  // s the caret stays solid after a letter, then it blinks
     static let caretS = 1.6  // s the caret keeps blinking once the reply is all there
-    static let openMax = 3  // notes and files opened after one request, together
     static let followUpS = 15.0  // s after the answer is typed when you can reply without saying "robo"
     static let drag = 6.0  // px of movement that turns a click on the face into a drag
     static let fidgets = ["curious", "happy", "playful", "calm"]  // what a bored robo shows now and then
@@ -24,19 +21,15 @@ final class RoboWindow {
     static let margin = 4.0, gap = 3.0  // around the card and the face, between them
     static let roamFast = 1.0 / 30, roamSlow = 0.5  // s between roam steps while it moves, and while it rests, is held or sleeps
 
-    let hermes: HermesAPI
-    let digest: DigestClock
+    let agent: AgentAPI
     let persona: String
     let today: () -> CalendarDay
-    let network: () -> Bool
     var machine: Machine
-    let watcher: Watching?
     let bridge = Bridge()
     let panel = RoboPanel()
     let card: CardView
     let face: FaceView
     private let root = RootView()
-    var typer: TypePanel?
 
     var theme: Theme
     var themeStamp: Int
@@ -51,35 +44,24 @@ final class RoboWindow {
     var runID: String?
     var cancel = false
     var sessionID = ""
-    var digestDay: CalendarDay?  // the day a running digest counts for
-    var autoDigest = false  // that digest started by itself (start-up, wake), not from the menu
     var reply = ""
     var pending = ""  // a question asked during a run, asked when it ends
-    var approvals: [(id: String, text: String)] = []  // asks waiting for a click, oldest first (the card shows the first); cleared when the run ends
-    var scanned: Made?  // what the worker found robo made, for `ended` (under `lock`)
-    var startedAt = 0.0  // when the current request began (files made since then open)
-    var runStart = 0.0  // the same moment on the window's clock: "still working" counts from it
-    var toolLabel = ""  // what the last tool of this request was doing; stays up while the model thinks between tools
+    var runStart = 0.0  // when the current request began: "still working" counts from it
     var listening = false
     var closeAt = 0.0  // when the finished reply's card closes (0 = not scheduled)
     var closeAfter = 0.0  // s the card stays once the reply is typed (0 = until closed)
-    var typed = false  // the reply is all on screen (the footer showed, the close timer ran)
+    var typed = false  // the reply is all on screen (the close timer ran)
     var lastTick = -Double.infinity, lastChar = -Double.infinity, typedAt = -Double.infinity
     var mouth = false  // a letter showed, finished; the mouth moves (tw.revealing, last seen)
     var answeredAt = -Double.infinity  // when the last answer ended (the next question follows up)
     var followDue = false  // a completed answer is being typed: the follow-up window opens when it is all there
     var followUntil = 0.0  // the key-less follow-up window is open until then (the MIC light shows it)
-    var link = LedState.unknown, noted = false  // Hermes light; the listener reported a problem
+    var link = LedState.unknown, noted = false  // agent light; the listener reported a problem
     var press: Vec?  // where the pointer went down on the face
     var dragged = false
     var grabAt = Vec.zero  // where in the window the face was grabbed
     var cursor = Vec.zero, cursorMoved = -Double.infinity  // the pointer, and when it last moved
     var fidgetAt: Double
-
-    var nudge = NudgeModel()  // the agenda, the budget and the card that shows now (Nudges.swift)
-    var radar = RadarModel()  // the daily radar: when it last ran, what it already showed, what it offers (Radar.swift)
-    var scout = ScoutModel()  // the LMS posts scan: its courses, the run in flight, its failures today (Scout.swift)
-    var typerOpen = false  // the Type window is up (a nudge does not break in on it)
 
     // The chat window (Chat.swift): the conversation, its panel, and what its glass does about the backdrop.
     var transcript = Transcript()
@@ -95,7 +77,6 @@ final class RoboWindow {
 
     var ear: Ear?
     var poller: Polling?
-    var wakeWatcher: WakeWatcher?
     var ticker: Timer?, roamTimer: Timer?, revealer: Timer?
     var shade = Shade()  // what the card does about the backdrop: light over a dark screen, dark over a light one
     var shadeTimer: Timer?  // 30 Hz, only while the shade is turning
@@ -109,25 +90,21 @@ final class RoboWindow {
     var shutdownWaiters: [() -> Void] = []
     var roamInterval = RoboWindow.roamSlow
 
-    init(hermes: HermesAPI, digest: DigestClock, persona: String = "",
-                today: @escaping () -> CalendarDay = { CalendarDay() }, network: (() -> Bool)? = nil,
-                watchWake: Bool = true, listener: EarFactory? = nil, watcher: Watching? = nil, health: String = "",
-                poller makePoller: PollerFactory? = nil, hotkey: Hotkey? = nil, machine: Machine) {
-        self.hermes = hermes
-        self.digest = digest
+    init(agent: AgentAPI, persona: String = "", today: @escaping () -> CalendarDay = { CalendarDay() },
+                listener: EarFactory? = nil, health: String = "", poller makePoller: PollerFactory? = nil,
+                hotkey: Hotkey? = nil, machine: Machine) {
+        self.agent = agent
         self.persona = persona
         self.today = today
-        self.network = network ?? { Host.httpStatus("https://outlook.office.com", timeout: 3) != nil }
         self.machine = machine
-        self.watcher = watcher
         theme = Themes.load(path: machine.themeFile)
         themeStamp = Themes.stamp(path: machine.themeFile)
         let now = machine.clock()
         mind = Mind(now: now)
         tw = Typewriter(Pace(cps: theme.cps))
         fidgetAt = now + Double.random(in: RoboWindow.fidgetEvery)
-        card = CardView(theme: theme, hasWatch: watcher != nil, model: Setup.model)
-        face = FaceView(radius: 22, clock: machine.clock)
+        card = CardView(theme: theme)
+        face = FaceView(clock: machine.clock)
 
         var displays = machine.displays()
         if displays.isEmpty {  // no display at all: still build the window
@@ -151,9 +128,7 @@ final class RoboWindow {
         card.fit = { [unowned self] change in self.fit(change) }
         card.onReplyClick = { [unowned self] in self.skip() }
         card.onMenu = { [unowned self] action in self.menu(action) }
-        card.onApprove = { [unowned self] choice in self.approve(ApprovalChoice(rawValue: choice) ?? .deny) }
-        card.onNudge = { [unowned self] outcome in self.nudgeAnswered(outcome) }
-        face.setTheme(hue: hueFunction(theme), bg: screenColours(theme), snap: true)
+        face.setTheme(bg: screenColours(theme))
         face.onMouse = { [unowned self] kind in self.faceMouse(kind) }
         layoutWindow(keeping: nil)  // just the face; the card is hidden and takes no room
 
@@ -162,18 +137,11 @@ final class RoboWindow {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.screensChanged() }
-        if watchWake {
-            wakeWatcher = WakeWatcher { [weak self] in DispatchQueue.main.async { self?.maybeDigest(); self?.nudgeWoke() } }
-            wakeWatcher?.start()
-        }
-        if let watcher {
-            watcher.pause(FileManager.default.fileExists(atPath: machine.watchPausedFile.path))
-            watcher.start()
-        }
         if let listener {
-            let e = listener({ [bridge] in bridge.event(.listening(true)) }, { [bridge] in bridge.heard($0) },
+            let e = listener({ [bridge] in bridge.event(.listening(true)) }, { [bridge] in bridge.heard($0, handsFree: $1) },
                              { [bridge] in bridge.note($0) })
-            ear = e.start() ? e : nil
+            e.start()
+            ear = e
             hotkey?.onDown = { [weak self] in self?.talkDown() }
             hotkey?.onUp = { [weak self] in self?.ear?.release() }
         }
@@ -181,10 +149,6 @@ final class RoboWindow {
             let make: PollerFactory = makePoller ?? { HealthPoller(url: $0, onState: $1) }
             poller = make(health) { [bridge] in bridge.link($0) }
             poller?.start()
-        }
-        DispatchQueue.main.async { [weak self] in
-            self?.maybeDigest()
-            self?.startNudges()
         }
     }
 
@@ -245,12 +209,12 @@ final class RoboWindow {
 
     // MARK: - roaming
 
+    /// It walks to a corner and stays; the right-click menu opens the card too, but it must not leave
+    /// before the user can press Stay.
+    var called: Bool { busy || (!card.isHidden && card.chips.isHidden) || chatOpen }  // the chat keeps it at its side
+
     func roam() {
-        // it walks to a corner and stays; the right-click menu opens the card too, but it must not leave
-        // before the user can press Stay. A nudge is not a call either, but it freezes the pet like a press: the card is attached
-        // to it, and buttons that drift at 40 px/s are hard to hit (seen live: 1200 px in a minute)
-        let called = busy || (!card.isHidden && card.chips.isHidden && nudge.shown.isEmpty) || chatOpen  // the chat keeps it at its side
-        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil || !nudge.shown.isEmpty, called: called)
+        let p = roamer.step(now: now(), asleep: mind.activity == .asleep, engaged: press != nil, called: called)
         let at = windowTopLeft
         if Double(p.x) != at.x.rounded() || Double(p.y) != at.y.rounded() { move(to: Vec(Double(p.x), Double(p.y))) }
         scheduleRoam()
@@ -344,20 +308,14 @@ final class RoboWindow {
             themeStamp = stamp
             applyTheme(Themes.load(path: machine.themeFile))
         }
-        let now = now()
-        card.showMenu(stay: roamer.stays(now: now) ? "🧭 Wander" : "📌 Stay",
-                      watch: watcher?.paused == true ? "▶ Watch" : "⏸ Watch",
-                      nudges: nudge.state.enabled ? "🔔 Nudges" : "🔕 Nudges")
+        card.showMenu(staying: roamer.stays(now: now()))
         open(closeAfter: 8)
     }
 
     func menu(_ action: MenuAction) {
         switch action {
-        case .digest: ask(RoboWindow.digestPrompt)
         case .type: typeText()
         case .stay: toggleStay()
-        case .watch: toggleWatch()
-        case .nudges: toggleNudges()
         case .quit: quit()
         }
     }
@@ -368,35 +326,16 @@ final class RoboWindow {
         roamer.hold(now: now, pos: windowTopLeft, seconds: stay ? 0 : 1e9)
     }
 
-    /// Pause or resume activity watching; the choice survives a restart.
-    func toggleWatch() {
-        guard let watcher else { return }
-        let paused = !watcher.paused
-        watcher.pause(paused)
-        let file = machine.watchPausedFile
-        if paused {
-            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            FileManager.default.createFile(atPath: file.path, contents: nil)
-        } else {
-            try? FileManager.default.removeItem(at: file)
-        }
-    }
-
     // MARK: - themes
-
-    func hueFunction(_ t: Theme) -> (String, String, Double) -> Double {
-        { activity, emotion, base in Themes.hueFor(t, activity: activity, emotion: emotion, base: base) }
-    }
 
     func screenColours(_ t: Theme) -> (RGBA, RGBA) { (Themes.rgba(t.faceBg.centre), Themes.rgba(t.faceBg.edge)) }
 
     /// Switch the look live (theme.json was edited), nothing restarts: face colours, card, typing speed, sizes.
     func applyTheme(_ t: Theme) {
         theme = t
-        face.setTheme(hue: hueFunction(t), bg: screenColours(t))
-        card.setTheme(t)  // restyles the header, quote, dots and caret too
+        face.setTheme(bg: screenColours(t))
+        card.setTheme(t)
         chat?.chat.setTheme(t)
-        card.setHue(Themes.liveHue(t, faceNow: face.params.hue, activity: mind.activity.rawValue))
         var pace = tw.pace
         pace.cps = t.cps
         tw.setPace(pace)
@@ -407,21 +346,8 @@ final class RoboWindow {
 
     // MARK: - typing a question
 
-    /// A small window of its own, on the face's display.
-    func typeText() {
-        if machine.chatOn {  // the chat has a text box of its own: it opens and takes the keyboard
-            openChat(focusInput: true)
-            return
-        }
-        typer?.close()
-        let t = TypePanel { [weak self] in self?.ask($0) }
-        t.onClose = { [weak self, weak t] in if self?.typer === t { self?.typerOpen = false } }
-        let displays = machine.displays()
-        if let d = space.display(at: faceCentre, in: displays) { t.place(on: d.visible) }
-        typer = t
-        typerOpen = true
-        machine.showTyper(t)
-    }
+    /// The chat's text box: the chat opens and the box takes the keyboard.
+    func typeText() { openChat(focusInput: true) }
 
     // MARK: - escape and leaving
 
@@ -447,8 +373,7 @@ final class RoboWindow {
         }
     }
 
-    /// Never leave a run (maybe acting on the laptop) going with nobody watching, and end the app when that
-    /// is done (the menu's Quit).
+    /// Never leave a run going with nobody watching, and end the app when that is done (the menu's Quit).
     func quit() {
         shutdown { [self] in machine.terminate() }
     }
@@ -462,19 +387,16 @@ final class RoboWindow {
     }
 
     /// The pet goes first and the waits happen off the main thread: a run being created gets its id within
-    /// moments (up to `idWait` s), then it is stopped, then the poller, the wake watcher, the microphone and the
-    /// activity watcher (which may be mid-sample) are stopped. `done` runs on the main thread, once; calling
-    /// this again while it works only adds a `done`.
+    /// moments (up to `idWait` s), then it is stopped, then the poller and the microphone are stopped. `done` runs
+    /// on the main thread, once; calling this again while it works only adds a `done`.
     func shutdown(_ done: @escaping () -> Void) {
         if shutdownDone { return done() }
         shutdownWaiters.append(done)
         if shutdownStarted { return }
         shutdownStarted = true
-        scout.running?.cancel()  // best effort: the scan only reads, so a run that outlives the app is harmless
         panel.orderOut(nil)
         chat?.orderOut(nil)
         if blurShown { machine.blurBackground(false, .zero) }
-        typer?.close()
         for t in [ticker, roamTimer, revealer, shadeTimer, chatShadeTimer] { t?.invalidate() }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         let wasBusy = lock.withLock { () -> Bool in
@@ -491,9 +413,7 @@ final class RoboWindow {
             }
             if let id { stopAndWait(id) }
             poller?.stop()
-            wakeWatcher?.stop()
             ear?.stop(wait: 0.5)
-            watcher?.stop()
             DispatchQueue.main.async { [self] in
                 shutdownDone = true
                 let waiting = shutdownWaiters
@@ -505,8 +425,8 @@ final class RoboWindow {
 
     private func stopAndWait(_ id: String) {
         let done = DispatchSemaphore(value: 0)
-        Task { [hermes] in
-            try? await hermes.stop(id)
+        Task { [agent] in
+            try? await agent.stop(id)
             done.signal()
         }
         _ = done.wait(timeout: .now() + 3)

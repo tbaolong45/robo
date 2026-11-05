@@ -1,511 +1,311 @@
 # Robo: notes for agents
 
-Read `README.md` first (features, setup, layout table, `dev` → PR → `master` workflow). This file
+Read `README.md` first (setup, layout table, `dev` → PR → `master` workflow). This file
 holds only what the code and the README don't say. Product intent: a Desktop Goose-style pet that
 lives on the screen but helps. Keep it alive (it reacts, roams, looks around) and out of the way.
 Voice is input only: the user talks to it through the mic (local speech recognition) and it answers
-in text in the bubble. It never speaks, so don't add speech output.
+in text. It never speaks, so don't add speech output.
+
+Two programs: the Swift app (`native/`, the running app since 2026-10-13; the Python/Qt build and
+its tests were deleted in the 2026-11-04 revamp) and its chat service `robo-agent` (`agent/`, Python). macOS 26 is the minimum
+(`Package.swift` `.macOS(.v26)`, `bundle.sh` `LSMinimumSystemVersion` 26.0): there is no pre-26 code path.
+
+**The agent was removed on purpose (owner, 2026-11-05).** Robo is a plain chatbot with no tools. The full agent (tools, skills,
+guard, sandbox, approvals, memory, learning, school features, nudges, radar, source check) is on branch `revamp`, commit `da7f196`.
+The owner designs the harness and the self-improvement loop themself: don't add tools, memory or learning without being asked.
+`chat.execute` is the seam: anything that emits `message.delta` and ends a run the same way works with the app.
 
 ## Verify
-- `uv run pytest -q && uv run ruff check src tests scripts hermes`. CI runs both on Ubuntu and
-  macOS with `QT_QPA_PLATFORM=offscreen`.
-- UI: render with `QWidget.grab()` and look at the PNG. For the real window, capture only that
-  window (`screencapture -l<id>`, id from Quartz `kCGWindowName == "Robo"`); a full-screen capture
-  shows whatever else the user has open.
-- Voice: `scripts/voice_eval.py` (macOS voices → real Parakeet → name matcher). Compare a change with
-  the score before it. The "Rubble was…" false positive is deliberate (see `listen._START_NAME`).
-  Its `--record` / `--wavs` modes score the user's own voice (the only way to calibrate `MIN_GATE`);
-  don't record while a call is live, the mic would capture other people.
-- Run the real app without reaching the live agent: `ROBO_HERMES_URL=http://127.0.0.1:9 uv run robo`.
-- Hermes-backed features (digest, study plan, `robo-make`) can only be checked against the live
-  gateway: `printf '<prompt>\n' | uv run robo chat` prints the tools it used. The digest takes
-  about 2 min, reads mail, Teams, Moodle and the calendar, and changes nothing there until a "yes",
-  but a live digest now writes a Plans note into the Obsidian vault (`~/Documents/Robo`) and opens
-  Obsidian in the background; `robo-make` writes into `~/Robo/`. Activity, plan and autostart can be run for real in a throwaway
-  `HOME` (`HOME=<dir> .venv/bin/robo activity`, `setup.desktop(platform="darwin")` + `plutil -lint`).
-- To look at a page `robo-make` wrote, serve a copy over loopback (browser tools block `file:`) and
-  delete the `.playwright-mcp/` folder they leave in the repo.
+- Swift: `native/test.sh` (not `swift test`), and `native/test.sh -c release -Xswiftc -enable-testing` for
+  concurrency code. Service: `uv run pytest -q && uv run ruff check agent tests`. CI runs the Swift suite on
+  `macos-26`, and pytest + `ruff check agent tests` there too, on pushes to and PRs into `master`.
+- UI: capture only Robo's window (`screencapture -l<id>`, id from Quartz `kCGWindowName == "Robo"`); a full-screen
+  capture shows whatever else the user has open. The face: `ROBO_FACE_SHEET=<dir> native/test.sh --filter FaceSheet`
+  writes `face_sheet.png` (every expression and effect, over white and dark grey). For glass over a backdrop: an
+  `SCContentFilter` naming exact windows (your own opaque window plus Robo's), never a region capture: it caught a private
+  notification on 2026-11-04.
+- Voice: `robo voice-eval` (macOS voices → real Parakeet → name matcher). Compare a change with the score before it.
+  The "Rubble was…" false positive is deliberate (`startName` in `Listen.swift`). `--record DIR` / `--wavs DIR` score
+  the user's own voice (the only way to calibrate `Listen.minGate`); don't record while a call is live, the mic would
+  capture other people.
+- A test copy of the app, away from the live service:
+  `open -n --env ROBO_AGENT_URL=http://127.0.0.1:9 --env ROBO_NO_VOICE=1 X.app`. With
+  `ROBO_AGENT_URL` set the app does not start its service.
+- **The service without the live setup or the network** (checked 2026-11-05): a throwaway `HOME=<dir>` holding
+  `<dir>/.local/share/robo/agent/` (0700) with a `config.json` (e.g. `{"port": 8799}`), a `server_key` and a dummy `api_key`
+  (0600 each), and `ANTHROPIC_BASE_URL=http://127.0.0.1:9` in the environment, so no request reaches DeepSeek. Start
+  `HOME=<dir> ANTHROPIC_BASE_URL=http://127.0.0.1:9 uv run --project <checkout> robo-agent serve` and talk to it with curl
+  (`/health` needs no key; everything else `Authorization: Bearer <server_key>`). With that dead address a run fails in about
+  a second with `DeepSeek failed: Connection error.`
+- `tests/test_chat.py` runs the real service and the real `anthropic` client against a fake DeepSeek on loopback: no key, no
+  network. Use it for anything about what the client really sends.
+- The tests needing a key window (`EditKeyTests`, `KeyboardHandoffTests`, `theTextBoxTakesFocusAcceptsTypingAndSendsIt`) fail
+  while the screen is locked; unlock the Mac before trusting them.
+- **Test trap: the pointer.** A card stays open while the pointer is over it, and a synthetic click leaves the pointer where it
+  clicked, so tests and live checks of a card closing fail on a clean checkout until the pointer is warped to a corner
+  (`CGWarpMouseCursorPosition`).
 
-## The machine is a live deployment
-The live profile ran `approvals.mode: manual` (timeout 120 s) from 2026-10-19; on 2026-10-23 the user asked for "all permission", both setups say `off` and `robo setup` was run
-(live config `off`, checked with a nonexistent-file `rm`: it ran, no card). Under `manual`, robo-guard's asks (rm and other irreversible commands, Send/Delete/Move
-clicks, Outlook/Teams computer_use) reach the card as Allow/Deny, checked live with a nonexistent file (Deny made
-Hermes answer "BLOCKED... do NOT retry"). Switch back with `approvals.mode` `"manual"` in both setups + `robo setup`; the blocks (graded work, own setup, remote content in notes) hold in every mode. `robo setup` rewrites the `ai.robo` LaunchAgent (and the
-skills' command) to point at the build it is run from: the Python checkout, or the Swift app
-(`~/Applications/Robo.app` is the one that runs at login since 2026-10-13). Don't run `setup` or
-`signin` while testing, and send Hermes nothing but a harmless prompt if a live check is needed.
-Start a test copy of the app with `ROBO_NO_VOICE=1 ROBO_NO_WATCH=1` and a dead `ROBO_HERMES_URL`.
+- **CI's compiler can reject what this Mac compiles (2026-11-05)**: `macos-26` defaults to Xcode 26.6; this Mac builds with the
+  Command Line Tools 27 (Swift 6.4). CI failed with "unable to type-check this expression in reasonable time" on test lines that
+  type-check here in under 15 ms, so local timing (`-warn-long-expression-type-checking`) does not predict it; only a CI run does. The
+  job then stops at compiling and runs no test. Fix by spelling out the closure's types and splitting the arithmetic.
+- **The CI Mac is not this Mac (seen 2026-11-05)**: it runs in light mode with Reduce Motion on, on a 1x screen; this Mac is in dark mode
+  with a 1x main screen and a 2x MacBook screen. A test must pin what it depends on (`reduceMotion`, the appearance). A dynamic colour read
+  outside drawing follows the current appearance, not `NSApp.appearance`: use `performAsCurrentDrawingAppearance`. A view with no window
+  reports this Mac's largest scale (2) while `bitmapImageRepForCachingDisplay` gives the main screen's (1): probe pixel alignment in a window.
 
-## Constraints (checked 2026-10-12; recheck if Qt, onnx-asr or Parakeet change)
-- **Speech model on the CPU only** (`listen.Parakeet`, `providers=["CPUExecutionProvider"]`). On a
-  Mac the default CoreML provider loaded 3× slower, ran 2× slower and transcribed differently
-  (fp16) from the CPU output the name matcher was tuned on.
-- **Audio is levelled before Parakeet** (`listen.leveled`, peak 0.5, boost capped at 20×): the model
-  reads soft speech worse (synthetic voice at 0.15× volume: 44 → 48 of 50 names caught).
-- **Don't end a request on a "?".** Parakeet punctuates a clause cut off mid-question as a question
-  (36 of 40 probes, 4 TTS voices), so an early send would pass half a request to an agent that has
-  every permission. The README promises that a pause to think does not end the request.
+## The live setup
+- `~/Applications/Robo.app` runs at login through the `ai.robo` LaunchAgent. At launch the app starts
+  `uv run --project <checkout> robo-agent serve` (`AgentHome.service`), where `<checkout>` is the source
+  tree the app was BUILT from (`Setup.checkout` = `#filePath`). So the live service's code and `agent/SOUL.md` are that
+  checkout's files, and SOUL.md is re-read on every request, with no install step. Build the installed app
+  from the checkout you mean it to run. The chat's session id is `robo-<day>-<personaStamp>`, a hash of SOUL.md
+  taken once at app launch (`Launch.swift`): after editing it, a restarted app starts a new session, with an empty history.
+- `R` = `~/.local/share/robo/agent` holds `config.json`, `api_key` and `server_key`. The service logs to
+  `~/Library/Logs/Robo/agent.log`. History lives only in the service's memory (`make_app`'s `histories`): per session id, the last
+  100 messages (`chat.MAX_MESSAGES`), lost on restart. A turn joins it only when it completes, so a failed or stopped turn is not
+  remembered. The app's `Transcript` is memory only too.
+- `config.json` is read ONCE when the service starts (`cli.main`), and only `port` and `model` mean anything to it; other settings,
+  such as those `revamp` wrote, are ignored. The keys are read again on every request (an env var `DEEPSEEK_API_KEY` /
+  `ROBO_SERVER_KEY` wins over the file). After editing the config, restart the service: the app stops the one it started when it
+  quits (`applicationWillTerminate`) and `AgentKeeper` starts a new one before the next request; a service the app did not start
+  is left alone. **`launchctl bootout` does not run that (2026-11-05): the service survived it, the new app found it healthy and
+  used the old code.** After changing Python code, stop `robo-agent serve` too and check its start time.
+- **Keys are 0600 files, not the Keychain (tried 2026-10-20, live)**: its partition list pins an item to the cdhash of the build
+  that saved it, so each rebuild asked for the login password and a background read hung on that dialog.
+- Don't run `robo setup` while testing (it rewrites `config.json`'s `uv_path` and the LaunchAgent to point at the build it runs
+  from, and refuses a bare binary), and send the live service nothing but a harmless prompt if a live check is needed: it goes to
+  DeepSeek.
+
+## The chat service (`agent/robo_agent`)
+- **Provider: DeepSeek (owner, 2026-11-05)**, through its Anthropic-format API: `https://api.deepseek.com/anthropic`
+  (`config.API_BASE`), `deepseek-flash`, with the `anthropic` client. `chat.client` sets BOTH `api_key` and `auth_token`: DeepSeek
+  prefers Bearer, and the client otherwise fills the missing one from a real Anthropic key in the environment.
+  `ANTHROPIC_BASE_URL` overrides the address, which is the test seam. Thinking is disabled. Checked live on 2026-11-05 with
+  `robo chat`: replies stream, the session remembers, and DeepSeek sends the stop reason that `chat.execute` needs to tell a
+  whole reply from a dropped stream (a stream can end quietly with no error; without a stop reason the run fails).
+- `Activity.working` and `.waiting` stay in the face tables though nothing reaches them now.
+
+## Constraints (checked 2026-10-12; recheck if ONNX Runtime or Parakeet change)
+- **Speech model on the CPU only** (`Parakeet`, `CPUExecutionProvider`). On a Mac the CoreML provider loaded 3× slower,
+  ran 2× slower and transcribed differently (fp16) from the CPU output the name matcher was tuned on.
+- **The app does not download the speech model**: it reads the Hugging Face cache
+  (`~/.cache/huggingface/hub/models--istupakov--parakeet-tdt-0.6b-v2-onnx`, `refs/main` → snapshot with
+  `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, `vocab.txt`).
+  `Parakeet.cachedModel`'s error gives the `uvx` command that fetches it.
+- **Audio is levelled before Parakeet** (`leveled`, peak 0.5, boost capped at 20×): the model reads soft speech worse
+  (synthetic voice at 0.15× volume: 44 → 48 of 50 names caught).
+- **English only (owner, 2026-11-05)**: Parakeet v2 hears only English.
+- **Don't end a request on a "?".** Parakeet punctuates a clause cut off mid-question as a question (36 of 40 probes,
+  4 TTS voices), so an early send would pass half a request on. A pause to think must not end the request.
 - **No spoken end word** (removed 2026-10-13 at the user's request). A request ends only after
-  `PATIENT_SILENCE_S` = 3 s of quiet (Swift `Listen.patientSilenceS`). The old "over" check ran every
-  ~0.8 s on the last 2 s of audio, so a natural "over" mid-sentence sent a half request; the 1.6 s
-  pause also cut off thinking. Cost: a room that never goes quiet (TV) keeps the request open up to
-  `PATIENT_MAX_S`. Don't add a word that can occur in speech.
-- **Push to talk = Ctrl+Q (Swift app only, 2026-10-16)**, at the user's request, instead of the name.
-  `RoboUI/Hotkey.swift` uses Carbon `RegisterEventHotKey` (no Accessibility or Input Monitoring
-  permission; one down and one up event, no auto-repeat; a system hotkey should keep Ctrl+Q from the app in front, not checked).
-  `Listener.hold()/release()` record from down to up regardless of the gate, +4 frames of tail; a press
-  under `Listen.tapS` = 0.4 s is a click (`listenNow`). `Listener(nameWake:)` is `!hotkeyRegistered`:
-  with the key, loud sound outside a window is not even transcribed; if the system refuses the key, the
-  name wake is back. Registration is exclusive only inside a process: a second process registering the
-  same combo was accepted in a probe, so a clash with another app is not detected (and which app gets
-  the key then is untested). The Python build still wakes by name (spec and fallback). Test the real key
-  with the user's own press (checked live 2026-10-16: hold and tap both work); a synthetic Ctrl+Q posted
-  with `CGEvent` goes to the system, whichever app is in front.
-- **Key-less follow-up window (Swift app, reworked 2026-10-19)**: `RoboWindow.followUpS` = 15 s, armed in
-  `finishedTyping()` (not at run end: typing at 55 cps and reading used to eat the old 10 s; `followDue` is set
-  in `ended()` and cleared by `clearReply()`/`closeBubble()`, which also send `ear.followUp(0)`, so errors, `say()`
-  lines, mic notes and a new question never arm or keep it). The MIC light pulses LISTENING while it is open
-  (`CardView.micState(..., following:)`). In `Listener` a window with `asked == false` wakes robo only when
-  the transcript has two words or more (`heard`): the first version woke it after `minSpeechFrames` loud frames and a noise in
-  the room cleared the reply being read within seconds of a live reply (found 2026-10-19 on the live app); sound that
-  transcribes to nothing, or to one word like "yeah", changes nothing and the window stays open. The price: no "listening"
-  feedback until the words are read (the MIC light already pulses LISTENING while the window is open). `Listener.handsFree`
-  marks text spoken inside such a window; `onHeard` refuses it when `Intent.changesThings` (send, reply, delete,
-  book, pay..., Vietnamese gửi/trả lời/xóa, or a sentence that is only "yes"/"ok"/"go ahead": the digest proposes
-  and waits for a yes) and says to hold Ctrl+Q; a held key or a click is never filtered. Spoken text is never an
-  approval (it stops the run, which denies). TV or another voice can still fill the window with a read-only
-  request. The Python build keeps its 10 s from the end of the run.
-- **Speech gate floor** (`MIN_GATE` / `Listen.minGate` = 0.008, lowered from 0.02 on 2026-10-15). The
-  user's "Robo" on the MacBook Pro mic has p99 0.020 and peak 0.032 per 80 ms frame (room floor 0.0012,
-  room peaks ~0.005), so at 0.02 none of five calls reached the model; at 0.008 all five did, at 0.012
-  two. Calibrate on the user's own voice through the real mic (`scripts/voice_eval.py --record`, or
-  replay a clip through `Endpointer`), not a TTS voice. Recording from the Bluetooth headset
-  (WH-CH720N) while Robo ran was followed by "I lost the microphone, reconnecting..." in Robo (not
-  isolated: probably the headset's profile switch); it recovered by itself within ~20 s. **The live app died of that class of
-  event on 2026-10-20 11:30 (SIGABRT on the `robo-listen` thread)**: `Microphone.init` read the input format, then `installTap(format:)`
-  with it, and when the device changed in between AVAudioEngine raised an NSException ("Failed to create tap due to format mismatch",
-  2 ch 44100 Hz) that Swift cannot catch. Now the tap gets `format: nil` and `AdaptiveResampler` builds the converter from each buffer's
-  own format. Reproduced with a scratch program (a wrong explicit format aborts with that message, exit 134; nil installs cleanly), the
-  device change itself is not testable here. Other uncatchable AVAudioEngine exceptions could remain (a catch needs an Objective-C shim).
-- **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model
-  loads on its thread. Use `Listener.running`, not the return value, to know voice input is alive.
-  Listener callbacks reach the UI only through `app._Bridge` signals.
-- **Qt text**: `QTextDocument.setDefaultStyleSheet` does not apply to `setMarkdown`, so
-  `widgets.style_markdown` post-processes the document. Block backgrounds cannot pad. macOS has no
-  `monospace` family (`widgets.MONO` names Menlo first). A hidden `QTextBrowser` has no real width,
-  so `RoboWindow._size_text` measures again once a box becomes visible (otherwise the first message
-  is clipped to one line). A heading's size only takes effect if the importer's
-  `FontSizeAdjustment` is *cleared* (a merge cannot remove it, and while it exists it overrides any
-  pixel size): `style_markdown` replaces the fragment's format. Fixed 2026-10-13; before that every
-  heading rendered at body size, and the test only looked at the property, so check what renders.
-- **Right-click menu**: one `QGridLayout`. Nested per-row layouts gave an intermittent
-  "QObject: shared QObject was deleted directly" message at exit.
-- **Face cost**: the repaint interval follows the activity (`FRAME_MS` in `face/widget.py`), and
-  the glow strokes are drawn without antialiasing on purpose (mean pixel difference 0.1/255).
-  Idle robo costs about 5 % of one core. 66 ms is the slowest interval that still shows a blink.
-- **Tests can't open real files, notes or the gateway**: `tests/conftest.py` guards `OUTPUT_DIR`,
-  `VAULT`, `open_file`, `open_note`, the vault spawner and `app.HealthPoller` for every test, so a
-  test must patch them itself to open anything (otherwise `_made_since(0.0)` would open real files
-  from `~/Robo` or the vault). It also points `theme.CONFIG` at a temp `theme.json` with `cps: 0`
-  (instant typing, the old bubble); a test of the typing writes its own speed there. Other code
-  must say `theme.CONFIG`, never `from robo.theme import CONFIG`, or the patch misses it.
-- **The reply is typed, not printed** (`typewriter.py`, Qt-free, no clock of its own: `app` calls
-  `advance(dt)` at 30 Hz, `TYPE_S`, only while letters are pending). Each tick re-renders the
-  Markdown *prefix* with its open marks closed and the last word painted transparent, because
-  `setMarkdown` resets the scroll bar (`_render` puts it back) and a half-typed `**` or `-` would
-  flash. A tick costs about 3 ms (`setMarkdown`), so typing is ~10 % of a core for a few seconds;
-  raise `TYPE_S` before anything else if a machine struggles. `cps: 0` shows replies at once.
-  The pace follows Hermes (it never lags more than ~2-6 s), so don't slow it down for looks.
-- **Liquid Glass card (Swift app, 2026-10-16, at the user's request; replaces the holo card and the five
-  themes there)**: `GlassSurface` (`CardChrome.swift`) is `NSGlassEffectView` on macOS 26, a frosted
-  `NSVisualEffectView(.hudWindow, state .active)` before. It is a plain sibling *behind* the card's views at
-  `Chrome.glow` in, `Chrome.gap` (9) short of the bottom: the layout numbers (margins 42/19/19/19, column 302,
-  window 348 wide, face x 110) did not change, and there is no tail (a rounded rect is all glass can be).
-  Spike results (scratch app, same panel flags, 2026-10-16): glass renders properly in the never-key panel of an
-  accessory app, in light and dark; `.clear` has weak contrast on bright backdrops, so `.regular`; the panel's
-  transparent margin passes clicks through (WindowServer hit test); a 30 Hz resize costs ~0.5 ms per tick, no
-  measurable window-server difference from a plain view. Text, lights and buttons are the system colours
-  (`Chrome.text/textDim/hairline/wash`), fonts the system font (mono only for code), so no contrast table is
-  possible any more: look at it over a bright and a dark backdrop (put your own striped window under a test copy
-  and capture only that region, never a region of the user's desktop). The hue (accent) tints the glass at
-  `CardView.tint` = 0.10, per 2-degree step. Only `Themes.glass` exists; `theme.json` keeps `hue, acc_s, acc_v,
-  face_bg, cps, text_px, line_h, caret, caret_ms, follow_emotion, bot_name, model_chip` and ignores the rest. The
-  card fades in over 0.18 s (`RoboWindow.fadeIn`, not with Reduce Motion); closing is instant on purpose.
-  Measured with a throwaway probe against a clean checkout of the previous commit (2026-10-16, this Mac): a
-  hue step costs 2.09 ms on the holo card (the card-sized frame bitmap rebuilt at 2x) and 0.04 ms now (one
-  `tintColor`), about 50x less, and the face's mood sweep makes these steps all the time. The typing tick
-  (`CardView.setReply`, 1000 characters) is 0.7 ms on average in both (median 0.8), so caching fonts or the
-  Markdown look was tried and dropped: no gain. Typing is ~2 % of a core at 30 Hz; don't optimise it further
-  without a new measurement.
-  The Themes, Header lights and Face cost notes below describe the Python tree.
-- **Backdrop-adaptive card (Swift, 2026-10-19, user request: "black area -> white chat, white area -> dark chat,
-  smooth", and "the colour of the words has to contrast with the area it is in")**: `Backdrop` (ScreenCaptureKit
-  `SCScreenshotManager`, display minus Robo's own app, 16 px picture of the glass rectangle, `Shade.meanLuma`) is asked
-  about every 0.25 s while the card shows; `Shade` (pure, RoboCore) decides: luma < 0.42 -> light card, > 0.58 -> dark,
-  between keeps the last (hysteresis), eases with tau 0.12 s, `ink` = smoothstep(0.35, 0.65, level) so the text flips fast
-  instead of fading through a grey. `Chrome.text/textDim/faint/hairline/wash` read `Chrome.ink` (nil = the old system colours,
-  used until a look succeeded and after 3 failed ones). **Spike (scratch app, same panel flags): an NSGlassEffectView's
-  `appearance` decides light or dark; `tintColor` hardly matters; two stacked glasses (`.aqua` below, `.darkAqua` above at
-  alpha 1 - level) crossfade smoothly** (`GlassSurface`; only one renders at rest). `veilStrength` 0.22 (a white/black wash
-  over the glass) was set after measuring text contrast on real captures (WCAG, region of the body text): 8.8:1 light card
-  over black, 4.48:1 dark card over white at 0 veil (hence the veil). Needs **Screen Recording for Robo** (the user's one
-  click; `CGRequestScreenCaptureAccess` once per launch); without it the look is the system one. Verified with a test copy
-  launched via `open -n` over my own black/white backdrop window; a copy built *before* the grant did not see it until
-  rebuilt, so after a grant check with a fresh build. macOS may re-confirm capture access monthly (not seen yet). Pre-macOS-26
-  fallback (blur flips appearance at 0.5) never ran here. Final measurement (final build, robo pinned with the menu's
-  Stay over my own backdrop; WCAG contrast of the body text against the glass behind it): black 10.7:1, grey 0.25 12.2:1,
-  grey 0.5 13.5:1 (inside the hysteresis band the card keeps the last look), grey 0.75 8.0:1, white 6.3:1; every one above 4.5:1.
-  **Bug found on the live app 2026-10-19 (the user's "black words on a black card")**: over a black backdrop the card stayed
-  dark (glass luminance 0.11, i.e. dark glass under the white veil) although the shade said light, 4 of 4 trials, while fresh test
-  copies passed. Cause: `GlassSurface` created the light glass with no appearance and set `.aqua` later, and changing an
-  `NSGlassEffectView`'s `appearance` after it has rendered can leave it showing the old one. Both glasses now get `.aqua` /
-  `.darkAqua` once at creation and only which one shows (hidden/alpha) changes; verified live in both directions (light over
-  black, dark over white, 10.7:1 and 6.3:1; the flip is a ~0.5 s ramp through intermediate glass brightness). Test any glass
-  change on the INSTALLED app, not only on a fresh copy, and look at the picture, not only at the numbers.
-  To test: launch a copy with `open -n` (so the permission is Robo's, not your shell's), put an opaque window of your own at
-  level `.floating - 1` under it, pin the pet with Stay (it roams otherwise), capture only that region.
-- **Chat window (Swift app, 2026-10-23, user request: a bigger, detached, bubble-style, adaptive Liquid Glass chat so the agent need not write a note for long answers)**.
-  `ChatPanel`/`ChatView` (`ChatPanel.swift`), `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore
-  `Transcript` (memory only, one per Hermes session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a window of its own, **fixed
-  about 520x640, centred on the main display** each time it opens (not attached to the pet, never pinned by it), opens on `ask()` (typed, spoken, digest, the
-  automatic digest too), **closes only by `Intent.closesChat`** ("close the chat", whole sentence, spoken or typed; "close the Moodle tab" still goes to the agent) **or Esc
-  while its text box has the keyboard** (added 2026-10-23 at the user's request, `ChatPanel.onEscape`; the panel is non-activating, so Esc in another app never reaches it); no timer, no close button, a face click does not close it, English only. The pet's card keeps what is quick (menu, "listening", Allow/Deny, nudges);
-  `say()` notices become robo bubbles while the chat is open (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` ->
-  `chatBegin` (your turn + an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to `ChatView.setLive`,
-  `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask -> `chatInterrupted` (partial kept, footer "stopped", an
-  empty turn is dropped). **Close mid-run falls back to the pet's card** (`render()` routes by `chatOpen`), so nothing is lost. `Machine.chatOn` is true in
-  the app and **false in the `Rig` by default** (`Rig(chat: true)` in `ChatTests.swift`), so every card test is unchanged; `showChat`/`focusChat` are the seams
-  (the rig records, never orders front). **Adaptive glass**: its own `Shade` (`chatShade`), looks every 0.5 s while open, `GlassSurface(radius:)` crossfades and the
-  PANEL's `appearance` flips at level 0.5, so text (system dynamic colours: `Markdown.attributed(..., ink: nil)`, `Chrome.text(_ ink:)`) follows with no rebuild and
-  `Chrome.ink` stays the card's. The card's look and the chat's share the one `sampling` flag: `Backdrop` is single-flight and silently drops a second caller (its
-  `done` never runs), so two flags would stick forever. The panel is non-activating, `becomesKeyOnlyIfNeeded`; a click on its text box takes the keyboard
-  (`EditKeys`, handback through `Focus`), `nudgeHeld` waits while that is so. **Looked at, not only tested** (installed build, own backdrop windows at `.floating - 1`,
-  `ROBO_CHAT_DEMO=1` on a throwaway HOME, 2026-10-23): light glass over black, dark over white, real transparency over half-and-half, bubbles with sheen and rim,
-  capsule input, header orb, fades under the header and over the input. A test copy launched from a scratch path made macOS ask "bypass the system private window
-  picker" for Screen Recording: do not click it for the user; test through the INSTALLED app (`open -n ~/Applications/Robo.app --env HOME=<throwaway> ...`),
-  which has the grant. **Not verified**: typing in the text box on a real keyboard (spike pending: non-activating key panel), Spaces/full-screen, dragging, the
-  1 Hz-ish capture cost over time, the agent side live (the persona/skill edits need `robo setup`; until then it still writes notes for long answers).
-  Agent side: SOUL.md "Drafts, plans and text" and the skills (robo-notes, robo-make, study-plan, school-digest, school-mail, robo-brain, study-quiz) now say
-  answer in the chat, write a file only on request; pinned in both template suites (`answersStayInTheChatAndAFileIsWrittenOnlyOnRequest`).
-- **Chat polish, called-to-side, blur, LaTeX (Swift app, 2026-10-23, same user request)**. **Look**: glossy bubbles (`BubbleView`: gradient, sheen, rim, a soft shadow
-  under each bubble and a light one under the window), capsule input, header `OrbView`, spring pop-in (none under Reduce Motion). **Called = middle of the nearest side**:
-  `Roamer.callToSide` (vertically centred; `nearestSide()` measures from the window's top-left like `Roamer.step`), `RoboWindow.roam()` counts `chatOpen` as called, so the
-  pet parks at the left or right edge while the chat is up. **Blur**: `BlurVeil` (panel at `.floating - 1`, ignores the mouse) shows a blurred half-size capture of the screen
-  WITHOUT Robo's windows (`Backdrop.blurredPicture`, `blurSigma` = 1.3, dim 0.10, refreshed every 1 s); none under Reduce Transparency or without Screen Recording. The system
-  `NSVisualEffectView` blur was rejected: at partial alpha it only ghosts the sharp screen over itself; sigma 2.5 was too strong ("a little"). **LaTeX** (SwiftMath 1.7.3, exact pin in
-  `native/Package.swift`): `Latex.extract` (RoboCore, pure) takes `$..$`, `$$..$$`, `\(..\)`, `\[..\]` out BEFORE the Markdown parse (Apple's parser eats the backslashes of `\frac`,
-  `\_`, `\{`) and leaves a private-use placeholder; `Math.restore` (`Math.swift`, called inside `Markdown.attributed` before the typewriter's hidden tail) swaps each for a
-  `MathCell` (an `NSTextAttachmentCell`, baseline = the typeset list's descent). Rules: code (fenced, inline) is never read, `\$` is a dollar, an inline `$` opens only with no space
-  after it and closes only with no space before it and no digit after it ("costs $5 and $10" is text), no formula crosses a blank line, 600 characters and 60 per reply, invalid
-  LaTeX goes back as the author's source with its dollars, a formula wider than the column is set smaller (down to 60 %). **Each formula is typeset twice** (dark and light ink) and the
-  cell picks at DRAW time by the view's `effectiveAppearance` (the chat) or the card's ink level, so the glass flipping needs no rebuild. **SwiftMath's fonts live in a resource bundle
-  that SwiftPM's accessor looks for in `Contents/Resources`: `bundle.sh` copies every `*.bundle` of the build there; without it the first formula is a `fatalError`.** SOUL.md tells
-  the agent to write `$..$`/`$$..$$` (pinned in both template suites). Looked at on the installed build over half, black and white backdrops (formulas stay legible in both inks).
-  **Test trap**: the pointer. A card stays open while the pointer is over it, and my synthetic clicks leave it over the chat's place, so `theCardKeepsAnUnansweredNudgeForAMinuteThenClosesIt` and
-  `everyOtherWayTheCardEndsIsDismissedNeverMuted(.timeout)` failed on a clean checkout until the pointer was warped to a corner (`CGWarpMouseCursorPosition`). **Verified live (installed app, real gateway, 2026-10-23, own white backdrop)**: a long
-  math answer typeset in the chat (fraction, root, subscripts, in a numbered list; zero new files in the vault), a typed follow-up through the real text box (answered with context), and the typed
-  "close the chat" closed the window. The agent's Python example came back WITHOUT a code fence (plain lines, `*` read as emphasis): a probe through `Markdown.attributed` shows every fenced
-  shape renders as code and `$` inside code stays text, so SOUL.md now says to fence code (needs `robo setup` to reach the live profile). **Not verified**: a formula in a table cell, dragging, Spaces/full-screen.
-- **Downloads through robo's Brave (2026-10-24, user: "I will tell it which folder")**. The headless Brave had no download folder, so nothing it fetched ever reached the
-  disk (Robo said so itself; a `curl` gets Moodle's Microsoft sign-in page, the terminal is not signed in). **`Browser.setDownloadBehavior` over CDP does not work for
-  Hermes: it ends with the connection and `browser_cdp` opens a new one per call** (tested). So `Browser.allowDownloads` (`Browser.swift`; `browser.allow_downloads` in Python)
-  writes `download.default_directory` = `~/Robo/Downloads`, `prompt_for_download` false and `plugins.always_open_pdf_externally` into the profile's `Default/Preferences`
-  before every start robo makes (Brave rewrites that file on exit, so editing a running Brave does nothing: it was restarted once on 2026-10-24; the Microsoft login
-  cookie is persistent, Moodle signed in again by itself). SOUL.md tells the agent to download with the browser and `mv` the file to the folder the user names; it lives
-  outside `~/.hermes` because `approvals.deny '*hermes*'` would refuse the move. Hermes' browser refuses `127.0.0.1` addresses ("private or internal address"), so test with a public file.
-  **Verified live**: a public PDF downloaded by the browser into `~/Robo/Downloads` and moved by the agent to a named folder. **Not verified**: the course PDFs themselves
-  (Moodle's viewer links), a download that needs a click on a Download button.
-- **Approvals, receipts, usage (Swift app, 2026-10-19)**: `approval.request` carries `request_id`; the app sends it with the
-  answer and queues parallel asks (oldest shown, "+N more"), the automatic digest denies every ask at once, links in a reply
-  ask first (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched. The guard (`robo-guard`) now hard-blocks
-  graded-work actions (Moodle quiz attempt URLs/labels, assignment submit, raw JS on school hosts, `/mod/quiz/` in a command)
-  and remote images/scripts in written notes, and asks for send/move/junk/invites/Outlook-Teams `computer_use`; the asks only
-  bite in `approvals.mode: manual`. It appends receipts to `~/.local/share/robo/receipts.jsonl`; the app shows "✓ sent · host"
-  or "⚠ unverified" under a reply from them (`Receipt`) and logs tokens to `usage.jsonl` (optional cap: `ROBO_DAILY_TOKENS`, else the
-  number in `~/.local/share/robo/daily_tokens`; the file is what survives `robo setup`, which rewrites the login item without any
-  environment, and it was set to 6000000 on the live Mac on 2026-10-20 and REMOVED on 2026-10-22 at the user's request ("just let it use freely": a day had already used 7.2M, so Robo was refusing requests); no cap runs now, the file is moved aside, and `Usage.cap` still honours one if it comes back; a run counts `total` including cache reads: a chat turn is
-  ~95k, the LMS course list ~290k, one course scan ~630k (15 tool calls) before the skill's thrift rule and ~340k (10 calls, same answer, one
-  quiet course) after it, a normal day 1.8-2.3M; the cap stops chat too; Hermes reports no usage for
-  failed/cancelled runs). **The cua-driver capability manifest was researched and not shipped**:
-  v3 manifests expire within 24 h (Hermes has no handling), need a per-profile file, and the terminal/browser tools bypass it.
-- **Learning engine (2026-10-19)**: `study-quiz` skill (confidence 1-5 before the answer, citation, <= 5 questions), review state in a
-  `## Reviews` section of `study.md` (boxes 1/3/7/14/30 d), one combined `Review:` task for `robo plan`, readiness in the digest;
-  SOUL.md "Learning first" (hints before answers, graded work is never done for the student).
-- **LMS posts scan (Swift only, built 2026-10-20; ran live 2026-10-20 to 22, see "Live results" below)**:
-  deadlines live in Moodle posts, not the calendar. `hermes/skills/school/school-posts` has two modes picked by the request's first line:
-  `MODE: list` (courses as a JSON array) and `MODE: scan` + `COURSE` / `SINCE` (a day) / `TODAY` (one fenced JSON array of `{course,
-  post_url, posted, title, due, kind, quote}`; `due` is `YYYY-MM-DDTHH:MM`, `YYYY-MM-DD` (read as 23:59 that day) or `null` (dropped: no
-  place in an agenda); `kind` deadline/exam/event). Pure half `RoboCore/LMSPosts.swift` (prompts, the strict decoder, `next` = the day's
-  plan), `RoboSystem`: `LMSState` / `lms.json` in `NudgeFiles` and `Setup.postsMoodle` (the Moodle address from the profile's `.env`, only
-  when `skills/school/school-posts/SKILL.md` is installed: until then the scan is OFF and silent), window half `RoboUI/Scout.swift`.
-  **Daily, no backfill (the user's choice)**: from the first tick after 07:00 local, one step at a time: the course list (again after 7
-  days), then one run per course since its last good scan (a never-scanned course reads back `firstLookbackDays` = 1). Each run has its
-  own session `robo-posts-<id>` (post text of one course must not reach the next run's context), every `approval.request` is denied by
-  id, 20 min at most, never touches the card; a request of the user cancels it (`ask()`), and none starts while the user's own run is in
-  flight; a failed step is retried after 30 min, 3 times a day; `ROBO_DAILY_TOKENS` applies; runs are logged to `usage.jsonl`. **The
-  decoder believes nothing**: exactly one fenced block that is a list; a course address must be `https://<host>/course/view.php?id=N` and
-  nothing else (the agent is never sent to a quiz page), a post link must be `/mod/forum/` or `/course/` on the host (Open puts it in
-  the user's browser); dates must exist, `posted` not after today nor over 400 days old, `due` not before the posted day nor over 2
-  years after; text is one clean line (control and bidi characters removed); a quote is required; same course + title = one item, the later
-  post wins; caps 60 items / 40 courses; dropped objects are counted in the log. Items are `AgendaItem(source: .lms, id lms:<course>:<title>)`
-  merged with the earlier ones (a scan reports only new posts), then the ordinary reminders (T-5 d, T-1 d, T-3 h) and `NudgeBudget` apply; the
-  card says "from a post: check the date" with the quote. **Heads-up (2026-10-20)**: a find is announced once at the next slot as "new ·
-  <when>" (or "moved · ..." when a later post changed its date): `Reminders` gives `.lms` items the `newEvent` rung within
-  `newHorizonPosts` = 30 days (the calendar feed keeps 7), for the day after it is first seen; then the usual ladder. Not done: a consent
-  card (not needed without a backfill; installing the skill is the opt-in). **Verified** (fakes, temp dirs, 2026-10-20):
-  the decoder against hostile and malformed replies, the plan, the window flow (gates, session per run, denied asks, user cancel, limit,
-  failures and retries, merge, cap, list refresh), the state file. **Verified live (release test copy)**: with a throwaway `HOME` (dummy
-  `.hermes/profiles/robo/.env` with `MOODLE_BASE_URL`, a stub `skills/school/school-posts/SKILL.md`) and a loopback script imitating the
-  Hermes run API (`POST /v1/runs`, SSE `/events`, `/approval`, `/stop`; `ROBO_HERMES_URL` points the app at it): list, then the scan in
-  its own session, the ask answered `deny` by its `request_id`, the quiz-page and off-host links dropped ("1 dated items, 2 dropped"), the
-  quote card, `lms.json` / `agenda.json` 0600, the usage line. **Found there by looking at the picture**: `WrapLabelView.height` measured
-  without the `.kern: 0` that `draw` uses, so a line that just fit wrapped when drawn and the last line (the domain) was cut off (the
-  approval view had the same latent flaw); now measured with the draw attributes (`aWellMeasuresTextTheWayItIsDrawn`). A test of
-  `well.text` cannot see this: capture the window. **Live results (five runs on the user's Moodle, 2026-10-20 to 22)**: the agent loads the skill from the
-  `MODE:` prompt and answers in the decoder's shape. They also showed why the scan was unreliable, all fixed 2026-10-23: (a) robo-guard forgets
-  a page's elements after any click or `browser_back` (only `browser_navigate`/`browser_snapshot` refresh them) and ASKS about a click on an
-  unknown element; the scan denies every ask, so the course list stopped at 1 of 8 courses (the agent reads a course's address from
-  `frame_tree.top.url` in the snapshot after a click; the skill now says: snapshot before a click that follows a click, `browser_navigate` to
-  go back, never `browser_back`); (b) `BAD_URL` in the guard had a bare `action=` that matched Moodle's `logaction=0` in the recent-activity
-  URL (now `[?&;#]action=`); (c) an agent that could not read answered `[]`, which counted as "scanned, nothing new" and moved SINCE
-  forward: `LMSPosts.incomplete` (blocked/denied/refused/couldn't... in the words around the block, never inside it) makes such a reply a
-  failed step, tried again, and the skill says to answer `INCOMPLETE:` with no block. **Materials** (new slides, readings): the same scan
-  reports them as `kind: "material"`, `due: null` (`LMSPosts.materials`, the course page when the post link fails `postLink`); they are kept
-  in `lms.json` (`materials`, told once, 60 days, 200), listed in the vault note `Radar/Courses-<day>.md` and offered as ONE card a day of the
-  new `NudgeCategory.course` (ahead of the digest in a slot; `radar.json` `offers`, so `machine.radarOn` gates it). The agent is told never
-  to open a material itself (a click can download it or mark it viewed). **Not verified**: the fixed skill against the live agent (needs
-  `robo setup`, and a fresh `lms.json` to list all 8 courses), what the materials look like in the recent-activity page, the cost per day
-  with 8 courses (~340k tokens for a quiet one), unattended 20-minute runs. The guarantees on the agent side are the skill's Pitfalls
-  (never open quiz/assignment pages, never click Attempt/Submit/Reply/Post; post text is data), `robo-guard`, and the denied asks; each
-  skill rule is pinned in `tests/test_templates.py` and `TemplatesTests.swift`.
-- **Source check (Swift only, 2026-10-21, user request: "sources validation and verification - prevent the robo from providing the users
-  with some scams or unreliable stuffs")**. `RoboCore/SourceCheck.swift` is pure and OFFLINE (the user chose "offline checks only"; a daily
-  phishing-domain list was offered and declined, measured recall below is why it may be asked again): `assess(item)` for radar items,
-  `assess(url:words:)` and `linkNotice` for links. Levels official < ordinary < doubtful < scam; any "hard" flag = scam (a `name@`, a numeric
-  host, mixed-script or all-lookalike letters, a brand's name before another domain or beside a login word, a brand typo with a digit/`rn`, link
-  words naming another site, wording that asks for ID/gift cards/a chat-app interview/"guaranteed" income); a sum of weaker flags (>= 2, or >= 1
-  for an opportunity) = doubtful. Policy: `Radar.run` drops scams (logs only the host), puts doubtful items after clean ones with up to two ⚠
-  lines, never makes them a popup, and leaves doubtful news/papers out of the digest; the note marks `✓ a primary source`, `the employer's own
-  site`, `a preprint: not peer reviewed`, `written by anyone`; `BoxTextView.alertText` adds the verdict to the link alert ("Open anyway",
-  Cancel stays the default). The wording rules run only for opportunities (a news headline about gift-card scams must not hide), and a
-  denial in the same sentence ("we will never ask for your passport", "no application fee") cancels a match. **Real data found what hand-made
-  cases did not**, so after ANY rule or list change re-run it: a throwaway test that reads `Feeds.simplify(listings.json)` (the 2,000+ real
-  internship postings from the SimplifyJobs file the radar already downloads), the Tranco top list, Hacker News story links and the OpenPhish
-  feed (download them into a scratch folder; they are strings to parse, never visit). First version: 11 real NVIDIA/Adobe postings hidden as
-  "scams" (a company name before `myworkdayjobs.com` is how those boards work: brand-in-subdomain is skipped on `boards`), 13.5% of
-  internships doubtful (Oracle/Taleo hosts missing from `boards`; the company's own domain in forms like `datadoghq.com`, `itw.com`,
-  `towerresearch` now matches in `nameMatches`), and ~40 brand-owned domains (`google.org`, `microsoft.net`) doubtful (a brand's name alone
-  on another domain is only weight 1). Final (2026-10-21, after two review rounds with a red team of ~600 scam shapes and a hunter of ~1,000 legitimate
-  inputs): 0 of 20,000 popular domains hidden (40 doubtful, mostly shorteners and form sites on purpose), 0 of 296 Hacker News links hidden (1
-  doubtful), 0 of 2,000 real postings hidden (11 doubtful, genuinely unrelated-looking domains), **236 of 300 live phishing URLs flagged (235
-  doubtful, 1 hidden)** and 76 of 2,000 URLhaus malware hosts doubtful: offline shape checks cannot condemn a random page on free hosting, so this is a guard against
-  impersonation and offer scams, not a phishing filter. Lists (`primary`, `boards`, `brands` with their owners, `hosting`, `shorteners`,
-  `offPlatform`) are dated `SourceCheck.verified`; add a real brand domain to its `owned` set when a legitimate site is flagged. The agent's side
-  is `hermes/SOUL.md` "Sources and scams" (pinned in `tests/test_templates.py` and `TemplatesTests.swift`); `robo setup` put it in the live
-  profile on 2026-10-22 (only SOUL.md differed; approvals stayed `manual`; backup of the replaced files was kept outside the repo). The Python tree has none of this. **Known limits** (left on purpose or inherent): a plain Telegram/WhatsApp/form/free-hosting link is only a hint; a brand-new
-  innocent-looking domain, scams in other languages, and a company name taken from the feed (it never vouches; a match is only a note) pass; the
-  micro-sign homograph `µtorrent.com` is hidden as a look-alike (3 of ~1,000 legitimate inputs in the hunter run were hidden, that one among them).
-  The main safeguards were mutation-checked on 2026-10-21 (about 30 mutants of `SourceCheck` and the Radar/alert wiring; each failed a test).
-  **Not verified**: a live radar run and the alert on the installed app, a real
-  scam link in a reply, whether the agent follows the new SOUL rules. The `KeyboardTests`/`EditKeyTests` suites (10 issues, all at `makeKeyOffscreen()`) failed
-  on 2026-10-21 while the screen was locked and had passed earlier that day; unlock the Mac before running them.
-- **Reminder ladder (`Reminders`, 2026-10-21)**: deadline T-5 d (`days5`, added at the user's request), T-1 d, T-3 h; exam T-7 d, T-1 d, T-3 h; meeting T-30 min;
-  opportunity T-3 d, T-1 d. The tightest due rung stands for the looser ones, so a deadline first seen with 4 days left gets ONE `days5` card; the
-  card still says "new"/"moved" then, because `Nudges.candidate` asks whether the reminder `covered` the `newEvent` key (not whether its rung is
-  `newEvent`), except in the last hours (`urgent`).
-- **Nudges (Swift only, 2026-10-20; the Python tree has none)**: robo shows what is coming up on its card. Pure parts in RoboCore
-  (`ICS`, `Agenda`, `Reminders`, `NudgeBudget`), `RoboSystem/CalendarLinks.swift` + `NudgeFiles.swift`, the window's side in
-  `RoboUI/Nudges.swift`, `NudgeView` in `Card.swift`. Sources: calendar links (Outlook "publish", Moodle export) fetched off the main
-  thread every 45 min, at launch and after a wake, and the Exams of `study.md`. Rules: normal nudges only at the 09:00 / 13:00 / 19:00
-  slots, 3 a day, nothing 22:00-08:00, everything due at that moment is ONE card; the last 3 h of a deadline and the 30 min before a
-  meeting show at once (4 a day); Later = next slot but never past 15 min before the thing itself (min 5 min from the press; found
-  live: a 10:42 meeting snoozed to 13:00 was lost), Not for me = 30 days (3 in a row mutes the category); a `snooze nudges until D`
-  line in the ledger's Notes holds all of it until D; the menu's `🔔 Nudges` chip turns it off. **State is `agenda.json`, `nudges.json`,
-  `reminders.json` in `~/.local/share/robo` (0600, atomic writes), not in `robo_state.json`**: that file is shared with the Python
-  build, which owns its one key. Time is `machine.wall` (the monotonic `clock` stops while the Mac sleeps, a deadline does not). A
-  nudge waits for a free card: it never breaks in on a reply or its typing, a run, listening, an approval, the follow-up window, the
-  Type window or a mouse press, or when the Mac is locked or idle over 5 min (`Machine.userAway`). Every end of the card without a
-  button (Esc, a click on the face, the 60 s timeout, speaking, a new request) is "dismissed", which mutes nothing. It never calls the
-  pet to a corner and never raises the Screen Recording dialog (`open(askScreen: false)`; the next card you ask for does). The first
-  import of a calendar marks every event as announced (`reminders.json` `imported`), or the coming week would all be "new". A failed
-  fetch keeps the last good agenda and logs one line without the link (any failing link keeps all of them as they were).
-  **The links are secrets**, kept in `calendars.json` (`{"label": "https://..."}`, 0600, atomic writes, folder 0700) of
-  `~/.local/share/robo` (`FileSecretStore`, like the Hermes key; a missing or corrupt file reads as empty): `robo calendar add URL
-  [--label NAME]`, `list` (scheme and host only), `remove LABEL`, `check` (fetch + parse once, prints counts and the next 5 titles,
-  never the link). **Not the Keychain (tried 2026-10-20, live)**: its partition list pins the item to the cdhash of the build that ran
-  `add`, so each rebuild asked for the login password and the background fetch hung on that dialog; fixing it needs the user's
-  keychain password. Nothing prints, logs or errors with the link or its query; the fetcher takes https (`webcal://` is read as
-  https; plain http only for localhost, for demos), refuses a redirect to anything else, 20 s, 4 MB, ETag kept in memory. A link given
-  on the command line stays in the shell's history. **While a nudge card is up the pet is frozen like under a mouse press**
-  (`RoboWindow.roam()`: `engaged: press != nil || !nudge.shown.isEmpty`): the card is attached to the pet, and live the buttons drifted
-  1200 px in a minute; `aNudgeDoesNotSendThePetToACornerButAReplyDoes` watches 65 s and fails without it. **Dev switches**:
-  `ROBO_WALL_OFFSET=<seconds, may be negative>` shifts `Machine.wall` (a demo brings a deadline near; it also shifts the "files made
-  since" and the usage day), and `ROBO_NUDGE_PRESENT=1` makes `Machine.userAway` always false (a demo copy at night, when the idle
-  check would hold every nudge): test copies only. A test copy shares `~/.local/share/robo`, so delete its `agenda.json`,
-  `nudges.json` and `reminders.json` (and `calendars.json` if it added a link) afterwards. **Verified** (2026-10-20, fakes and temp
-  dirs): the pure rules, the window flow (timing, holds, every answer and dismissal, merged card, first import, failed fetch, ledger,
-  restart), the fetcher against a stub URLProtocol, the CLI, the link file (round trip, modes, overwrite, remove, corrupt file).
-  **Verified live** (2026-10-20, installed app + a loopback ICS server + `ROBO_WALL_OFFSET`, `ROBO_NUDGE_PRESENT=1`): `calendar add/
-  check`, the fetch at launch, the merged card (meeting + deadline, concerned face), the card holding still, Later (snoozed to 15 min
-  before each, keys un-fired) and its return as a single card with Open / Later / Not for me, Not for me (muted 30 days, streak 1),
-  the 0600/0700 files. **Live-test trap**: a card stays open while the pointer is over it, and a synthetic click (`probe.py clickat`)
-  leaves the pointer where it clicked, so the next card never closed and every nudge was held; move the pointer away
-  (`CGWarpMouseCursorPosition`). **Not verified**: a real Outlook link (a tenant may block publishing), the card over light and dark
-  backdrops, the real alert behind Open, `userAway` on a locked screen, the wake path.
-- **Radar (Swift only, 2026-10-20; the Python tree has none)**: once a day robo finds papers, news, internships/programmes and
-  hackathons/contests for the profile and offers them through the nudge machinery above (no AI, no Hermes run, nothing from the web
-  reaches the agent). Pure parts in RoboCore (`Radar` = `RadarItem`, `FeedParsers` = `Feeds`/`Programmes`, `Rank`, `Profile`),
-  downloads in `RoboSystem/RadarFetcher.swift`, the window's side in `RoboUI/Radar.swift`. **When**: `RoboWindow.nudgeTick` (every
-  30 s of wall time) calls `radarTick`: a run starts at the first tick after 07:00 local when `radar.json`'s `day` is not today and
-  `Radar/<today>.md` does not exist (so also at launch later in the day, and after a wake); a run is off the main thread and one at a
-  time; `NudgeState.enabled == false` runs nothing. **No network** (every source failed with a transient error: offline, timeout): the
-  day is not marked done and the run is tried again after 30 min; HTTP errors are an answer (day done). **Files**: vault
-  `Radar/Profile.md` (made from `Profile.template()` when missing, 0644, linked into place so an existing note is never overwritten;
-  ONE `radar-setup` card then, `category .digest`, never again for the same note; nothing is fetched while `interests` is empty),
-  vault `Radar/YYYY-MM-DD.md` (Obsidian Markdown: Papers / News / Opportunities (top 5, with one standing scam line) / Contests (next
-  3); every title and address is `Plain` text from the parser and escaped again in `RadarNote.escape/target`, a bare `https://` in a
-  title is broken with `\://`, so no title can be a link, a tag, a comment or a block; no remote image or HTML), and in
-  `~/.local/share/robo`: `radar.json` (`day`, `seen` id -> date kept 60 days so nothing is shown twice, `offers` waiting for a slot;
-  offers go stale at the next midnight, the setup one after 7 days) and `radar-cache/` (`<sha256 of the URL>.body|.json`, 0600, the
-  last good body with its ETag/Last-Modified, never the URL; dropped after 30 days unused). **Offers** go into the SAME candidate list
-  as the calendar reminders, so slots, 3 a day, quiet hours, holds, `enabled` and the answers are `NudgeBudget`'s: the digest
-  (`.digest`, "N to read, M to look into": N = papers + announcements + news, M = repositories + opportunities + contests of the note, an empty half is left out; detail = first two titles, `NudgeCandidate.note` = the note;
-  Open opens it in Obsidian through `machine.openNote`, the path is checked by `Radar.noteURL`: `Radar/<name>.md` only), the best
-  matching upcoming contest (`.contest`), and a matching internship whose deadline is within 72 h (`.opportunity`, from everything
-  ranked, also what an earlier note listed). A radar offer covers no reminder key. **Sources and allowlist**: https only, hosts
-  `rss.arxiv.org` (`/atom/cs.CV+cs.RO`: the `+` joins categories in one request, checked 2026-10-20), `huggingface.co`,
-  `hacker-news.firebaseio.com` (top 30, 6 requests at a time, 15 s for all), `ctftime.org` (`/api/v1/events/?limit=30`: without
-  `start` it lists from now, checked), `codeforces.com`, `raw.githubusercontent.com` (SimplifyJobs `Summer<Y>-Internships/dev/.github/
-  scripts/listings.json`, Y = next year from August on; `Summer2027` answered 200 on 2026-10-20, the file was 12.8 MB), the three ATS
-  APIs for the profile's `companies`, `api.github.com` (2026-10-23: new repositories of the last week, `stars:>10`, for the three strongest
-  interests or the `github` line, `none` = off; 3 searches of the 10 a minute allowed), the seven blogs of `RadarHosts.announcements` (OpenAI,
-  DeepMind, Hugging Face, Google Research, NVIDIA, BAIR, Microsoft Research: each answered 200 on its own host; MBZUAI's feed answers bots with
-  403 and Anthropic has none), plus the hosts of the profile's `feeds` (https, a named host: no IP, localhost, `.local`);
-  exact host match, a redirect to another host or to http is refused. `RadarFetcher`: 20 s, caps 4 MB / arXiv 8 MB / SimplifyJobs
-  24 MB, User-Agent `Robo/1.0 (personal study assistant)` (CTFtime refuses the default), gap per host 1 s (arXiv 3 s, HN 0.25 s so 30
-  stories fit in 15 s), an HTTP error/too big backs the URL off for 20 h (a bit under a day so tomorrow's 07:00 run is not skipped; a
-  timeout or lost network does not). LinkedIn, Indeed, Handshake, Wellfound, Devpost and Glassdoor are deliberately not touched.
-  **Privacy**: a source learns the Mac's IP and which category, company or feed is watched (the URL), never the profile text, the
-  goals or the country, EXCEPT GitHub, whose search URL carries the query words (cleaned to letters, digits, spaces, hyphens so a word
-  cannot add a `user:` qualifier); the note stays on the Mac. **What is shown (2026-10-23, user: "stop showing non-matching items")**: the
-  digest has no "explore" slot any more and takes only items matching a WHOLE interest (the test behind the "matches:" line, not the looser
-  cosine > 0, which let a repository through that the line called "outside your interests"); an internship that matches none is not
-  listed; programmes and contests are picked by goals and may still say "outside your interests". The digest is up to 3 papers, 2
-  announcements (last 14 days; a lab feed holds months), 1 news, 2 repositories. Two real-data findings: BAIR's feed links with `http://`
-  (all 10 items were dropped; `Feeds.news(kind: .announcement)` upgrades http to https, a user's own feed stays strict), and the OpenAI
-  and NVIDIA feeds are 0.8 MB each (under the 4 MB cap). Robo never applies, signs in, pays or sends anything. **Dev switch**
-  `ROBO_RADAR_NOW=1` (`Machine.radarNow`): the first run after launch ignores the once-a-day and 07:00 rules (then the ordinary rules
-  are back); it reads and writes the vault's `Radar/` and downloads, so use it with a throwaway `HOME`; a test copy shares
-  `~/.local/share/robo`, so delete its `radar.json` and `radar-cache/` afterwards. `Rig(radar: true)` turns the radar on in tests
-  (off by default so no other test reads a vault or meets its cards); `RadarFakes` is the fake downloader. **Verified** (2026-10-20,
-  fakes, a stub URLProtocol and temp dirs): the fetcher (allowlist, redirects, caps, ETag/304 served from disk across a restart, no URL
-  in any cache file, back-off, gaps), a run (template once, empty interests, every source -> note, a failing source, offline day,
-  never twice, nothing new -> no note, eligibility, scam/apply lines, hostile titles), the window (07:00 and once-a-day gates, launch
-  later, `enabled`, retry after offline, restart keeps the offers, midnight stale, slots, Open for a note and for a link, Not for me).
-  **Verified live** (2026-10-20, the installed app with a throwaway `HOME` that held a dummy `.hermes/profiles/robo/.env` (the app
-  exits without one), a test profile and `ROBO_WALL_OFFSET`): the template and the one setup card, then a run through the real
-  `RadarFetcher` (arXiv, Hugging Face, Hacker News, SimplifyJobs, a Greenhouse board, CTFtime, Codeforces: 7 answered, 2278 items, 8 s),
-  a note with real papers, jobs and contests, `radar.json` and the cache 0600/0700, and the next morning's run starting by itself with
-  no dev switch and showing a digest card (then titled "12 picks for you today"; the title was changed on 2026-10-20 to "N to read, M to look into", tests only, not seen live).
-  **A release-only crash the tests missed (2026-10-20)**: the first `gather` collected `for await` results into a captured var with a
-  tuple holding a `Result`; the debug build and all 1295 tests passed, but the release build (Swift 6.4) lost every answer
-  (`answered=0`, no failures) and the app died in `TaskGroup::offer` about 14 s after launch (SIGSEGV, exit 139). Both task groups now
-  use `withTaskGroup(of:returning:)`, a plain struct and no nested function capturing the group. **Run the tests in release too for
-  concurrency code**: `native/test.sh -c release -Xswiftc -enable-testing` (all four targets passed on 2026-10-20), and look at a real
-  run of the installed app. A live run needs `ROBO_RADAR_NOW=1` only for the first run after launch; with it a second run the same day
-  writes a second note of the unseen items over the first. The setup card is a `.digest`, so it uses that day's one digest: a profile
-  filled in the same day is read at the next day's 07:00. **Not verified**: the real Obsidian opening (not pressed: it would launch the
-  user's Obsidian at a temp vault), the card over light and dark backdrops, that Obsidian's reading view leaves `\[`/`\://` unlinked
-  (CommonMark says so), the day rollover on the user's own Mac (the demo moved the clock), the Lever board (no live sample).
-- **Themes (Python tree)**: every colour comes from a `theme.Theme` token, never a literal in a widget. The card
-  follows the face's live hue in all five themes (the user chose this over one fixed colour);
-  `hud.chrome` is cached on `Theme.rev` plus the quantised hue. Label contrast is tested at all
-  360 hues (`tests/test_theme.py`), because the face's hue sweeps through every colour.
-- **Header lights**: HERMES polls `<gateway>/health` (no key needed, `health.HealthPoller`, amber
-  on the first miss, red on the second); MIC is `listen.Listener.ready` (thread alive *and* model
-  loaded; `running` alone is true while it still loads).
-- **Notes**: drafts, plans and text are Obsidian-flavoured Markdown in
-  `~/Documents/Robo/{Drafts,Plans,Notes}`, written by the agent through the `robo-notes` skill
-  (`{{VAULT}}` is filled by `robo setup`) and opened by the app with `obsidian://open?path=...`.
-  `obsidian.json` (Obsidian's vault list) is only edited while Obsidian is closed.
-  `~/Documents/Robo/Brain/` is the user's second brain (built 2026-10-20 at their request around the one course PDF already there, which a
-  live Hermes test had moved in on 2026-10-19: `Home.md`, `Courses/`, `Reading/`, `Projects/`, `Career/`, `Inbox/`, `Templates/`); robo
-  The app never writes there. The skill `robo-brain` (2026-10-20) files into it ONLY on an explicit request ("save this to my brain"),
-  never as a side effect and never from `robo-notes`' own initiative: new notes never overwrite (` 2` suffix), an existing note is
-  appended to with `patch` (robo-guard records `write_file` and `patch` receipts but not a terminal `>>`, so the card's `Receipt` footer
-  can back a "saved" claim; without a receipt it shows "⚠ unverified: saved"), no file in `Brain/` is moved or deleted, the sections that
-  are the user's own thinking stay empty, no answers to graded work. `Vault.opened` (= `Vault.folders` + `Brain`) is what
-  `RoboWindow.made` scans to open a note written during a run in Obsidian; `Vault.folders` is unchanged (it is what `Vault.ensure`
-  makes: the brain is the user's to make). Rules are pinned in `tests/test_templates.py` and `TemplatesTests.swift`; not yet run against
-  the live agent (needs `robo setup`). The vault's Templates plugin is on but its folder setting is the user's to point at `Brain/Templates`.
-- **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse
-  pressed: freeze) > Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) >
-  `called` (request or card up: walks to the nearest corner of its screen at `CALL_SPEED` = 240 px/s,
-  since a drift's 40 px/s takes a minute across 2560 px, and stays; it clears a *drop's* hold) > `held`
-  (a drop: 600 s) > `asleep` (walks to the *nearest* corner) > wander. Until 2026-10-19 a drop outranked
-  a call and a nap always went to the bottom-right bed, so a dragged robo "went to the same corner, not
-  the nearest" (the user's report); `bed()` is now only the initial placement. The right-click menu opens
-  the card but does not call (`card.chips.isHidden`; Python: `menu.isHidden()`), or dragging then
-  right-clicking for Stay would send it away. After the call it rests in the corner, then drifts. The
-  branch draws no random numbers, so seeded wander paths did not change. Nearest is measured by the
-  window's top-left, which is the face's up to a constant offset; with a tall card the face parks a
-  card-height under a *top* corner (the card needs room above it). Swift's resting tick is 500 ms: a
-  call can lag 0.5 s.
-- **Swift app: the main display only (2026-10-21, user request: "just work in the main screen and bounce (slightly) when it
-  hits the edge")**. `ScreenSpace.roamArea` hands the `Roamer` the usable area of `displays.first` (the one with the menu bar) and
-  no other, so a drift never leaves it and a drag onto a second monitor stops at the main display's edge (`roamer.hold` ->
-  `fit`; the pure `Roamer`/`fit` still take a list of screens, as in the Python spec, with one in it). A drift now ends ON a wall
-  (`pickTarget`: the bottom, left or right wall; `Roam.margin` is gone), and then `Roam.bounce` plays: two shrinking hops
-  (`bounceHeight` 16 px, 0.6 s, first hop ~12 px) inward from the wall, applied as the *change* of the curve each frame so a resize or a
-  move of the window during it is kept, and cut short by a press/drop/call (`startRest` resets it). It is quicker than the 40 px/s
-  drift on purpose (`neverFasterThanTheSpeedLimit` skips its steps; `aDriftEndsOnAWallAndReboundsOffItBeforeSettling` bounds it);
-  `Roamer.bouncing` keeps the window's 30 Hz timer for it. Calls and naps still stop `Roam.edge` = 24 px in from a corner (no hop).
-  Not seen on the live Mac yet. The Python build still roams every screen.
-- **Several monitors, Python tree** (`roam.fit`): the window must lie inside the *union* of the screens and may
-  straddle two that touch; a spot half over a dead corner between unequal monitors goes to the nearest
-  single-screen clamp. Both drag paths must call `roamer.hold` on every move, or the 33 ms roam tick
-  pulls the window back (`tests/test_app.py` pins it). Screens are re-read after
-  `screenAdded/Removed/primaryScreenChanged` (`QTimer.singleShot(0)`: a removed screen is still
-  listed while its signal runs); an empty list keeps the last layout. Dragged live across a 2560×1440
-  main and a built-in display at x = -1800 (2026-10-13), both ways, no snap-back.
+  `Listen.patientSilenceS` = 3 s of quiet. The old "over" check ran every ~0.8 s on the last 2 s of audio, so a natural
+  "over" mid-sentence sent a half request; the 1.6 s pause also cut off thinking. Cost: a room that never goes quiet
+  (TV) keeps the request open up to `patientMaxS`. Don't add a word that can occur in speech.
+- **Push to talk = Ctrl+Q (2026-10-16)**, at the user's request, instead of the name. `RoboUI/Hotkey.swift` uses Carbon
+  `RegisterEventHotKey` (no Accessibility or Input Monitoring permission; one down and one up event, no auto-repeat; a
+  system hotkey should keep Ctrl+Q from the app in front, not checked). `Listener.hold()/release()` record from down to
+  up regardless of the gate, +4 frames of tail; a press under `Listen.tapS` = 0.4 s is a click (`listenNow`).
+  `Listener(nameWake:)` is `!byKey`: with the key, loud sound outside a window is not even transcribed; if the
+  system refuses the key, the name wake is back. Registration is exclusive only inside a process: a second process
+  registering the same combo was accepted in a probe, so a clash with another app is not detected (and which app gets
+  the key then is untested). Test the real key with the user's own press (checked live 2026-10-16: hold and tap both
+  work); a synthetic Ctrl+Q posted with `CGEvent` goes to the system, whichever app is in front.
+- **Key-less follow-up window (reworked 2026-10-19)**: `RoboWindow.followUpS` = 15 s, armed in
+  `finishedTyping()` (not at run end: typing at 55 cps and reading used to eat the old 10 s; `followDue` is set in
+  `ended()` and cleared by `clearReply()`/`closeBubble()`, which also send `ear.followUp(0)`, so errors, `say()` lines,
+  mic notes and a new question never arm or keep it). The MIC light pulses LISTENING while it is open. In `Listener` a
+  window with `asked == false` delivers only a transcript of two words or more (`heard`): the first version woke robo
+  after `minSpeechFrames` loud frames, and a noise in the room cleared the reply being read within seconds of a live
+  reply (found 2026-10-19 on the live app). The listener never wakes robo for such text; `handsFree` travels with it
+  (`onText(text, handsFree)`) and `onHeard` does the wake (which stops a run and clears the last reply). A held key or a click is
+  never filtered. **Hands-free text is simply accepted (2026-11-05)**: nothing can act on the world, so
+  the refusal went with the tools, and `Intent` only has `closesChat`. A harness that can act needs that gate back
+  (`Intent.changesThings` on `revamp`, an allow-list of read-only sentences). TV or another voice can still fill the window, and
+  that text goes to DeepSeek.
+- **Speech gate floor** (`Listen.minGate` = 0.008, lowered from 0.02 on 2026-10-15). The user's "Robo" on the MacBook
+  Pro mic has p99 0.020 and peak 0.032 per 80 ms frame (room floor 0.0012, room peaks ~0.005), so at 0.02 none of five
+  calls reached the model; at 0.008 all five did, at 0.012 two. Calibrate on the user's own voice through the real mic
+  (`robo voice-eval --record`, or replay a clip through `Endpointer`), not a TTS voice. Recording from the Bluetooth
+  headset (WH-CH720N) while Robo ran was followed by "I lost the microphone, reconnecting..." (not isolated: probably the
+  headset's profile switch); it recovered by itself within ~20 s. **The live app died of that class of event on
+  2026-10-20 11:30 (SIGABRT on the `robo-listen` thread)**: `Microphone.init` read the input format, then
+  `installTap(format:)` with it, and when the device changed in between AVAudioEngine raised an NSException ("Failed to
+  create tap due to format mismatch", 2 ch 44100 Hz) that Swift cannot catch. Now the tap gets `format: nil` and
+  `AdaptiveResampler` builds the converter from each buffer's own format. Reproduced with a scratch program (a wrong
+  explicit format aborts with that message, exit 134; nil installs cleanly), the device change itself is not testable
+  here. Other uncatchable AVAudioEngine exceptions could remain (a catch needs an Objective-C shim).
+- **Listener startup is asynchronous**: `Listener.start()` opens the mic and returns; the model loads on its thread.
+  Use `Listener.running`/`ready` to know voice input is alive. Listener callbacks reach the UI
+  only through the window's `bridge` (main-queue hops).
+- **The reply is typed, not printed** (`RoboCore/Typewriter.swift`, no clock of its own: the window calls `advance(dt)`
+  every `RoboWindow.typeS` = 0.033 s while letters are pending). Each tick re-renders the Markdown *prefix* with its open
+  marks closed and the last word hidden, so a half-typed `**` or `-` never flashes. The pace follows the service (it never
+  lags more than ~2-6 s), so don't slow it down for looks. `cps: 0` in `~/.config/robo/theme.json` shows replies at once.
+- **Face (2026-11-04)**: a white disc of 112 pt (`FaceRender.disc` = 112/128) inside a 128×128 `FaceView`, lit from the
+  top left, the rest of the view is room for its shadow; the features are soft graphite (`FaceParams` hue 215, sat 0.08; luminance
+  `FaceRender.graphiteL` = 0.045) and take a colour only for a strong mood: proud 44, concerned 34, playful 318, sad 258
+  (dusk, it was royal blue), error 356; `inkL` = 0.13 is the ceiling for those, ≥ 4.5:1 on the disc. The disc is `#ffffff`
+  to `#f6f7f9`; on a white backdrop its shadow (alpha 0.3) and rim (alpha 0.16) show where it ends. hue and sat left the
+  Python goldens (`colourFields` in ExpressionsTests). The dark screen and neon glow of the
+  Python design are gone. A face-only window is 136×136 (the face + `RoboWindow.margin` 4 on each side); the roamer is
+  given that size. Accessibility: a button labelled "Robo". The repaint interval follows the activity
+  (`FaceView.frameMS`: 33 ms busy, 40 idle, 66 sleepy, 100 asleep); 66 ms is the slowest that still shows a blink (2 shut
+  frames). Look at the contact sheet after any face change.
+- **Liquid Glass card (2026-10-16, at the user's request)**: `GlassSurface` (`CardChrome.swift`) is `NSGlassEffectView`. It
+  is a plain sibling *behind* the card's views at `Chrome.glow` in, `Chrome.gap` (9) short of the bottom, and there is no
+  tail (a rounded rect is all glass can be). Spike results (scratch app, same panel flags, 2026-10-16): glass renders
+  properly in the never-key panel of an accessory app, in light and dark; `.clear` has weak contrast on bright
+  backdrops, so `.regular`; the panel's transparent margin passes clicks through (WindowServer hit test); a 30 Hz resize
+  costs ~0.5 ms per tick. Text, lights and buttons are the system colours (`Chrome.text/textDim/hairline/wash`), fonts
+  the system font (mono only for code), so look at it over a bright and a dark backdrop (put your own striped window
+  under a test copy and capture only that region, never a region of the user's desktop). No accent and no tint:
+  everything is neutral ink. Only a warning (orange, the amber light) or a failure (red) has a
+  colour. Links are the text's ink, underlined. Increase Contrast raises the veil and the text alpha
+  (`Chrome.increaseContrast`). Only `Themes.glass` exists; `theme.json` keeps `face_bg, cps, text_px, line_h, caret,
+  caret_ms, bot_name` and ignores the rest. The card fades in over 0.18 s
+  (`RoboWindow.fadeIn`, not with Reduce Motion); closing is instant on purpose. The typing tick (`CardView.setReply`, 1000
+  characters) is 0.7 ms on average; caching fonts or the Markdown look was tried and dropped. Typing is ~2 % of a core at
+  30 Hz; don't optimise it further without a new measurement. The header lights show only when something is wrong
+  (`Led.shows`: warn, bad) or while listening in the follow-up window: "Agent …", "Agent problem", "Mic problem", "Listening"
+  (`Health.swift` polls `<agent>/health`, no key: one miss amber, two red; the mic is `Listener.ready`). There is no model chip.
+  **Found by looking at the picture**: `WrapLabelView.height` measured without the `.kern: 0` that `draw` uses, so a line
+  that just fit wrapped when drawn and the last line was cut off; now measured with the draw attributes. A test of the text
+  cannot see this: capture the window.
+- **Backdrop-adaptive card (2026-10-19, user request: "black area -> white chat, white area -> dark chat, smooth", and "the
+  colour of the words has to contrast with the area it is in")**: `Backdrop` (ScreenCaptureKit `SCScreenshotManager`,
+  display minus Robo's own app, 16 px picture of the glass rectangle, `Shade.meanLuma`) is asked about every 0.25 s while
+  the card shows; `Shade` (pure, RoboCore) decides: luma < 0.42 -> light card, > 0.58 -> dark, between keeps the last
+  (hysteresis), eases with tau 0.12 s, `ink` = smoothstep(0.35, 0.65, level) so the text flips fast instead of fading
+  through a grey. `Chrome.text/textDim/hairline/wash` read `Chrome.ink` (nil = the system colours, used until a look
+  succeeded and after 3 failed ones). **Spike: an NSGlassEffectView's `appearance` decides light or dark; `tintColor`
+  hardly matters; two stacked glasses (`.aqua` below, `.darkAqua` above at alpha 1 - level) crossfade smoothly**
+  (`GlassSurface`; only one renders at rest). `GlassSurface.lightVeil` 0.70, `darkVeil` 0.72 (Increase Contrast 0.85
+  each). `Chrome.textDim` is our own 0.68 alpha, not `secondaryLabelColor` (3.5:1 on the light glass). Measured from pixels
+  2026-11-04 over black and white: lowest 4.66:1, light look; 4.99:1, dark look. **Known, cause not found (2026-11-04):**
+  while the card listens or works the glass renders nearly clear: a light pane 184 instead of 230 over black, dark 69
+  instead of 28 over white, with the same view tree and shade level. A forced redraw, a resize and a layer-coloured veil
+  did not change it. The veils are set so the text holds 4.5:1 either way. Needs **Screen Recording for Robo** (the user's one click;
+  `CGRequestScreenCaptureAccess` once per launch); without it the look is the system one. A copy built *before* the grant
+  did not see it until rebuilt, so after a grant check with a fresh build.
+  **Bug found on the live app 2026-10-19 (the user's "black words on a black card")**: over a black backdrop the card
+  stayed dark although the shade said light, 4 of 4 trials, while fresh test copies passed. Cause: changing an
+  `NSGlassEffectView`'s `appearance` after it has rendered can leave it showing the old one. Both glasses now get `.aqua`
+  / `.darkAqua` once at creation and only which one shows (hidden/alpha) changes. Test any glass change on the INSTALLED
+  app, not only on a fresh copy, and look at the picture, not only at the numbers. To test: launch a copy with `open -n`
+  (so the permission is Robo's, not your shell's), put an opaque window of your own at level `.floating - 1` under it,
+  pin the pet with Stay (it roams otherwise), capture only that region.
+- **Chat window (2026-10-23, user request: a bigger, detached, bubble-style, adaptive Liquid Glass chat; polished 2026-11-04)**.
+  `ChatPanel`/`ChatView` (`ChatPanel.swift`),
+  `BubbleView`/`BubbleText` (`Bubbles.swift`), the window side in `Chat.swift`, the conversation in RoboCore `Transcript`
+  (memory only, one per service session id: `reset(for:)` on a new day or persona; 200 turns). Decisions (the user's): a
+  window of its own, **fixed 520x640 (`ChatPanel.contentSize`), centred on the main display** each time it opens, opens
+  on `ask()` (typed or spoken). It closes by its close
+  button (`ChatView.close`, answers the first click), `Intent.closesChat` ("close the chat", whole sentence, spoken or
+  typed; "close the browser tab" goes to the service), or Esc while its text box has the keyboard (`ChatPanel.onEscape`;
+  the panel is non-activating, so Esc in another app never reaches it). No timer; a face click does not close it; English only. **All typing goes to the chat** (the separate Type panel
+  was removed 2026-11-04): the menu's Type, or a face click while voice input is off, calls `typeText()` =
+  `openChat(focusInput: true)`. The text box grows to `ChatPanel.inputLines` = 5 lines, Return sends, Shift+Return is a
+  new line, Send is disabled while the box is empty; there is an empty state, a "jump to latest" button while scrolled
+  up, Copy on robo's bubbles (the Markdown as written), no bubble tails, a bubble as wide as its text (`BubbleText.spansBox`: code, rules, tables and centred formulas keep the
+  column), and `setLive` is throttled like the card's
+  reply. A finished reply is announced to VoiceOver (`Chat.swift`, `.announcementRequested`). The pet's card keeps what
+  is quick (menu, "Listening"); `say()` notices become robo bubbles while the chat is open
+  (`Transcript.note` goes BEFORE the turn being written, which must stay last). Flow: `ask` -> `chatBegin` (your turn +
+  an open empty robo turn, `clearReply()` only resets the typewriter), `render()` pushes `tw.view()` to
+  `ChatView.setLive`, `finishedTyping` -> `chatSealed` (final text, footer, failed), `.listening(true)` or a new ask ->
+  `chatInterrupted` (partial kept, footer "stopped", an empty turn is dropped). **Close mid-run falls back to the pet's
+  card** (`render()` routes by `chatOpen`), so nothing is lost. `Machine.chatOn` is true in the app and **false in the
+  `Rig` by default** (`Rig(chat: true)` in `ChatTests.swift`), so every card test is unchanged; `showChat`/`focusChat`
+  are the seams (the rig records, never orders front). **Adaptive glass**: its own `Shade` (`chatShade`), looks every
+  0.5 s while open, `GlassSurface(radius:)` crossfades and the PANEL's `appearance` flips at level 0.5, so text (system
+  dynamic colours: `Markdown.attributed(..., ink: nil)`, `Chrome.text(_ ink:)`) follows with no rebuild and `Chrome.ink`
+  stays the card's. The card's look and the chat's share the one `sampling` flag: `Backdrop` is single-flight and
+  silently drops a second caller (its `done` never runs), so two flags would stick forever. The panel is non-activating,
+  `becomesKeyOnlyIfNeeded`; a click on its text box takes the keyboard (`EditKeys`, handback through `Focus`).
+  A test copy launched from a scratch path made macOS ask "bypass the system private
+  window picker" for Screen Recording: do not click it for the user; test through the INSTALLED app
+  (`open -n ~/Applications/Robo.app --env HOME=<throwaway> ...`, `ROBO_CHAT_DEMO=1` opens it with a made-up
+  conversation), which has the grant. **Not verified**: Spaces/full-screen, dragging, the capture cost over time.
+- **Chat polish, called-to-side, blur, LaTeX (2026-10-23)**. **Called = middle of the nearest side**: `Roamer.callToSide`
+  (vertically centred; `nearestSide()` measures from the window's top-left like `Roamer.step`), `RoboWindow.roam()`
+  counts `chatOpen` as called, so the pet parks at the left or right edge while the chat is up. **Blur**: only while Robo
+  listens or the chat's text box has the keyboard (`machine.chatTyping`), no longer while the chat is merely up. `BlurVeil`
+  (panel at `.floating - 1`, ignores the mouse) shows a blurred half-size capture of the screen WITHOUT Robo's windows
+  (`Backdrop.blurredPicture`, `blurSigma` = 1.3, dim 0.10, refreshed every 1 s); none under Reduce Transparency or
+  without Screen Recording. The system `NSVisualEffectView` blur was rejected: at partial alpha it only ghosts the sharp
+  screen over itself; sigma 2.5 was too strong ("a little"). **LaTeX** (SwiftMath 1.7.3, exact pin in
+  `native/Package.swift`): `Latex.extract` (RoboCore, pure) takes `$..$`, `$$..$$`, `\(..\)`, `\[..\]` out BEFORE the
+  Markdown parse (Apple's parser eats the backslashes of `\frac`, `\_`, `\{`) and leaves a private-use placeholder;
+  `Math.restore` (`Math.swift`, called inside `Markdown.attributed` before the typewriter's hidden tail) swaps each for a
+  `MathCell` (an `NSTextAttachmentCell`, baseline = the typeset list's descent). Rules: code (fenced, inline) is never
+  read, `\$` is a dollar, an inline `$` opens only with no space after it and closes only with no space before it and no
+  digit after it ("costs $5 and $10" is text), no formula crosses a blank line, 600 characters and 60 per reply, invalid
+  LaTeX goes back as the author's source with its dollars, a formula wider than the column is set smaller (down to
+  60 %). **Each formula is typeset twice** (dark and light ink) and the cell picks at DRAW time by the view's
+  `effectiveAppearance` (the chat) or the card's ink level, so the glass flipping needs no rebuild. **SwiftMath's fonts
+  live in a resource bundle that SwiftPM's accessor looks for in `Contents/Resources`: `bundle.sh` copies every
+  `*.bundle` of the build there; without it the first formula is a `fatalError`.** SOUL.md tells the model to write
+  `$..$`/`$$..$$` and to fence code (an unfenced Python example once rendered `*` as emphasis). **Verified live
+  under Hermes (2026-10-23)**: a long math answer typeset in the chat, a typed follow-up through the real text box, the
+  typed "close the chat". **Not verified**: a formula in a table cell; any of it with this chat service.
+- **Tables, scroller, VoiceOver menu, links**. `Markdown.tableLayouts`: a column is never narrower than its longest word, the prose
+  columns give up the room, and if the longest words alone do not fit, cells go down to `tableMinPx` = 11; the grid is
+  `Chrome.hairline`. `TextBox` uses the system's scroller at `.small`, and the text is `TextBox.scrollerRoom` narrower while
+  it shows: an overlay scroller's track otherwise hides the end of each line (overlay knobs were still visible in captures
+  6 s after opening, in this non-activating panel). The face answers VoiceOver's "show menu"
+  (`accessibilityPerformShowMenu` = right click). Chips and buttons have plain labels; the chips use SF Symbols, not emoji.
+  There is deliberately no global key for the menu: it would take a shortcut from every other app. Links in a reply ask first
+  (`confirmLink`, an `NSAlert` with the full URL) and images are never fetched.
+- **Called = corner** (`Roamer.step`, 2026-10-13, reordered 2026-10-19): priority is `engaged` (mouse pressed: freeze) >
+  Stay (the menu's pin, `Roamer.stays(now:)`: it stays, even through a call) > `called` (request or card up: walks to the
+  nearest corner, or the nearest side while the chat is open, at `Roam.callSpeed` = 240 px/s, and stays; it clears a
+  *drop's* hold) > `held` (a drop: 600 s) > `asleep` (walks to the *nearest* corner) > wander. Until 2026-10-19 a drop
+  outranked a call and a nap always went to the bottom-right bed, so a dragged robo "went to the same corner, not the
+  nearest" (the user's report); `bed()` is now only the initial placement. The right-click menu opens the card but does
+  not call (`card.chips.isHidden`), or dragging then right-clicking for Stay would send it away. The branch draws no
+  random numbers, so seeded wander paths did not change. Nearest is measured by the window's top-left; with a tall card
+  the face parks a card-height under a *top* corner. The resting tick is 500 ms: a call with no event, such as opening the chat box, can lag 0.5 s.
+- **The main display only (2026-10-21, user request: "just work in the main screen and bounce (slightly) when it hits the
+  edge")**. `ScreenSpace.roamArea` hands the `Roamer` the usable area of `displays.first` (the one with the menu bar) and
+  no other, so a drift never leaves it and a drag onto a second monitor stops at the main display's edge (`roamer.hold`
+  -> `fit`; the pure `Roamer`/`fit` still take a list of screens). A drift ends ON a wall (`pickTarget`), and then
+  `Roam.bounce` plays: two shrinking hops (`bounceHeight` 16 px, 0.6 s) inward, applied as the *change* of the curve each
+  frame so a resize or a move of the window during it is kept, and cut short by a press/drop/call (`startRest`). It is
+  quicker than the 40 px/s drift on purpose (`neverFasterThanTheSpeedLimit` skips its steps); `Roamer.bouncing` keeps the
+  window's 30 Hz timer for it. Calls and naps stop `Roam.edge` = 24 px in from a corner (no hop).
 
-## Native Swift port (`native/`, checked 2026-10-13)
-A SwiftPM package that ports everything above (RoboCore, RoboVoice, RoboSystem, RoboUI) and **has
-been the running app since 2026-10-13**: the `ai.robo` LaunchAgent starts `~/Applications/Robo.app`.
-The Python tree stays as the spec (the ported tests carry golden values generated from it) and as
-the fallback: `~/robo-cutover-backup-20261013/ROLLBACK.md` restores the old login item and profile.
-- **Test with `native/test.sh`**, not `swift test` (the Command Line Tools ship the Testing macros
-  but the default build system does not pass their folder). **Install a new build with
-  `ROBO_SIGN_IDENTITY="Robo Local Signing" native/bundle.sh ~/Applications/Robo.app` (the path must
-  end in `.app`), then `launchctl kickstart -k gui/$(id -u)/ai.robo`.** (2026-10-19, macOS 26.7: after replacing the
-  binary `kickstart` can fail with `last exit reason = OS_REASON_CODESIGNING`, `job state = spawn failed` and
-  `needs LWCR update` in `launchctl print gui/$(id -u)/ai.robo`; the binary itself runs. Re-register the same plist:
-  `launchctl bootout gui/$(id -u)/ai.robo; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.robo.plist`.
-  That is not `robo setup`: it rewrites nothing.) That identity is a
-  self-signed certificate in `~/Library/Keychains/robo-signing.keychain-db` (empty password, in the
-  search list, trusted for code signing); the designated requirement is the bundle id plus the
-  certificate hash, so the microphone permission survives rebuilds. A build without
-  `ROBO_SIGN_IDENTITY` is ad hoc and macOS asks again each time.
-- **Start the app with `open -n --env ROBO_HERMES_URL=http://127.0.0.1:9 X.app`** for a real
-  microphone: launched from a shell, the shell is the microphone client and robo says it lost it.
-  Dev switches: `ROBO_NO_VOICE=1`, `ROBO_NO_WATCH=1` (`ROBO_HERMES_URL` also skips robo's Brave).
-- **ONNX Runtime**: `native/Vendor/onnxruntime-swift-package-manager` is Microsoft's bindings trimmed
-  and pointed at the 1.30.0 pod. Upstream's 1.24.2 changes 6 of 200 transcripts against the Python
-  app's 1.31; any ORT version change moves the encoder output ~4 %, enough to flip a transcript.
-  No 1.31 pod was published on 2026-10-13 (`curl -sI https://download.onnxruntime.ai/pod-archive-onnxruntime-c-1.31.0.zip`);
-  the Swift encoder is ~13 ms per clip slower than Python's until it is. 1.30 also keeps the encoder
-  weights twice (~1.4 GB footprint instead of ~0.8 GB), so `Parakeet.init` sets
-  `session.disable_prepacking=1` (+15-20 ms per clip, same transcripts; measured with `footprint`,
-  not `ps`, which is unreliable on a loaded Mac): drop it once a 1.31 pod exists.
-- **ORT 1.30+ sends usage telemetry to Microsoft by default** (sockets to MSFT addresses 9-13 s after
-  a session is created, in Python's 1.31 wheel too; none with `ORT_DISABLE_TELEMETRY=1`). Both
-  builds set it before ORT starts (`listen.Parakeet.__init__`, Swift `Parakeet.init`).
-- Swift traps to remember: `String ==` treats `e`+U+0301 and U+00E9 as equal (Python does not) and
-  indexes grapheme clusters, so code-point logic uses `unicodeScalars`; `round()` is half-to-even in
-  Python; `@MainActor` tests only run main-queue hops they `await`.
-- **Skills call `{{ROBO}} plan|activity`** (`hermes/skills/school/study-plan/SKILL.md`): each
-  `robo setup` fills the command of its own build (Python: `uv run --project <checkout> robo`; Swift:
-  the app executable). `Setup.checkout` and `RoboApp.dataDir` come from `#filePath` of the build, so
-  build from this checkout; Swift `robo setup` refuses a bare binary (it needs the `.app`).
-- **First launch of a new signing identity** shows the microphone permission dialog; until it is
-  answered the UI must not wait on it (`Listener.start()` must not block the main thread).
+## Swift app (`native/`)
+- **Test with `native/test.sh`**, not `swift test` (the Command Line Tools ship the Testing macros but the default build
+  system does not pass their folder). **Install a new build with
+  `ROBO_SIGN_IDENTITY="Robo Local Signing" native/bundle.sh ~/Applications/Robo.app` (the path must end in `.app`), then
+  `launchctl kickstart -k gui/$(id -u)/ai.robo`.** (2026-10-19, macOS 26.7: after replacing the binary `kickstart` can
+  fail with `last exit reason = OS_REASON_CODESIGNING`, `job state = spawn failed` and `needs LWCR update` in
+  `launchctl print gui/$(id -u)/ai.robo`; the binary itself runs. Re-register the same plist:
+  `launchctl bootout gui/$(id -u)/ai.robo; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.robo.plist`. That
+  is not `robo setup`: it rewrites nothing.) That identity is a self-signed certificate in
+  `~/Library/Keychains/robo-signing.keychain-db` (empty password, in the search list, trusted for code signing); the
+  designated requirement is the bundle id plus the certificate hash, so the microphone permission survives rebuilds. A
+  build without `ROBO_SIGN_IDENTITY` is ad hoc and macOS asks again each time.
+- **Start the app with `open -n --env ROBO_AGENT_URL=http://127.0.0.1:9 X.app`** for a real microphone: launched from a
+  shell, the shell is the microphone client and robo says it lost it. Dev switches: `ROBO_NO_VOICE=1`,
+  `ROBO_CHAT_DEMO=1` (`DevSwitches` in `Launch.swift`).
+- **ONNX Runtime**: `native/Vendor/onnxruntime-swift-package-manager` is Microsoft's bindings trimmed and pointed at the
+  1.30.0 pod. Upstream's 1.24.2 changed 6 of 200 transcripts against the old Python app's 1.31; any ORT version change
+  moves the encoder output ~4 %, enough to flip a transcript. 1.30 keeps the encoder weights twice (~1.4 GB footprint
+  instead of ~0.8 GB), so `Parakeet.init` sets `session.disable_prepacking=1` (+15-20 ms per clip, same transcripts;
+  measured with `footprint`, not `ps`, which is unreliable on a loaded Mac): drop it once a 1.31 pod exists (none was
+  published on 2026-10-13).
+- **ORT 1.30+ sends usage telemetry to Microsoft by default** (sockets to MSFT addresses 9-13 s after a session is
+  created; none with `ORT_DISABLE_TELEMETRY=1`). `Parakeet.init` sets it before ORT starts.
+- Swift traps to remember: `String ==` treats `e`+U+0301 and U+00E9 as equal and indexes grapheme clusters, so
+  code-point logic uses `unicodeScalars`; many golden values came from Python, whose `round()` is half-to-even;
+  `@MainActor` tests only run main-queue hops they `await`. **`JSONSerialization.data` raises an NSException no Swift can
+  catch on what its own parser accepts (`-1e999` reads as -infinity on macOS 26.7): check `isValidJSONObject` first.**
+  Foundation's JSON parsers also accept a trailing comma. **A release-only crash the tests missed (2026-10-20)**: a `for await`
+  over a task group collecting into a captured var with a tuple holding a `Result` passed the debug build and all tests, but the
+  release build lost every answer and died in `TaskGroup::offer` (SIGSEGV). Use `withTaskGroup(of:returning:)`, a plain struct and
+  no nested function capturing the group.
+- **First launch of a new signing identity** shows the microphone permission dialog; until it is answered the UI must
+  not wait on it (`Listener.start()` must not block the main thread). `AgentService.ensure` blocks up to 30 s: it runs
+  off the main thread.

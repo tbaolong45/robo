@@ -1,4 +1,4 @@
-// The microphone as the listener sees it: 80 ms frames of 16 kHz mono float32 (Python's `Mic`).
+// The microphone as the listener sees it: 80 ms frames of 16 kHz mono float32.
 import AVFoundation
 import Foundation
 

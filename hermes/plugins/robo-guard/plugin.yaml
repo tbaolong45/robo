@@ -1,8 +1,0 @@
-name: robo-guard
-version: 1.1.0
-description: "Asks the user before irreversible actions (delete, send, move, sudo...); blocks graded work, remote content in notes and changes to robo's own setup; keeps receipts."
-author: robo
-kind: standalone
-provides_hooks:
-  - pre_tool_call
-  - post_tool_call

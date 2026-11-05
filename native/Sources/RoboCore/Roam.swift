@@ -1,6 +1,5 @@
 // Where the floating face goes: a pure, time-stepped wander along the screen edges.
-// Port of src/robo/roam.py (multi-screen version): no AppKit, time comes in as an argument. Unlike the Python tree, the
-// app gives it ONE screen (the main display; see `ScreenSpace.roamArea`), a drift ends on a wall of it and the pet
+// No AppKit, time comes in as an argument. The app gives it ONE screen (the main display; see `ScreenSpace.roamArea`), a drift ends on a wall of it and the pet
 // rebounds off that wall a little (`Roam.bounce`), since 2026-10-21 at the user's request.
 import Foundation
 
@@ -31,7 +30,7 @@ public enum Roam {
     }
 }
 
-/// A small seedable generator: `Roamer(seed:)` replays the same path, like Python's `random.Random`.
+/// A small seedable generator: `Roamer(seed:)` replays the same path.
 public struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
     public init(seed: UInt64) { state = seed }
@@ -44,7 +43,7 @@ public struct SplitMix64: RandomNumberGenerator {
     }
 }
 
-/// `a...b` for either order (Swift's `random(in:)` traps when a > b, Python's `uniform` does not).
+/// `a...b` for either order (Swift's `random(in:)` traps when a > b).
 func uniform<G: RandomNumberGenerator>(_ a: Double, _ b: Double, _ rng: inout G) -> Double {
     a + (b - a) * Double.random(in: 0..<1, using: &rng)
 }
@@ -175,7 +174,7 @@ public final class Roamer {
             wander(now, dt)
         }
         pos = fit(pos, size, screens)
-        // Python rounds half to even; so do we, to keep both builds on the same pixel.
+        // Half to even, which the tests' paths are pinned to.
         return IVec(Int(pos.x.rounded(.toNearestOrEven)), Int(pos.y.rounded(.toNearestOrEven)))
     }
 
@@ -245,10 +244,22 @@ public final class Roamer {
     }
 
     private func go(_ target: Vec, _ speed: Double = Roam.speed) {
-        origin = pos
+        // A walk to a corner that gets a new aim (the card grew, a sleeper was called) bends and keeps its speed: the new ease is entered
+        // at the point where it moves that fast (speed x 6p(1-p), at most 1.5x, in the first half), from an origin that puts it on `pos`.
+        let ratio = mode == .come || mode == .sleep ? walkSpeed / speed : 0
+        let p = (1 - (1 - 2 * min(ratio, 1.5) / 3).squareRoot()) / 2
+        let e = p * p * (3 - 2 * p)
+        origin = (pos - target * e) / (1 - e)
         goal = target
-        elapsed = 0
-        trip = dist(pos, target) / speed
+        trip = dist(origin, target) / speed
+        elapsed = p * trip
+    }
+
+    /// px/s of the walk under way (the derivative of `travel`'s ease), 0 once it arrived.
+    private var walkSpeed: Double {
+        guard trip > 0, elapsed < trip else { return 0 }
+        let p = elapsed / trip
+        return dist(origin, goal) / trip * 6 * p * (1 - p)
     }
 
     /// Ease from origin toward goal; true on arrival.

@@ -1,7 +1,6 @@
 // Hands-free voice input: robo hears every sentence (Parakeet TDT v2, on this laptop) and takes the
 // ones that call it by name ("robo, what time is it?", "what's due, robo?"), plus anything said in the
 // few seconds after it answers, or after a click on its face. Nothing leaves the laptop.
-// Port of src/robo/listen.py.
 import Accelerate
 import Foundation
 import os
@@ -34,7 +33,7 @@ public enum Listen {
     static let levelMaxGain = 20.0  // ...but near-silence must not become loud noise
 }
 
-/// A failure with a message for the user (what Python raises as OSError or RuntimeError).
+/// A failure with a message for the user.
 public struct VoiceError: Error, CustomStringConvertible {
     public let description: String
     public init(_ description: String) { self.description = description }
@@ -51,7 +50,7 @@ private let sound = #"r(?:o|u|oo|ou)m?bb?"#
 private let startName = "\(sound)(?:o|oh|ow|ot|le)"
 private let endName = "\(sound)(?:o|oh|ow)"
 
-// NSRegularExpression, not Swift's Regex: its \b is the simple \w boundary Python uses.
+// NSRegularExpression, not Swift's Regex: its \b is the simple \w boundary the name matcher was tuned on.
 private func regex(_ pattern: String) -> NSRegularExpression {
     try! NSRegularExpression(pattern: pattern, options: .caseInsensitive)
 }
@@ -65,7 +64,7 @@ private let anywhere = regex(#"\b"# + endName + #"\b"#)  // "robo"-like words ar
 private func whole(_ s: String) -> NSRange { NSRange(location: 0, length: (s as NSString).length) }
 private func found(_ re: NSRegularExpression, in s: String) -> Bool { re.firstMatch(in: s, range: whole(s)) != nil }
 
-/// Python's `\w` for a str: a letter, a number or an underscore.
+/// `\w`: a letter, a number or an underscore.
 func isWord(_ c: Unicode.Scalar) -> Bool {
     switch c.properties.generalCategory {
     case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
@@ -127,7 +126,7 @@ func speechGate(_ idleRms: [Double]) -> Double {
     max(Listen.gateFactor * percentile(idleRms, Listen.noisePercentile), Listen.minGate)
 }
 
-/// The last `max` items appended (Python's `deque(maxlen=)`).
+/// The last `max` items appended.
 struct Ring<T> {
     private(set) var items: [T] = []
     let max: Int
@@ -159,7 +158,7 @@ struct Endpointer {
 
 // MARK: - Threads
 
-/// A flag threads can wait on (Python's threading.Event).
+/// A flag threads can wait on.
 final class Flag {
     private let cond = NSCondition()
     private var flag: Bool
@@ -191,17 +190,20 @@ public typealias Transcribe = ([Float]) throws -> String
 /// `onWake()` when robo is called by name, then `onText(request)`. A request ends after
 /// `patientSilenceS` of quiet. A sentence also counts without the name while robo expects one:
 /// after `listenNow()` (a click; `onText("")` if nothing is said within `noSpeechS`), after
-/// `followUp(seconds:)` (it just answered; `onWake` waits there for the words themselves, two at least, so a knock or a
-/// hum changes nothing and the reply stays, and `handsFree` is true while that text is delivered), or right after a bare "robo". A mic that stops
+/// `followUp(seconds:)` (it just answered; there only words count, two at least, so a knock or a hum changes nothing and
+/// the reply stays; the text comes with no `onWake` and `handsFree` true: the app decides), or right after a bare "robo". A key
+/// or a click during a follow-up recording drops what that recording held and starts the user's own request. A mic that stops
 /// delivering is reopened; one that only gives silence is reported through `onNote`, like every
 /// other message for the user.
 ///
-/// Unlike the Python listener, transcription runs on its own serial queue, so the loop keeps
-/// reading frames (noise floor, pre-roll, mic watch) while the last sentence is transcribed. The
-/// results are the same: before the next sentence starts or a click window times out, the loop
-/// waits for the transcription in flight, as Python's inline call did.
+/// Transcription runs on its own serial queue, so the loop keeps reading frames (noise floor,
+/// pre-roll, mic watch) while the last sentence is transcribed. Before the next sentence starts or
+/// a click window times out, the loop waits for the transcription in flight.
 public final class Listener {
-    let onWake: () -> Void, onText: (String) -> Void, onNote: (String) -> Void
+    /// `onText(text, handsFree)`: `handsFree` is true for a text said inside a follow-up window, with no key, click or name, so it may
+    /// have come from the TV or the room. It travels with the text: the app reads it after a hop to the main thread, by which time
+    /// another text may have been delivered.
+    let onWake: () -> Void, onText: (String, Bool) -> Void, onNote: (String) -> Void
     private let makeMic: () throws -> AudioSource
     private let makeStt: () throws -> Transcribe
     private let makeQuick: (() throws -> Transcribe)?
@@ -215,9 +217,9 @@ public final class Listener {
     private var generation = 0  // which start() the thread belongs to
     private var openUntil = 0.0  // a sentence without the name counts until then
     private var asked = false  // the open window came from a click or a bare "robo": end it with ""
-    private var handsFreeText = false  // the text `onText` last got was said in a follow-up window (no key, click or name)
     private var held = false  // the push-to-talk key is down
     private var heldAt = 0.0  // since when
+    private var owed = false  // a press the loop has not taken yet: the UI shows "listening" until it gets an answer
     private var tapped = false  // the last press was a tap: release() opened a window, nothing to transcribe
     private let nameWake: Bool  // a sentence that starts with robo's name wakes it
     private var failure: Error?  // a transcription that threw: the loop stops with it
@@ -227,7 +229,7 @@ public final class Listener {
     private var lastAudio = 0.0  // when the mic last delivered a frame
     private var zeros = 0  // consecutive all-zero frames
 
-    public init(onWake: @escaping () -> Void, onText: @escaping (String) -> Void,
+    public init(onWake: @escaping () -> Void, onText: @escaping (String, Bool) -> Void,
                 onNote: @escaping (String) -> Void,
                 mic: @escaping () throws -> AudioSource = { try Microphone() },
                 transcriber: @escaping () throws -> Transcribe = { try Parakeet().callAsFunction },
@@ -244,25 +246,14 @@ public final class Listener {
     /// Running and the speech model is loaded: what you say is understood from now on.
     public var ready: Bool { lock.withLock { alive && loaded } }
 
-    /// The text `onText` is delivering (read it there) was said inside a follow-up window: no key, no click, no name,
-    /// so it may have come from the TV or the room. False for a held key, a click or tap, and a sentence with the name.
-    public var handsFree: Bool { lock.withLock { handsFreeText } }
-
-    /// Every `onText` goes through here, so `handsFree` is never left over from an earlier text.
-    private func deliver(_ text: String, handsFree: Bool = false) {
-        lock.withLock { handsFreeText = handsFree }
-        onText(text)
-    }
-
-    /// Start listening and return at once (always true; Python returned false for a mic that would
-    /// not open). The listener thread opens the mic, which can block for as long as the user takes to
+    /// Start listening and return at once. The listener thread opens the mic, which can block for as long as the user takes to
     /// answer macOS's permission dialog, then loads speech recognition while the audio spoken
     /// meanwhile is kept. A mic or model that fails is reported through `onNote`; `running` and
     /// `ready` say how far it got. Nothing here waits for the mic, so the UI thread keeps pumping.
-    public func start() -> Bool {
+    public func start() {
         let mine = lock.withLock { () -> Int in
             generation += 1
-            alive = false; opening = true; loaded = false; failure = nil; held = false
+            alive = false; opening = true; loaded = false; failure = nil; held = false; owed = false
             return generation
         }
         stopping.clear(); finished.clear()
@@ -270,7 +261,6 @@ public final class Listener {
         thread.name = "robo-listen"
         thread.qualityOfService = .userInitiated
         thread.start()
-        return true
     }
 
     /// The listener thread: open the mic, run, and say so when done. A start() or stop() that came
@@ -323,7 +313,7 @@ public final class Listener {
 
     /// The push-to-talk key went down: record what is said until `release()`.
     public func hold() {
-        lock.withLock { held = true; heldAt = clock(); tapped = false; openUntil = 0; asked = false }
+        lock.withLock { held = true; owed = true; heldAt = clock(); tapped = false; openUntil = 0; asked = false }
     }
 
     /// The key came up. A tap (shorter than `tapS`) opens the click window; a longer press is sent.
@@ -332,6 +322,7 @@ public final class Listener {
             let was = held
             held = false
             tapped = was && clock() - heldAt < Listen.tapS
+            if tapped { owed = false }  // the click window answers it
             return tapped
         }
         if tap { open(Listen.noSpeechS, asked: true) }
@@ -369,7 +360,7 @@ public final class Listener {
                         if expired { asked = false }  // clicked (or said "robo"), then nothing: give up
                         return expired
                     }
-                    if gaveUp { deliver("") }
+                    if gaveUp { onText("", false) }
                 }
                 guard let frame = try read(mic!) else {
                     if clock() - lastAudio >= micStallS {
@@ -379,10 +370,17 @@ public final class Listener {
                     continue
                 }
                 let gate = speechGate(quiet.items), level = rms(frame)
-                if lock.withLock({ held }) {  // push to talk: the key decides, not the gate
+                let (down, unseen) = lock.withLock { (held, owed) }
+                if down {  // push to talk: the key decides, not the gate
                     inflight.wait()
-                    try recordHeld(mic!, first: frame, gate: gate, transcribe: transcribe)
+                    try recordHeld(mic!, first: [frame], gate: gate, transcribe: transcribe)
                     preRoll.removeAll()
+                    continue
+                }
+                if unseen {  // the press came and went while the model loaded or a transcription ran: none of the audio can be tied to it
+                    inflight.wait()
+                    lock.withLock { owed = false }
+                    onText("", false)
                     continue
                 }
                 if level <= gate {
@@ -402,8 +400,14 @@ public final class Listener {
                     continue
                 }
                 if woke && !inWindow { onWake() }
-                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, quick: quick)
+                let u = try record(mic!, preRoll.items + [frame], gate: gate, woke: woke, handsFree: inWindow, quick: quick)
                 preRoll.removeAll()
+                if u.interrupted {
+                    // After a click or the name the sentence goes on under the key. What a follow-up window recorded nobody asked for: it
+                    // may be the room, and must not get the key's authority. It is dropped, and the next round takes the key or the click.
+                    if u.woke && !inWindow { try recordHeld(mic!, first: u.frames, gate: gate, transcribe: transcribe) }
+                    continue
+                }
                 if u.loud >= Listen.minSpeechFrames {
                     let audio = u.frames.flatMap { $0 }
                     infer.async(group: inflight) { [self] in
@@ -455,10 +459,10 @@ public final class Listener {
         guard let request = woke ? withoutName(text) : addressed(text) else { return }  // TV, other people
         if handsFree {
             // A follow-up window is open to any sound, so sound alone must not wake robo: a cough, a door or a hum would wipe
-            // the reply being read. Only words do (two at least: a lone "yeah" is what a recogniser makes of noise), and the
-            // window stays open for the real sentence.
+            // the reply being read. Only words count (two at least: a lone "yeah" is what a recogniser makes of noise), and the
+            // window stays open for the real sentence. Nor is robo woken here: the app wakes itself if it takes the sentence
+            // (`handsFree`), and one it refuses leaves the reply as it was.
             guard request.split(whereSeparator: \.isWhitespace).count >= 2 else { return }
-            onWake()
         } else if !woke {
             onWake()
         }
@@ -466,14 +470,15 @@ public final class Listener {
         if request.isEmpty {  // just "robo" (or nothing intelligible): the request follows
             open(Listen.noSpeechS, asked: true)
         } else {
-            deliver(request, handsFree: handsFree)
+            onText(request, handsFree)
         }
     }
 
     /// Frames from the key going down until `releaseTailFrames` after it came up, then one transcription:
     /// the request, or "" if nothing was said. A tap records nothing (`release()` opened a window).
-    private func recordHeld(_ mic: AudioSource, first: [Float], gate: Double, transcribe: @escaping Transcribe) throws {
-        var frames = [first], loud = rms(first) > gate ? 1 : 0, tail = Listen.releaseTailFrames
+    private func recordHeld(_ mic: AudioSource, first: [[Float]], gate: Double, transcribe: @escaping Transcribe) throws {
+        defer { lock.withLock { owed = false } }
+        var frames = first, loud = first.filter { rms($0) > gate }.count, tail = Listen.releaseTailFrames
         while !stopping.isSet && Double(frames.count) * Listen.frameS < Listen.patientMaxS {
             if !lock.withLock({ held }) {
                 if tail == 0 { break }
@@ -484,18 +489,19 @@ public final class Listener {
             if rms(frame) > gate { loud += 1 }
         }
         if stopping.isSet || lock.withLock({ tapped }) { return }
-        guard loud >= Listen.minSpeechFrames else { return deliver("") }
+        guard loud >= Listen.minSpeechFrames else { return onText("", false) }
         let audio = frames.flatMap { $0 }
         infer.async(group: inflight) { [self] in
-            do { deliver(withoutName(try transcribe(audio))) } catch { lock.withLock { failure = error } }
+            do { onText(withoutName(try transcribe(audio)), false) } catch { lock.withLock { failure = error } }
         }
     }
 
-    struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool }
+    struct Utterance { var frames: [[Float]]; var loud: Int; var woke: Bool; var interrupted = false }
 
     /// Frames until the sentence ends (or stop()), how many were above the gate, and whether robo
-    /// woke up (a quick early check found its name at the start).
-    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool,
+    /// woke up (a quick early check found its name at the start). The key going down ends it at the next frame, and so does a
+    /// click during a follow-up recording (`handsFree`): `interrupted`, nothing is transcribed.
+    private func record(_ mic: AudioSource, _ first: [[Float]], gate: Double, woke: Bool, handsFree: Bool,
                         quick: Transcribe) throws -> Utterance {
         var u = Utterance(frames: first, loud: 1, woke: woke)
         var ep = Endpointer(gate: gate)
@@ -504,6 +510,10 @@ public final class Listener {
         if woke { ep.endSilence = Listen.patientSilenceS; ep.maxS = Listen.patientMaxS }
         let timeoutFrames = Int((Listen.readTimeout / Listen.frameS).rounded(.toNearestOrEven))
         while !stopping.isSet {
+            if lock.withLock({ owed || (handsFree && asked) }) {
+                u.interrupted = true
+                break
+            }
             guard let frame = try read(mic) else {  // the mic went quiet: that time counts as silence
                 if (0..<timeoutFrames).contains(where: { _ in ep.feed(0) }) { break }
                 continue

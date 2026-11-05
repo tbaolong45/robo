@@ -1,10 +1,10 @@
 // The chat window's side of the pet's window: when it opens, what goes into it, how it closes, and what its glass does about the
-// backdrop. The conversation is `transcript` (in memory, one per Hermes session); the window shows it (ChatPanel.swift, Bubbles.swift).
-//   - It opens when you ask for something (typed, spoken, the digest) and stays until you tell Robo to close it ("close the chat",
-//     spoken or typed; `Intent.closesChat`): no timer, no click on the pet closes it; Esc closes it only while its text box has the keyboard.
+// backdrop. The conversation is `transcript` (in memory, one per agent session); the window shows it (ChatPanel.swift, Bubbles.swift).
+//   - It opens when you ask for something (typed or spoken) and stays until you close it: its close button, "close the chat" (spoken
+//     or typed; `Intent.closesChat`), or Esc while its text box has the keyboard. No timer, no click on the pet closes it.
 //   - Your turn and Robo's answer go into it; the answer is typed letter by letter into its bubble by the same typewriter as the pet's
 //     card. A local notice ("Sorry, I didn't catch that.") is a line of it. The pet's card keeps what is quick and about the pet: the
-//     menu, "listening", Allow/Deny and the nudges.
+//     menu and "listening".
 //   - If you close it while an answer is on its way, the answer shows on the pet's card instead: nothing is lost.
 //   - It looks at what is behind it a few times a second (`Backdrop`, one look at a time with the card's) and turns light over a dark
 //     screen and dark over a light one: the glass crossfades and the PANEL's appearance flips, so the text, which uses the system's
@@ -23,9 +23,16 @@ extension RoboWindow {
     private func makeChat() -> ChatPanel {
         let p = ChatPanel(theme: theme, reduceMotion: machine.reduceMotion)
         p.chat.onSubmit = { [unowned self] text in ask(text) }
-        p.onBecomeKey = { [weak self] in if let app = self?.machine.focus.other() { self?.chatPreviousApp = app } }
-        p.onResignKey = { [weak self] in self?.chatReleased() }
+        p.onBecomeKey = { [weak self] in
+            if let app = self?.machine.focus.other() { self?.chatPreviousApp = app }
+            self?.refresh()  // typing: the blur comes on
+        }
+        p.onResignKey = { [weak self] in
+            self?.chatReleased()
+            self?.refresh()
+        }
         p.onEscape = { [weak self] in self?.closeChat() }
+        p.chat.onClose = { [weak self] in self?.closeChat() }
         chat = p
         return p
     }
@@ -52,7 +59,7 @@ extension RoboWindow {
     /// Re-centre it (the arrangement of the displays changed).
     func placeChat() { chat?.setFrame(ChatPanel.frame(centredOn: mainVisible), display: true) }
 
-    /// "Close the chat": it goes away, the conversation stays for the next time. Nothing else closes it.
+    /// "Close the chat", the close button or Esc: it goes away, the conversation stays for the next time.
     func closeChat() {
         guard chatOpen else { return }
         chatOpen = false
@@ -78,11 +85,11 @@ extension RoboWindow {
 
     /// A request begins: the conversation is the agent's session's (a new day or persona starts it again), the answer being written is
     /// finished off, your turn and an empty turn of Robo's are added, and the chat opens.
-    func chatBegin(you text: String?) {
+    func chatBegin(you text: String) {
         chatInterrupted(stopped: false, footer: chatFooter)
         transcript.reset(for: sessionID)
         retireListeningCard()
-        if let text { transcript.append(.you, text) }
+        transcript.append(.you, text)
         transcript.append(.robo, "")
         (chatFooter, chatFailed) = ([], false)
         openChat()
@@ -105,7 +112,7 @@ extension RoboWindow {
         chat?.chat.set(turns: transcript.turns)
     }
 
-    /// The answer is all typed: it is final, with its footer (notes opened, what the guard recorded).
+    /// The answer is all typed: it is final, with its footer.
     func chatSealed() {
         guard machine.chatOn, transcript.writing else { return }
         transcript.seal(tw.text, footer: chatFooter, failed: chatFailed)
@@ -116,36 +123,48 @@ extension RoboWindow {
 
     /// The pet's card opened to listen; the words came and went to the chat (or nothing came): the card goes, unless it has more to say.
     func retireListeningCard() {
-        guard !card.isHidden, approvals.isEmpty, nudge.shown.isEmpty, card.chips.isHidden else { return }
+        guard !card.isHidden, card.chips.isHidden else { return }
         closeAt = 0
         fit { card.isHidden = true }
         card.clearReply()
     }
 
-    /// What the chat says about Robo: "Listening…", "Working…" with the dots and what it is doing, "Listening for your reply".
+    /// What the chat says about Robo: "Listening…", "Working…" with the dots, "Listening for your reply".
     func refreshChat(listening now: Bool, thinking: Bool, label: String) {
         guard chatOpen, let c = chat?.chat else { return }
         let waiting = self.now() < followUntil && !busy
         c.setStatus(now ? "Listening…" : busy ? (label.isEmpty ? "Working…" : label) : waiting ? "Listening for your reply" : "")
-        c.setWorking(thinking, caption: label)
+        c.setWorking(thinking)
+    }
+
+    /// VoiceOver reads a finished answer out (the chat's or the card's), as it would a new message in a chat app.
+    static var announce: (String) -> Void = { text in
+        NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    func announceReply(inChat: Bool) {
+        let text = inChat ? chat?.chat.lastRoboText ?? "" : card.reply.string.replacingOccurrences(of: "\u{FFFC}", with: "")
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty { Self.announce("Robo: " + words) }
     }
 
     /// ROBO_CHAT_DEMO=1: a made-up conversation, to look at the chat over a bright and a dark backdrop without an agent (a test copy).
     func demoChat() {
         transcript.reset(for: "demo")
-        transcript.append(.you, "What is due this week?")
+        transcript.append(.you, "Compare a list and a tuple in Python.")
         transcript.append(.robo, "")
         transcript.seal("""
-            Three things, newest first:
+            The main differences:
 
-            | When | What |
-            |---|---|
-            | **Fri 23:59** | Problem set 4 (Linear Algebra) |
-            | **Thu 14:00** | Lab 3 demo (Introduction to AI) |
-            | **Tue** | Reading quiz, chapter 5 |
+            | | List | Tuple |
+            |---|---|---|
+            | **Mutable** | yes | no |
+            | **Written** | `[1, 2]` | `(1, 2)` |
+            | **Hashable** | no | if its items are |
 
-            The lab is the tightest one: `git log` shows two commits so far.
-            """, footer: ["✓ saved · Plan.md"])
+            Use a tuple for a fixed record and a list for a collection that grows.
+            """)
         transcript.append(.you, "Explain gradient descent in a few lines, and show a tiny example.")
         transcript.append(.robo, "")
         transcript.seal("""

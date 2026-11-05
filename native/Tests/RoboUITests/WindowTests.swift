@@ -1,5 +1,5 @@
-// The window: the displays and their coordinates, layout, dragging across displays, the Type window, the
-// menu and leaving. The rig (fake Hermes, ear, displays, clock, openers) is in TestRig.swift.
+// The window: the displays and their coordinates, layout, dragging across displays, the menu and leaving.
+// The rig (fake agent, ear, displays, clock) is in TestRig.swift.
 import AppKit
 import Foundation
 import Testing
@@ -92,12 +92,12 @@ import RoboVoice
     @Test func itStartsAsJustAFaceInTheBottomRightCorner() async {
         let r = Rig()
         defer { r.close() }
-        #expect(r.frame.size == CGSize(width: 136, height: 104))
+        #expect(r.frame.size == CGSize(width: 136, height: 136))
         #expect(r.window.card.isHidden)
-        #expect(r.window.face.frame == CGRect(x: 4, y: 4, width: 128, height: 96))
+        #expect(r.window.face.frame == CGRect(x: 4, y: 4, width: 128, height: 128))  // the 112 disc and room for its shadow
         // Roam.edge (24) from the bottom-right corner of the usable area: x = 1440 - 136 - 24, 24 above the bottom
         #expect(r.frame.origin == CGPoint(x: 1280, y: 24))
-        #expect(r.window.windowTopLeft == Vec(1280, 772))
+        #expect(r.window.windowTopLeft == Vec(1280, 740))
     }
 
     /// Put the window in the middle of the display, clear of every edge.
@@ -113,11 +113,11 @@ import RoboVoice
         let before = r.faceMiddle
         r.window.open()
         #expect(!r.window.card.isHidden)
-        #expect(r.frame.width == 348 && r.frame.height >= 107)
-        #expect(r.window.face.frame.origin.x == 110)  // (348 - 128) / 2: centred under the card
+        #expect(r.frame.width == 348 && r.frame.height >= 139)
+        #expect(r.window.face.frame.origin.x == 110)  // (348 - 128) / 2: centred under the card, the disc's centre at x 174
         #expect(abs(r.faceMiddle.x - before.x) < 1 && abs(r.faceMiddle.y - before.y) < 1)
         r.window.closeBubble()
-        #expect(r.window.card.isHidden && r.frame.size == CGSize(width: 136, height: 104))
+        #expect(r.window.card.isHidden && r.frame.size == CGSize(width: 136, height: 136))
         #expect(abs(r.faceMiddle.x - before.x) < 1 && abs(r.faceMiddle.y - before.y) < 1)
     }
 
@@ -350,12 +350,12 @@ import RoboVoice
         #expect(r.window.card.isHidden && r.ear.now == 0)
     }
 
-    @Test func aDeadListenerLeavesTheClickToTheTypingWindow() async {
-        let r = Rig()
+    @Test func aDeadListenerLeavesTheClickToTheChatsTextBox() async {
+        let r = Rig(chat: true)
         defer { r.close() }
         r.ear.running = false  // its thread died after it started
         r.window.clicked()
-        #expect(r.typers.count == 1 && r.ear.now == 0)  // no "listening" nobody will end
+        #expect(r.chatFocuses == 1 && r.ear.now == 0)  // no "listening" nobody will end
         #expect(r.window.mind.activity != .listening)
     }
 
@@ -365,8 +365,8 @@ import RoboVoice
         r.window.ask("story")
         #expect(await pump(r.window.mind.activity == .talking))
         r.window.clicked()
-        #expect(await pump(r.hermes.stopped == ["run_1"]))
-        r.hermes.gate.signal()
+        #expect(await pump(r.agent.stopped == ["run_1"]))
+        r.agent.gate.signal()
     }
 
     // MARK: the screens come and go
@@ -419,7 +419,7 @@ import RoboVoice
         #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))  // the main display only, not the built-in at negative x
         r.window.roamer.hold(now: r.clock.now(), pos: Vec(-1000, 600))  // a drop on the built-in display
         r.window.move(to: r.window.roamer.pos)
-        #expect(r.window.windowTopLeft == Vec(0, 600) && r.frame.origin == CGPoint(x: 0, y: 1440 - 600 - 104))  // stops at the main display's left edge
+        #expect(r.window.windowTopLeft == Vec(0, 600) && r.frame.origin == CGPoint(x: 0, y: 1440 - 600 - 136))  // stops at the main display's left edge
         #expect(r.space.display(at: r.window.faceCentre, in: userLayout) == mainDisplay)
     }
 
@@ -457,55 +457,13 @@ import RoboVoice
         #expect(await pump(r.window.roamer.screens == [Rect(0, 25, 2560, 1345)]))
     }
 
-    // MARK: the Type window
-
-    @Test func typeOpensItsOwnWindowAndAsks() async {
-        let r = Rig([.event(.runEnded(status: "completed", output: "ok"))])
-        defer { r.close() }
-        r.window.typeText()
-        let t = r.typers[0]
-        #expect(t.title == "Ask robo" && t.level == .floating && t.canBecomeKey)
-        t.field.stringValue = "  what is 2+2  "
-        t.ok()
-        #expect(await pump(!r.hermes.asked.isEmpty && !r.window.busy))
-        #expect(r.hermes.asked[0].text == "what is 2+2")
-    }
-
-    /// Robo is on the main display, so the Type window is too, whatever else is plugged in.
-    @Test func typeOnThePrimaryDisplayOpensThere() async {
-        let r = Rig()
-        defer { r.close() }
-        r.displays = userLayout
-        r.window.refit()
-        r.window.roamer.hold(now: r.clock.now(), pos: Vec(1500, 600))
-        r.window.move(to: r.window.roamer.pos)
-        r.window.typeText()
-        let t = r.typers[0]
-        #expect(abs(t.frame.midX - mainDisplay.visible.midX) <= 1 && abs(t.frame.midY - mainDisplay.visible.midY) <= 1)
-    }
-
-    @Test func nothingTypedAsksNothing() async {
-        let r = Rig()
-        defer { r.close() }
-        r.window.typeText()
-        r.typers[0].field.stringValue = "   "
-        r.typers[0].ok()
-        _ = await pump(timeout: 0.1)
-        #expect(r.hermes.asked.isEmpty && !r.window.busy)
-        r.window.typeText()  // a second one replaces the first
-        #expect(r.typers.count == 2)
-    }
-
     // MARK: the menu
 
     @Test func theMenuEntriesDoWhatTheyAreFor() async {
-        let r = Rig([.event(.runEnded(status: "completed", output: "digest"))])
+        let r = Rig(chat: true)
         defer { r.close() }
         r.window.menu(.type)
-        #expect(r.typers.count == 1)
-        r.window.menu(.digest)
-        #expect(await pump(!r.hermes.asked.isEmpty && !r.window.busy))
-        #expect(r.hermes.asked[0].text == RoboWindow.digestPrompt)
+        #expect(r.chatFocuses == 1)
         r.window.menu(.quit)
         #expect(await pump(r.terminated))
     }
@@ -521,39 +479,19 @@ import RoboVoice
         #expect(w.roamer.heldUntil <= r.clock.now() + 1)
     }
 
-    @Test func theMenuPausesAndResumesWatchingAndRemembersIt() async {
-        let watcher = FakeWatcher()
-        let r = Rig(watcher: watcher)
-        defer { r.close() }
-        let file = r.dir.appendingPathComponent("watch.paused")
-        #expect(watcher.started && !watcher.paused)
-        r.window.menu(.watch)
-        #expect(watcher.paused && FileManager.default.fileExists(atPath: file.path))
-        r.window.menu(.watch)
-        #expect(!watcher.paused && !FileManager.default.fileExists(atPath: file.path))
-        r.window.menu(.watch)
-        r.window.quit()
-        #expect(await pump(watcher.stopped))
-        let again = FakeWatcher()
-        let r2 = Rig(watcher: again, watchPaused: true)  // still paused after a restart
-        defer { r2.close() }
-        #expect(again.paused && again.started)
-    }
-
     // MARK: leaving
 
-    @Test func closingStopsTheListenerTheWatcherAndThePoller() async {
-        let watcher = FakeWatcher()
-        let r = Rig(watcher: watcher, health: "http://127.0.0.1:8642/p/robo")
+    @Test func closingStopsTheListenerAndThePoller() async {
+        let r = Rig(health: "http://127.0.0.1:8765")
         defer { r.close() }
         r.window.quit()
         #expect(await pump(r.terminated))
-        #expect(r.ear.stopped && watcher.stopped && r.pollers[0].stopped == 1)
+        #expect(r.ear.stopped && r.pollers[0].stopped == 1)
     }
 
     // MARK: leaving without a freeze
 
-    /// A run still being created (the gateway is down) has no id to stop. Waiting for one must not freeze
+    /// A run still being created (the agent is down) has no id to stop. Waiting for one must not freeze
     /// the pet, which is still on screen: the waits happen off the main thread, after the panel is gone.
     @Test func quitWhileARunHasNoIdNeverBlocksTheMainThread() async {
         let r = Rig()
@@ -567,12 +505,11 @@ import RoboVoice
         #expect(!r.window.panel.isVisible)  // the pet is gone at once
         #expect(!r.terminated)  // the process ends when the cleanup is done
         #expect(await pump(r.terminated))
-        #expect(r.hermes.stopped.isEmpty && r.ear.stops == 1)
+        #expect(r.agent.stopped.isEmpty && r.ear.stops == 1)
     }
 
     @Test func aSystemQuitRunsTheCleanupAndWaitsForIt() async {
-        let watcher = FakeWatcher()
-        let r = Rig([delta("x"), .wait, .event(.runEnded(status: "cancelled"))], watcher: watcher, health: "http://127.0.0.1:9")
+        let r = Rig([delta("x"), .wait, .event(.runEnded(status: "cancelled"))], health: "http://127.0.0.1:9")
         defer { r.close() }
         r.window.ask("go")
         #expect(await pump(r.window.mind.activity == .talking))
@@ -583,10 +520,10 @@ import RoboVoice
         #expect(answer == .terminateLater && Date().timeIntervalSince(begun) < 0.15)
         #expect(!r.window.panel.isVisible && !replied)
         #expect(await pump(replied))
-        #expect(r.hermes.stopped == ["run_1"], "the running request is stopped before the app ends")
-        #expect(r.ear.stops == 1 && watcher.stopped && r.pollers[0].stopped == 1)
+        #expect(r.agent.stopped == ["run_1"], "the running request is stopped before the app ends")
+        #expect(r.ear.stops == 1 && r.pollers[0].stopped == 1)
         #expect(r.window.shouldTerminate(reply: {}) == .terminateNow)  // done: nothing more to wait for
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
     }
 
     @Test func quitFromTheMenuAndTheTerminateItAsksForRunTheCleanupOnce() async {

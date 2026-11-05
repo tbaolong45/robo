@@ -1,4 +1,4 @@
-// Port of tests/test_roam.py, plus the multi-monitor cases added with the Python fix.
+// The roamer, multi-monitor cases included.
 import Foundation
 import Testing
 @testable import RoboCore
@@ -468,6 +468,24 @@ func aSleeperAfterADropGoesToTheNearestOfTheFourCorners(spot: Vec, corner: Vec) 
     let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(700, 300))  // both go top-left: only the pace tells
     #expect(run(r, 0, 10, asleep: true, called: true).last?.pos == ivec(Vec(leftEdge, topEdge)))  // 730 px: 3 s called, 18 s asleep
     #expect(r.mode == .come)
+}
+
+/// The card grows a line while the pet walks, which moves the corner: the walk bends, it does not stop dead and start again.
+@Test(arguments: [(true, false, 1.0), (false, true, 6.0)])
+func aReAimedWalkKeepsItsSpeed(called: Bool, asleep: Bool, walked: Double) {
+    let r = Roamer(screens: screens, size: face, seed: 1, start: Vec(1100, 700))
+    _ = run(r, 0, walked, asleep: asleep, called: called)
+    func stepSpeed(_ t: Double) -> Double {
+        let at = r.pos
+        _ = r.step(now: t, asleep: asleep, engaged: false, called: called)
+        return dist(r.pos, at) * fps
+    }
+    let before = stepSpeed(walked + 1 / fps)
+    r.resize(bubble)
+    let after = stepSpeed(walked + 2 / fps)
+    #expect(before > 0 && after > 0.8 * before)
+    #expect(run(r, walked + 2 / fps, 120, asleep: asleep, called: called).last?.pos
+            == IVec(1920 - 400 - Int(Roam.edge), 1080 - 300 - Int(Roam.edge)))  // it still arrives
 }
 
 @Test func aBiggerWindowReAimsTheWalk() {

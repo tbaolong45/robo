@@ -3,12 +3,9 @@ import Foundation
 import Testing
 @testable import RoboVoice
 
-@Test func voiceEvalPrintsPythonsRepr() {
-    #expect(pyRepr("Robo, what time is it?") == "'Robo, what time is it?'")
-    #expect(pyRepr("What's due") == "\"What's due\"")
-    #expect(pyRepr("it's \"x\"") == "'it\\'s \"x\"'")
-    #expect(pyRepr("a\nb\\") == "'a\\nb\\\\'")
-    #expect(pyRepr(nil) == "None" && pyRepr("") == "''")
+@Test func voiceEvalQuotesWhatItHeard() {
+    #expect(quoted("What's due") == #""What's due""#)
+    #expect(quoted(nil) == "nothing" && quoted("") == #""""#)
 }
 
 func le(_ v: Int, bytes: Int) -> [UInt8] { (0..<bytes).map { UInt8((v >> (8 * $0)) & 0xff) } }

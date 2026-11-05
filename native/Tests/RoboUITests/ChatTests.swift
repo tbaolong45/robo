@@ -11,9 +11,6 @@ import RoboSystem
 @MainActor private func turns(_ r: Rig) -> [String] { r.window.transcript.turns.map(\.text) }
 @MainActor private func roles(_ r: Rig) -> [Turn.Role] { r.window.transcript.turns.map(\.role) }
 @MainActor private func bubbleCount(_ r: Rig) -> Int { r.window.chat?.chat.bubbles.count ?? 0 }
-private func receipt(_ at: Double) -> String {
-    #"{"ts": "\#(Usage.stamp(at))", "tool": "browser_click", "label_or_path": "Send", "host": "outlook.office.com", "ok": true}"#
-}
 
 // MARK: - the conversation in the window
 
@@ -43,7 +40,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("question")
         #expect(roles(r) == [.you, .robo] && r.window.transcript.writing && turns(r)[0] == "question")
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question", "done"] && !r.window.transcript.writing)
     }
@@ -53,7 +50,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("one")
         #expect(await pump(!r.window.busy))
-        r.hermes.script = [completed("second answer")]
+        r.agent.script = [completed("second answer")]
         r.window.ask("two")
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["one", "first answer", "two", "second answer"] && roles(r) == [.you, .robo, .you, .robo])
@@ -72,7 +69,7 @@ private func receipt(_ at: Double) -> String {
         #expect(r.window.chatOpen)
         r.window.ask("close the chat")
         #expect(!r.window.chatOpen && !r.window.chat!.isVisible)
-        #expect(r.hermes.asked.map(\.text) == ["hi"])  // the command was not a request for the agent
+        #expect(r.agent.asked.map(\.text) == ["hi"])  // the command was not a request for the agent
         #expect(turns(r) == ["hi", HELLO])  // and the conversation is kept
         r.window.openChat()
         #expect(r.window.chatOpen)
@@ -86,9 +83,9 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        r.window.onHeard(said)  // spoken
-        #expect(!r.window.chatOpen && r.hermes.asked.count == 1)
-        r.hermes.script = [completed("hi")]
+        r.window.onHeard(said, handsFree: false)  // spoken
+        #expect(!r.window.chatOpen && r.agent.asked.count == 1)
+        r.agent.script = [completed("hi")]
         r.window.ask("hello again")
         #expect(r.window.chatOpen)
         #expect(await pump(!r.window.busy))
@@ -101,9 +98,9 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        r.window.ask("close the Moodle tab")
+        r.window.ask("close the browser tab")
         #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && r.hermes.asked.map(\.text) == ["hi", "close the Moodle tab"])
+        #expect(r.window.chatOpen && r.agent.asked.map(\.text) == ["hi", "close the browser tab"])
     }
 
     @Test func closeWithTheChatClosedIsAnOrdinaryRequest() async {
@@ -111,7 +108,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("close the chat")  // nothing to close: the agent may have something to say about it
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["close the chat"])
+        #expect(r.agent.asked.map(\.text) == ["close the chat"])
     }
 
     @Test func closingWhileAnAnswerIsOnItsWayShowsItOnThePetsCardAndNothingIsLost() async {
@@ -122,7 +119,7 @@ private func receipt(_ at: Double) -> String {
         r.window.ask("close the chat")
         #expect(!r.window.chatOpen && !r.window.card.isHidden)  // the card carries the rest
         #expect(r.window.card.reply.string.contains("partial"))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(await r.run(until: r.window.typed))
         #expect(r.window.card.reply.string == "partial answer")
@@ -140,7 +137,7 @@ private func receipt(_ at: Double) -> String {
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["one", "a"])
         day = CalendarDay(year: 2026, month: 10, day: 12)!
-        r.hermes.script = [completed("b")]
+        r.agent.script = [completed("b")]
         r.window.ask("two")
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["two", "b"])  // the agent's session is another one, so the chat is
@@ -156,7 +153,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onEvent(.listening(true))  // Ctrl+Q held, a click on the face, a name
         #expect(r.window.chatOpen && turns(r) == ["hi", HELLO] && bubbleCount(r) == 2)
         #expect(!r.window.card.isHidden)  // the card says "listening"
-        r.window.onHeard("what is due")
+        r.window.onHeard("what is due", handsFree: false)
         #expect(r.window.card.isHidden)  // and goes when the words became a request
         #expect(await pump(!r.window.busy))
         #expect(roles(r) == [.you, .robo, .you, .robo] && turns(r)[2] == "what is due")
@@ -170,7 +167,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onEvent(.listening(true))  // you start speaking over it
         #expect(r.window.transcript.turns.last?.text == "Hello wor" && r.window.transcript.turns.last?.footer == ["stopped"])
         #expect(!r.window.transcript.writing)
-        r.hermes.gate.signal()  // the run ends
+        r.agent.gate.signal()  // the run ends
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question", "Hello wor"] && r.window.transcript.turns.last?.footer == ["stopped"])  // sealed once
     }
@@ -180,7 +177,7 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("question")
         r.window.onEvent(.listening(true))
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r) == ["question"] && bubbleCount(r) == 1)
     }
@@ -191,9 +188,9 @@ private func receipt(_ at: Double) -> String {
         r.window.ask("one")
         #expect(await pump(r.window.tw.text == "first part"))
         r.window.ask("two")  // waits for the first run to end
-        r.hermes.script = [completed("answer two")]
-        r.hermes.gate.signal()
-        #expect(await pump(r.hermes.asked.count == 2 && !r.window.busy))
+        r.agent.script = [completed("answer two")]
+        r.agent.gate.signal()
+        #expect(await pump(r.agent.asked.count == 2 && !r.window.busy))
         #expect(turns(r) == ["one", "first part", "two", "answer two"])
         #expect(r.window.transcript.turns[1].footer == ["stopped"])
     }
@@ -206,7 +203,7 @@ private func receipt(_ at: Double) -> String {
         r.window.onNote("I lost the microphone, reconnecting...")
         #expect(turns(r) == ["question", "I lost the microphone, reconnecting...", ""])  // before the answer being written
         #expect(r.window.transcript.writing && r.window.tw.text == "working on it ")  // the typing was not reset
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(turns(r).last == "working on it done" && !r.window.transcript.writing)
     }
@@ -218,50 +215,30 @@ private func receipt(_ at: Double) -> String {
         #expect(await pump(!r.window.busy))
         r.window.onEvent(.listening(true))
         #expect(!r.window.card.isHidden)
-        r.window.onHeard("")
+        r.window.onHeard("", handsFree: false)
         #expect(turns(r) == ["hi", HELLO, "Sorry, I didn't catch that."] && r.window.card.isHidden)
     }
 
-    // MARK: failures, footers, the digest
+    // MARK: failures
 
     @Test func aFailedRunIsAFailedTurnWithItsReason() async {
-        let r = Rig(fail: BrainError("Hermes is not running"), chat: true)
+        let r = Rig(fail: BrainError("The agent is not running"), chat: true)
         defer { r.close() }
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
         #expect(await r.run(until: r.window.typed))
         let last = r.window.transcript.turns.last
-        #expect(last?.text == "Hermes is not running" && last?.failed == true)
+        #expect(last?.text == "The agent is not running" && last?.failed == true)
     }
 
-    @Test func theFooterAndTheReceiptSitUnderTheAnswer() async {
-        let reply = "I sent the email."
-        let r = Rig([delta(reply), completed(reply)], chat: true)
+    @Test func theCloseButtonClosesTheChatAndSaysSoToVoiceOver() throws {
+        let r = Rig(chat: true)
         defer { r.close() }
-        r.hermes.onAsk = {
-            Usage.append(receipt(Date().timeIntervalSince1970), to: r.receipts)
-            write([r.vault.appendingPathComponent("Drafts/Mail.md"): "Hi"])
-        }
-        r.window.ask("send it")
-        #expect(await pump(!r.window.busy))
-        #expect(r.window.transcript.turns.last?.footer == ["📓 In Obsidian: Mail", "✓ sent · outlook.office.com"])
-        #expect(r.window.transcript.turns.last?.text == reply)  // the footer is not part of the answer
-    }
-
-    @Test func theMorningDigestOpensTheChatByItselfAndAnsweringItNeedsNoUserTurn() async {
-        let r = Rig([completed("Today: two things.")], chat: true)
-        defer { r.close() }
-        r.window.ask(RoboWindow.digestPrompt, waitNetwork: true)
-        #expect(await pump(!r.window.busy))
-        #expect(r.window.chatOpen && roles(r) == [.robo] && turns(r) == ["Today: two things."])
-    }
-
-    @Test func theMenuDigestShowsADigestTurn() async {
-        let r = Rig([completed("Today: two things.")], chat: true)
-        defer { r.close() }
-        r.window.ask(RoboWindow.digestPrompt)
-        #expect(await pump(!r.window.busy))
-        #expect(turns(r) == ["📚 School digest", "Today: two things."])
+        r.window.typeText()
+        let view = try #require(r.window.chat?.chat)
+        #expect(view.close.accessibilityLabel() == "Close chat" && view.close.acceptsFirstMouse(for: nil))
+        view.close.performClick(nil)
+        #expect(!r.window.chatOpen)
     }
 
     // MARK: the pet and the rest of the window
@@ -270,16 +247,21 @@ private func receipt(_ at: Double) -> String {
         let r = Rig(chat: true)
         defer { r.close() }
         r.window.typeText()
-        #expect(r.window.chatOpen && r.chatFocuses == 1 && r.typers.isEmpty)  // not the small Type window
+        #expect(r.window.chatOpen && r.chatFocuses == 1)
         r.window.typeText()
         #expect(r.chats.count == 1 && r.chatFocuses == 2)  // the same window, not placed again
     }
 
-    @Test func withTheChatOffTheTypeActionIsTheSmallWindow() {
-        let r = Rig()
+    @Test func aFinishedAnswerIsReadOutByVoiceOver() async {
+        let r = Rig([completed("The **answer** is 42.")], chat: true)
         defer { r.close() }
-        r.window.typeText()
-        #expect(!r.window.chatOpen && r.typers.count == 1 && r.chatFocuses == 0)
+        var said: [String] = []
+        let keep = RoboWindow.announce
+        RoboWindow.announce = { said.append($0) }
+        defer { RoboWindow.announce = keep }
+        r.window.ask("what is six times seven")
+        #expect(await pump(!r.window.busy && !r.window.tw.pending))
+        #expect(said.contains("Robo: The answer is 42."))  // the words, not the Markdown; `announce` is global, so other running tests may add theirs
     }
 
     @Test func theTextBoxSendsLikeAnyOtherRequest() async {
@@ -288,7 +270,7 @@ private func receipt(_ at: Double) -> String {
         r.window.openChat()
         r.window.chat?.chat.onSubmit?("typed in the chat")
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["typed in the chat"] && turns(r) == ["typed in the chat", "fine"])
+        #expect(r.agent.asked.map(\.text) == ["typed in the chat"] && turns(r) == ["typed in the chat", "fine"])
     }
 
     @Test func theTextBoxTakesFocusAcceptsTypingAndSendsIt() async {
@@ -302,13 +284,13 @@ private func receipt(_ at: Double) -> String {
         defer { panel.orderOut(nil) }
         #expect(panel.isKeyWindow)  // needs an unlocked screen
         panel.chat.focusInput()
-        #expect(panel.inputActive && r.window.nudgeHeld)  // a nudge waits while you type
+        #expect(panel.inputActive)
         panel.chat.input.currentEditor()?.insertText("typed hello")
         #expect(panel.chat.input.stringValue == "typed hello")
         panel.chat.input.sendAction(panel.chat.input.action, to: panel.chat.input.target)  // Return
         #expect(panel.chat.input.stringValue.isEmpty)
         #expect(await pump(!r.window.busy))
-        #expect(r.hermes.asked.map(\.text) == ["typed hello"] && turns(r) == ["typed hello", "fine"])
+        #expect(r.agent.asked.map(\.text) == ["typed hello"] && turns(r) == ["typed hello", "fine"])
     }
 
     @Test func afterAnAnswerInTheChatYouCanReplyWithoutSayingRobo() async {
@@ -327,36 +309,34 @@ private func receipt(_ at: Double) -> String {
         defer { r.close() }
         r.window.ask("hi")
         #expect(r.window.busy)  // working: the pet is called
-        r.hermes.gate.signal()
+        r.agent.gate.signal()
         #expect(await pump(!r.window.busy))
         #expect(r.window.chatOpen && r.window.card.isHidden)  // the card is out, so "called" (`busy || card shown`) is false again
     }
 
-    @Test func aNudgeIsNotHeldByAChatThatIsOnlyOpen() async {
-        let r = Rig([completed(HELLO)], chat: true)
-        defer { r.close() }
-        r.window.ask("hi")
-        #expect(await pump(!r.window.busy))
-        #expect(await r.run(until: r.window.typed))
-        for _ in 0..<600 { r.step() }  // the follow-up window is over
-        #expect(r.window.chatOpen && !r.window.nudgeHeld)
-    }
-
     // MARK: called: the pet goes to a side, the background is blurred a little
 
-    @Test func theBackgroundIsBlurredWhileRoboIsCalledAndWhileTheChatIsUp() async {
+    @Test func theBackgroundIsBlurredOnlyWhileRoboListensOrYouTypeInTheChat() async {
         let r = Rig([completed(HELLO)], chat: true)
         defer { r.close() }
         #expect(r.blurs.isEmpty)
         r.window.onEvent(.listening(true))  // Ctrl+Q held
         #expect(r.blurs.last?.on == true && r.blurs.last?.frame == Rig.single[0].frame)  // the main display, all of it
-        r.window.onHeard("")  // nothing was said: not called any more
+        r.window.onHeard("", handsFree: false)  // nothing was said: not called any more
         #expect(r.blurs.last?.on == false)
         r.window.ask("hi")
         #expect(await pump(!r.window.busy))
-        #expect(r.blurs.last?.on == true && r.blurs.count == 3)  // the chat is up
+        #expect(r.window.chatOpen && r.blurs.count == 2)  // the chat being up is not enough
+        r.typing = true  // a click in its text box
+        r.window.refresh()
+        #expect(r.blurs.last?.on == true && r.blurs.count == 3)
         for _ in 0..<600 { r.step() }
         #expect(r.blurs.count == 3)  // switched on once, not on every tick
+        r.typing = false
+        r.window.refresh()
+        #expect(r.blurs.last?.on == false && r.blurs.count == 4)
+        r.typing = true
+        r.window.refresh()
         r.window.ask("close the chat")
         #expect(r.blurs.last?.on == false)
     }
@@ -493,7 +473,7 @@ private func receipt(_ at: Double) -> String {
         t.append(.robo, "")
         t.seal("Hello there. This is a reply that is a little longer than the question was.")
         t.append(.robo, "")
-        t.seal("And a second bubble from Robo.", footer: ["✓ sent · outlook.office.com"])
+        t.seal("And a second bubble from Robo.", footer: ["stopped"])
         t.append(.you, "thanks")
         return t
     }
@@ -506,14 +486,13 @@ private func receipt(_ at: Double) -> String {
         #expect(you.frame.midX > column / 2 && robo.frame.midX < column / 2)
         #expect(robo.bubbleSize.width <= ((column - 2 * ChatView.side) * ChatView.widthShare).rounded(.down) + 0.5)
         #expect(you.bubbleSize.width < robo.bubbleSize.width)  // yours shrinks to its two letters
-        #expect(you.frame.maxX <= v.bounds.width && robo.frame.minX >= 0)  // the tail room is inside the window
+        #expect(you.frame.maxX <= v.bounds.width && robo.frame.minX >= 0)  // the shadow room is inside the window
     }
 
-    @Test func onlyTheLastBubbleOfARunHasATailAndTheRowsDoNotOverlap() {
+    @Test func theRowsDoNotOverlap() {
         let t = conversation()
         let v = view(t)
         let b = t.turns.map { v.bubbles[$0.id]! }
-        #expect(b.map(\.tail) == [true, false, true, true])  // you | robo robo | you
         for (a, c) in zip(b, b.dropFirst()) { #expect(a.frame.maxY <= c.frame.minY) }
     }
 
@@ -529,11 +508,11 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "hi")
         t.append(.robo, "")
         let v = view(t)
-        v.setWorking(true, caption: "searching the web…")
+        v.setWorking(true)
         #expect(v.bubbles[t.turns[1].id]?.dots != nil && v.bubbles[t.turns[0].id]?.dots == nil)
         v.setLive(markdown: "First words", hidden: 0)
         #expect(v.bubbles[t.turns[1].id]?.dots == nil)  // the text replaced them
-        v.setWorking(false, caption: "")
+        v.setWorking(false)
         #expect(v.bubbles.values.allSatisfy { $0.dots == nil })
     }
 
@@ -602,6 +581,153 @@ private func receipt(_ at: Double) -> String {
         t.append(.you, "fresh start")
         v.set(turns: t.turns)
         #expect(v.bubbles.count == 1 && v.scroll.documentView?.subviews.count == 1)
+    }
+
+    // MARK: the text box, the empty state, jump to latest
+
+    @Test func anEmptyConversationSaysWhatToDoAndTheFirstTurnHidesIt() {
+        var t = Transcript()
+        let v = view(t)
+        #expect(!v.empty.isHidden && v.empty.stringValue.contains("Ask Robo anything"))
+        #expect(v.empty.frame.minY > v.scroll.frame.minY && v.empty.frame.maxY < v.scroll.frame.maxY)  // in the middle of the conversation
+        t.append(.you, "hi")
+        v.set(turns: t.turns)
+        #expect(v.empty.isHidden)
+    }
+
+    @Test func sendIsOffUntilThereIsSomethingToSendAndSpacesSendNothing() {
+        let v = view(Transcript())
+        var sent: [String] = []
+        v.onSubmit = { sent.append($0) }
+        #expect(!v.send.isEnabled)
+        v.input.stringValue = "   \n "
+        v.inputChanged()
+        #expect(!v.send.isEnabled)
+        v.send.performClick(nil)
+        #expect(sent.isEmpty && v.input.stringValue == "   \n ")  // nothing sent, nothing lost
+        v.input.stringValue = "  hello  "
+        v.inputChanged()
+        #expect(v.send.isEnabled)
+        v.send.performClick(nil)
+        #expect(sent == ["hello"] && v.input.stringValue.isEmpty && !v.send.isEnabled)
+    }
+
+    @Test func returnSendsAndTheBoxGrowsWithItsLinesUpToFive() {
+        let v = view(Transcript())
+        var sent: [String] = []
+        v.onSubmit = { sent.append($0) }
+        let pill = v.input.frame.height, scroll = v.scroll.frame.height
+        v.input.stringValue = "one\ntwo\nthree"
+        v.inputChanged()
+        v.layoutSubtreeIfNeeded()
+        #expect(v.inputExtra > 25 && v.input.frame.height == pill + v.inputExtra && v.scroll.frame.height == scroll - v.inputExtra)
+        let three = v.inputExtra
+        v.input.stringValue = (1...12).map(String.init).joined(separator: "\n")
+        v.inputChanged()
+        #expect(v.inputExtra > three && v.inputExtra == 2 * three)  // five lines at most: then the text scrolls in the box
+        // Return (no Shift held: there is no current event in a test) sends, it does not add a line
+        #expect(v.control(v.input, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        #expect(sent.count == 1 && v.inputExtra == 0)
+        #expect(!v.control(v.input, textView: NSTextView(), doCommandBy: #selector(NSResponder.moveLeft(_:))))  // other keys are the field's
+    }
+
+    @Test func aReaderScrolledUpGetsAJumpToLatestThatTakesThemBack() {
+        var t = Transcript()
+        for i in 0..<12 {
+            t.append(.you, "question \(i)")
+            t.append(.robo, "")
+            t.seal("An answer to the question that wraps over a couple of lines so that the conversation is taller than the window shows. \(i)")
+        }
+        let v = view(t)
+        #expect(v.jump.isHidden)  // at the end: nothing to jump to
+        v.scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        v.scroll.reflectScrolledClipView(v.scroll.contentView)
+        #expect(!v.jump.isHidden && v.jump.accessibilityLabel() == "Jump to latest")
+        t.append(.you, "one more")
+        v.set(turns: t.turns)
+        #expect(v.scroll.contentView.bounds.minY == 0 && !v.jump.isHidden)  // still where they were
+        v.jump.performClick(nil)
+        #expect(v.following && v.jump.isHidden)
+        #expect(abs(v.scroll.contentView.bounds.maxY - v.scroll.documentView!.frame.height) < 1)
+    }
+
+    @Test func theStatusIsSaidOnceInTheHeaderNotAgainUnderTheDots() {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let v = view(t)
+        v.setStatus("still working · 40 s")
+        v.setWorking(true)
+        let bubble = v.bubbles[t.turns[1].id]!
+        #expect(v.statusLabel.stringValue == "Still working · 40 s" && bubble.dots != nil)
+        let labels = bubble.subviews.compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
+        #expect(!labels.contains("still working · 40 s"))
+        #expect(bubble.bubbleSize.height == 16 + BubbleView.pad.top + BubbleView.pad.bottom)  // just the dots
+    }
+
+    // MARK: the live text is throttled like the card's
+
+    @Test func afterASlowLiveRenderTheNextWaitsAndTheLatestTextFollows() async {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let v = view(t)
+        v.renderBudget = -1  // every render counts as slow
+        v.setLive(markdown: "one", hidden: 0)
+        v.setLive(markdown: "one two", hidden: 0)
+        v.setLive(markdown: "one two three", hidden: 0)
+        let bubble = v.bubbles[t.turns[1].id]!
+        #expect(v.liveRenders == 1 && bubble.text.string == "one")
+        #expect(await pump(v.liveRenders == 2))
+        #expect(bubble.text.string == "one two three")  // the latest, not the ones in between
+        v.renderBudget = 10
+        v.endLive()  // a finished turn drops the wait
+        v.setLive(markdown: "again", hidden: 0)
+        #expect(v.liveRenders == 3)
+    }
+
+    // MARK: Copy and accessibility
+
+    @Test func robosBubblesHaveCopyAndItCopiesTheAnswerAsWritten() throws {
+        var t = Transcript()
+        t.append(.you, "hi")
+        t.append(.robo, "")
+        let source = "Use **this**:\n\n```\nls -la\n```\n\nand $x^2$."
+        t.seal(source)
+        let v = view(t)
+        let you = v.bubbles[t.turns[0].id]!, robo = v.bubbles[t.turns[1].id]!
+        #expect(you.contextMenu() == nil)
+        let menu = try #require(robo.contextMenu())
+        #expect(menu.items.map(\.title) == ["Copy"])
+        #expect(robo.text.textView.contextMenu?()?.items.map(\.title) == ["Copy"])
+        let board = NSPasteboard(name: NSPasteboard.Name("robo-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        robo.copy(to: board)
+        #expect(board.string(forType: .string) == source)
+        robo.text.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        robo.copy(to: board)
+        #expect(board.string(forType: .string) == "Use")  // a selection copies just that
+    }
+
+    @Test func voiceOverReadsWhoSaidWhat() {
+        let t = conversation()
+        let v = view(t)
+        let you = v.bubbles[t.turns[0].id]!, robo = v.bubbles[t.turns[1].id]!
+        #expect(you.isAccessibilityElement() && you.accessibilityLabel() == "You: hi")
+        #expect(robo.accessibilityLabel()?.hasPrefix("Robo: Hello there.") == true)
+        #expect(v.input.accessibilityLabel() == "Message to Robo" && v.send.accessibilityLabel() == "Send")
+        #expect(v.lastRoboText == "And a second bubble from Robo.")
+    }
+
+    @Test func theDotsKeepStillUnderReduceMotion() {
+        for reduce in [false, true] {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 40), styleMask: .borderless, backing: .buffered, defer: true)
+            let dots = TypingDotsView()
+            dots.reduceMotion = { reduce }
+            window.contentView?.addSubview(dots)
+            #expect((dots.timer != nil) == !reduce)
+            dots.removeFromSuperview()
+        }
     }
 }
 

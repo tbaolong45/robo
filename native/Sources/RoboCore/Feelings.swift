@@ -1,5 +1,5 @@
-// Split Hermes's `[[feel:x]]` emotion tags out of streamed reply text. Port of src/robo/feelings.py.
-// Python indexes code points, so the text is held as unicode scalars: a Swift Character would
+// Split the agent's `[[feel:x]]` emotion tags out of streamed reply text.
+// The text is held as unicode scalars, not Characters: a Swift Character would
 // fuse a "]" with a combining mark after it and the tag would stop matching.
 
 private typealias Scalars = [Unicode.Scalar]
@@ -10,8 +10,8 @@ private func text(_ s: ArraySlice<Unicode.Scalar>) -> String { String(String.Uni
 
 private func stripped(_ s: ArraySlice<Unicode.Scalar>) -> ArraySlice<Unicode.Scalar> {
     var t = s
-    while let c = t.first, c.isPySpace { t.removeFirst() }
-    while let c = t.last, c.isPySpace { t.removeLast() }
+    while let c = t.first, c.isSpace { t.removeFirst() }
+    while let c = t.last, c.isSpace { t.removeLast() }
     return t
 }
 
@@ -70,7 +70,7 @@ public struct FeelingFilter {
     private mutating func drain(final: Bool) -> [Event] {
         var out: [Event] = []
         if mood == nil {
-            let s = Array(buf.drop(while: { $0.isPySpace }))
+            let s = Array(buf.drop(while: { $0.isSpace }))
             if let t = tag(s, at: 0) {
                 buf = Array(s[t.end...])
                 skip = true

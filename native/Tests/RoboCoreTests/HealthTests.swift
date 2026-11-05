@@ -1,8 +1,6 @@
-// Port of tests/test_health.py. The poller is driven with an injected `fetch` and `sleep`: no
+// The poller is driven with an injected `fetch` and `sleep`: no
 // network and no real time, so the tests wait on events, never on a clock. The two tests that use
 // the default getter talk to a throwaway server on 127.0.0.1 (never the live gateway).
-// Not ported: a callback that raises (a Swift `onState` cannot throw) and a reply without a status
-// code (`fetch` returns an Int), both impossible here.
 import Darwin
 import Foundation
 import Testing
@@ -203,7 +201,7 @@ private struct Rig {
     let states: StateFeed
 
     /// `every` is huge, so only `retry` can explain a quick re-poll; `gated` parks every wait.
-    init(_ script: [Step], url: String = "http://127.0.0.1:8642/p/robo", every: Double = 60, retry: Double = 0.01,
+    init(_ script: [Step], url: String = "http://127.0.0.1:8765", every: Double = 60, retry: Double = 0.01,
          gated: Bool = false, hold: Bool = false) {
         fetch = FakeFetch(script, hold: hold)
         clock = FakeClock(gated: gated)
@@ -348,11 +346,11 @@ struct HealthTests {
     }
 
     @Test(arguments: [
-        ("http://127.0.0.1:8642/p/robo", "http://127.0.0.1:8642/health"),
-        ("http://127.0.0.1:8642", "http://127.0.0.1:8642/health"),
-        ("http://127.0.0.1:9/p/robo", "http://127.0.0.1:9/health"),  // ROBO_HERMES_URL for a red LED
+        ("http://127.0.0.1:8765", "http://127.0.0.1:8765/health"),
+        ("http://127.0.0.1:8765/", "http://127.0.0.1:8765/health"),
+        ("http://127.0.0.1:9", "http://127.0.0.1:9/health"),  // ROBO_AGENT_URL for a red LED
     ])
-    func healthURLIsTheGatewayRootPlusHealth(base: String, health: String) async {
+    func healthURLIsTheAgentsBasePlusHealth(base: String, health: String) async {
         let rig = Rig([200], url: base)
         _ = await rig.states(1)
         #expect(rig.fetch.calls == [health])
@@ -375,10 +373,10 @@ struct HealthTests {
 
     /// No headers are set, so no key can leak; a short timeout; no environment or system proxy; no cookies.
     @Test func theDefaultRequestHasNoAuthHeaderAShortTimeoutAndNoProxy() {
-        let r = HealthPoller.request(URL(string: "http://127.0.0.1:8642/health")!)
+        let r = HealthPoller.request(URL(string: "http://127.0.0.1:8765/health")!)
         #expect(r.timeoutInterval == 1.5 && r.httpShouldHandleCookies == false)
         #expect((r.allHTTPHeaderFields ?? [:]).isEmpty)
-        let config = HermesClient.makeSession().configuration
+        let config = AgentClient.makeSession().configuration
         #expect(config.connectionProxyDictionary?.isEmpty == true)
         #expect(config.httpCookieStorage == nil)
     }
@@ -390,7 +388,7 @@ struct HealthTests {
         }
         defer { server.close() }
         let up = StateFeed()
-        let poller = HealthPoller(url: "http://127.0.0.1:\(server.port)/p/robo", onState: { up.report($0) })
+        let poller = HealthPoller(url: "http://127.0.0.1:\(server.port)", onState: { up.report($0) })
         poller.start()
         #expect(await up.next() == .ok)
         poller.stop()
@@ -399,7 +397,7 @@ struct HealthTests {
         #expect(Set(seen[0].headers.keys).isDisjoint(with: ["authorization", "proxy-authorization", "cookie"]))
 
         let down = StateFeed()
-        let dead = HealthPoller(url: "http://127.0.0.1:\(LoopbackServer.closedPort())/p/robo", onState: { down.report($0) })
+        let dead = HealthPoller(url: "http://127.0.0.1:\(LoopbackServer.closedPort())", onState: { down.report($0) })
         dead.start()
         #expect(await down.next() == .warn)
         dead.stop()

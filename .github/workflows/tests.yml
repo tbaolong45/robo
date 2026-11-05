@@ -6,21 +6,20 @@ on:
     branches: [master]  # dev -> master: tested before the laptops get it
   workflow_dispatch:
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    env:
-      QT_QPA_PLATFORM: offscreen
-      UV_PYTHON: "3.13"  # not the newest on the runner: macos-latest got Python 3.15 and onnxruntime 1.31 has no wheel for it (2026-10-20)
+  swift:
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Qt and audio libraries (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libportaudio2
-      - run: uv sync --extra dev
-      - run: uv run pytest -q -rs
-      - run: uv run ruff check src tests scripts hermes
+      # Every suite runs, KeyboardTests.swift (EditKeyTests, KeyboardHandoffTests) included: they need a
+      # key window, and a hosted macOS runner has a logged-in, unlocked GUI session. They fail on a locked
+      # screen; if the runner turns out to be one, skip them: native/test.sh --skip 'EditKeyTests|KeyboardHandoffTests'
+      # Report every compile error at once: this Xcode can reject expressions the newer local compiler accepts.
+      - run: native/test.sh -Xswiftc -continue-building-after-errors
+  python:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync
+      - run: uv run pytest -q
+      - run: uv run ruff check agent tests

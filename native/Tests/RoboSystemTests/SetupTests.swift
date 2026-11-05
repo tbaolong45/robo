@@ -1,6 +1,5 @@
-// Port of tests/test_setup.py and the setup tests of tests/test_cli.py (macOS only: the GNOME extension
-// and the Linux half of the desktop-apps rule are not ported). A temp dir stands in for the home and for
-// $HERMES_HOME, and `hermes` is a fake that records its commands, so nothing real is touched.
+// `robo setup`, for robo's own agent: a temp dir stands in
+// for the home, so nothing real is touched (no ~/.local/share/robo, no LaunchAgent, no agent is started).
 import Foundation
 import Testing
 @testable import RoboSystem
@@ -23,460 +22,362 @@ private func read(_ url: URL) throws -> String { try String(contentsOf: url, enc
 
 private func mode(_ url: URL) throws -> Int { try fm.attributesOfItem(atPath: url.path)[.posixPermissions] as! Int }
 
-/// A profile whose $HERMES_HOME is `tmp` and whose home is `tmp/home`.
-private func profile(_ tmp: URL, env: [String: String] = [:]) -> HermesProfile {
-    HermesProfile(home: tmp.appendingPathComponent("home"), env: env.merging(["HERMES_HOME": tmp.path]) { a, _ in a })
+/// Robo's agent files under `tmp/home`.
+private func agent(_ tmp: URL, env: [String: String] = [:]) -> AgentHome { AgentHome(home: tmp.appendingPathComponent("home"), env: env) }
+
+private func config(_ a: AgentHome) throws -> [String: Any] {
+    try JSONSerialization.jsonObject(with: Data(contentsOf: a.configFile)) as! [String: Any]
 }
 
-/// `profile`, with the host and robo keys already there (what the tests of the templates start from).
-private func readyProfile(_ tmp: URL) throws -> (HermesProfile, URL) {
-    try write("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n", to: tmp.appendingPathComponent(".env"))
-    let robo = tmp.appendingPathComponent("profiles/robo")
-    try write("API_SERVER_KEY=r\n", to: robo.appendingPathComponent(".env"))
-    return (profile(tmp), robo)
-}
-
-/// A fake `hermes`: records the commands; like the real one it rewrites config.yaml only on a new value.
-private final class FakeHermes {
-    var calls: [[String]] = []
-    let root: URL
-    init(_ root: URL) { self.root = root }
-
-    func run(_ cmd: [String]) throws {
-        calls.append(cmd)
-        if Array(cmd[1...2]) == ["profile", "create"] {
-            try fm.createDirectory(at: root.appendingPathComponent("profiles/robo"), withIntermediateDirectories: true)
-        }
-        if cmd.count > 6, Array(cmd[3...4]) == ["config", "set"] {
-            let cfg = root.appendingPathComponent("profiles/robo/config.yaml")
-            let line = "\(cmd[5]): \(cmd[6])\n"
-            let old = (try? read(cfg)) ?? ""
-            if !old.contains(line) { try write(old + line, to: cfg) }
-        }
-    }
-}
-
-private func templatesWith(_ files: [String: String], in tmp: URL) throws -> URL {
-    let dir = tmp.appendingPathComponent("templates")
-    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-    for (path, text) in files { try write(text, to: dir.appendingPathComponent(path)) }
+/// A checkout with the agent's SOUL.md in it (what setup checks it runs from).
+private func project(_ tmp: URL) throws -> URL {
+    let dir = tmp.appendingPathComponent("checkout")
+    try write("soul", to: dir.appendingPathComponent("agent/SOUL.md"))
     return dir
 }
 
 private let exe = URL(fileURLWithPath: "/Users/test/Robo.app/Contents/MacOS/robo")  // what native/bundle.sh builds
 private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/debug/robo")  // no Info.plist next to it
+private let uv = "/opt/fake/uv"
 
 @Suite struct SetupTests {
-    // --- dotenv files ---
+    // --- the agent's files and its connection ---
 
-    @Test func setEnvAppendsUpdatesAndKeepsPrivate() throws {
+    @Test func theAgentFilesLiveUnderTheHome() {
+        let a = AgentHome(home: URL(fileURLWithPath: "/Users/jane"), env: [:])
+        #expect(a.dir.path == "/Users/jane/.local/share/robo/agent")
+        #expect(a.configFile.path == "/Users/jane/.local/share/robo/agent/config.json")
+        #expect(a.logFile.path == "/Users/jane/Library/Logs/Robo/agent.log")
+        #expect(a.servicePATH == "/Users/jane/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+        #expect(AgentHome(env: ["HOME": "/Users/other"]).home.path == "/Users/other")  // Path.home() honours $HOME
+    }
+
+    @Test func theConnectionIsTheConfiguredPortAndTheServerKey() throws {
         try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try write("# keep me\nA=1\nB=2\n", to: env)
-            #expect(try Setup.setEnv(env, [("B", "3"), ("C", "4")]) == true)
-            #expect(try read(env) == "# keep me\nA=1\nB=3\nC=4\n")
-            #expect(try mode(env) == 0o600)
-            #expect(try Setup.setEnv(env, [("B", "3")]) == false)
+            let a = agent(tmp)
+            #expect(throws: SetupError.self) { try a.connection() }  // no server key: `robo setup` first
+            try write("  s3rver \n", to: a.keyFile("server_key"))
+            #expect(try a.connection() == ("http://127.0.0.1:8765", "s3rver"))  // no /p/robo, trimmed
+            try write("{\"port\": 9100}", to: a.configFile)
+            #expect(try a.connection().url == "http://127.0.0.1:9100")
+            try write("{\"port\": 70000}", to: a.configFile)
+            #expect(try a.connection().url == "http://127.0.0.1:8765")  // nonsense: the default
+            let other = agent(tmp, env: ["ROBO_AGENT_URL": "http://127.0.0.1:9"])
+            #expect(try other.connection() == ("http://127.0.0.1:9", "s3rver") && other.otherAgent)
         }
     }
 
-    @Test func setEnvCreatesMissingFile() throws {
+    @Test func aDeadAgentURLNeedsNoKey() throws {
         try scratch { tmp throws in
-            let env = tmp.appendingPathComponent("sub/.env")
-            #expect(try Setup.setEnv(env, [("K", "v")]) == true)
-            #expect(try read(env) == "K=v\n")
-            #expect(try mode(env) == 0o600)
-            #expect(!fm.fileExists(atPath: env.path + ".tmp"))  // the temp file is renamed over it
+            let c = try agent(tmp, env: ["ROBO_AGENT_URL": "http://127.0.0.1:9"]).connection()
+            #expect(c.url == "http://127.0.0.1:9" && c.key == "")
         }
     }
 
-    @Test func readEnvIgnoresCommentsAndQuotes() throws {
+    @Test func aConfigThatIsNotJSONGivesTheDefaultPort() throws {
         try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try write("# X=no\nX='yes'\nY=\"two words\"\nZ\n", to: env)
-            #expect(try Setup.readEnv(env) == ["X": "yes", "Y": "two words"])
-            #expect(try Setup.readEnv(tmp.appendingPathComponent("missing")) == [:])
+            let a = agent(tmp)
+            try write("not json", to: a.configFile)
+            #expect(a.port == 8765)
         }
     }
 
-    // Expected values below come from running Python's read_env / set_env on the same text.
-    @Test(arguments: [
-        ("A=1\r\nB=2\r\n", "B=2", false, "A=1\r\nB=2\r\n"),  // Python reads \r\n as \n: nothing to change
-        ("A=1\r\nB=2\r\n", "B=3", true, "A=1\nB=3\n"),
-        ("\n\nA=1\n\n", "A=2", true, "\n\nA=2\n\n"),  // blank lines stay
-        ("A=1", "A=1", true, "A=1\n"),  // no final newline: written with one
-        ("A=1", "A=2,Z=9", true, "A=2\nZ=9\n"),
-        ("", "A=1", true, "A=1\n"),
-        ("\n", "A=1", true, "\nA=1\n"),
-        ("A=\u{E9}\nB=\"q\"\n", "B='z'", true, "A=\u{E9}\nB='z'\n"),
-        ("  A = 1 \nA=2\nexport A=3\nZ\n#A=4\n", "A=x,Z=y", true, "A=x\nA=2\nexport A=3\nZ=y\n#A=4\n"),  // only the first A
-        ("API_SERVER_KEY=\nX=1\n", "API_SERVER_KEY=k,API_SERVER_ENABLED=true", true,
-         "API_SERVER_KEY=k\nX=1\nAPI_SERVER_ENABLED=true\n"),
-    ])
-    func setEnvEdgeCases(existing: String, values: String, changed: Bool, result: String) throws {
+    @Test func personaStampIsTheStartOfTheHashOfTheSoul() throws {
+        // the values are `printf v1 | shasum -a 256`, cut to 8
         try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try Data(existing.utf8).write(to: env)
-            let pairs = values.split(separator: ",").map { kv -> (String, String) in
-                let p = kv.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-                return (String(p[0]), p.count > 1 ? String(p[1]) : "")
+            let dir = tmp.appendingPathComponent("agent")
+            let a = agent(tmp)
+            #expect(a.personaStamp(agentDir: dir) == "e3b0c442")  // no SOUL.md: the hash of nothing
+            try write("v1", to: dir.appendingPathComponent("SOUL.md"))
+            #expect(a.personaStamp(agentDir: dir) == "3bfc2695")
+            try write("x", to: dir.appendingPathComponent("skills/s/SKILL.md"))  // only SOUL.md counts
+            #expect(a.personaStamp(agentDir: dir) == "3bfc2695")
+            try write("v2", to: dir.appendingPathComponent("SOUL.md"))
+            #expect(a.personaStamp(agentDir: dir) == "fb04dcb6")
+        }
+    }
+
+    @Test func theServiceCommandRunsTheAgentWithUv() throws {
+        try scratch { tmp throws in
+            let a = agent(tmp)
+            try write("{\"uv_path\": \"/x/uv\"}", to: a.configFile)
+            let checkout = URL(fileURLWithPath: "/src/robo")
+            #expect(a.serviceCommand(checkout: checkout) == ["/x/uv", "run", "--project", "/src/robo", "robo-agent", "serve"])
+            let fake = tmp.appendingPathComponent("home/.local/bin/uv")  // where the service PATH finds it
+            try write("#!/bin/sh\n", to: fake)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+            try write("{}", to: a.configFile)
+            #expect(a.serviceCommand(checkout: checkout)?.first == fake.path)
+            #expect(Setup.findUV(a) == fake.path)
+        }
+    }
+
+    @Test func noServiceIsStartedForAnotherAgent() throws {
+        try scratch { tmp throws in
+            let a = agent(tmp, env: ["ROBO_AGENT_URL": "http://127.0.0.1:9"])
+            try write("{\"uv_path\": \"/x/uv\"}", to: a.configFile)
+            #expect(a.service(launch: { _, _, _ in Issue.record("launched"); return FakeProcess() }) == nil)
+            let own = agent(tmp).service()
+            #expect(own?.command.first == "/x/uv" && own?.environment["PATH"] == agent(tmp).servicePATH)
+            #expect(own?.environment["ROBO_AGENT_URL"] == nil && own?.log == agent(tmp).logFile)
+        }
+    }
+
+    // --- keeping the service up ---
+
+    @Test func aHealthyAgentIsNeverStarted() {
+        let launches = Counter()
+        let s = service(healthy: { true }, launches: launches)
+        #expect(s.ensure() && launches.n == 0)
+        s.stop()  // not ours: nothing to end
+    }
+
+    @Test func aDownAgentIsStartedOnceAndWaitedFor() {
+        let launches = Counter(), polls = Counter()
+        let child = FakeProcess()
+        let s = service(healthy: { polls.n += 1; return polls.n > 3 }, launches: launches, child: child)
+        #expect(s.ensure() && launches.n == 1)
+        #expect(launches.argv == ["/x/uv", "run", "robo-agent", "serve"] && launches.env == ["PATH": "/p"])
+        #expect(s.ensure() && launches.n == 1)  // up now
+        s.stop()
+        #expect(child.terminated == 1 && !child.isRunning)
+        s.stop()
+        #expect(child.terminated == 1)  // once
+    }
+
+    @Test func aStartingAgentIsNotStartedTwice() {
+        let launches = Counter()
+        let child = FakeProcess()
+        let s = service(healthy: { false }, launches: launches, child: child, wait: 1)
+        #expect(!s.ensure() && launches.n == 1)  // never answered within the wait
+        #expect(!s.ensure() && launches.n == 1)  // its process still runs: no second one
+        child.isRunning = false  // it died
+        #expect(!s.ensure() && launches.n == 2)  // the next request starts it again
+    }
+
+    @Test func aChildThatDiesEndsTheWaitAtOnce() {
+        let launches = Counter(), naps = Counter()
+        let child = FakeProcess()
+        let s = AgentService(command: ["uv"], environment: [:], log: URL(fileURLWithPath: "/dev/null"), healthy: { false },
+                             launch: { _, _, _ in launches.n += 1; child.isRunning = false; return child }, wait: 30,
+                             sleep: { _ in naps.n += 1 })
+        #expect(!s.ensure() && naps.n == 1)
+    }
+
+    @Test func aLaunchThatFailsIsFalseNotACrash() {
+        let s = AgentService(command: ["/nope/uv"], environment: [:], log: URL(fileURLWithPath: "/dev/null"), healthy: { false },
+                             launch: { _, _, _ in throw CocoaError(.fileNoSuchFile) }, sleep: { _ in })
+        #expect(!s.ensure())
+    }
+
+    @Test func theRealLauncherAppendsToAPrivateLog() throws {
+        try scratch { tmp throws in
+            let log = tmp.appendingPathComponent("Logs/Robo/agent.log")
+            let p = try AgentService.launch(["/bin/sh", "-c", "echo \"$GREETING\"; echo err >&2"], ["GREETING": "hi"], log)
+            while p.isRunning { Thread.sleep(forTimeInterval: 0.02) }
+            let again = try AgentService.launch(["/bin/sh", "-c", "echo again"], [:], log)
+            while again.isRunning { Thread.sleep(forTimeInterval: 0.02) }
+            #expect(try read(log) == "hi\nerr\nagain\n" && mode(log) == 0o600)
+        }
+    }
+
+    // --- `robo key` ---
+
+    @Test func keySetWritesOneLinePrivatelyAndPrintsNoKey() throws {
+        try scratch { tmp throws in
+            let a = agent(tmp)
+            var out: [String] = [], err: [String] = []
+            let secret = "sk-ant-api03-SECRETVALUE"
+            #expect(runKey(["set", "deepseek"], agent: a, readSecret: { "  \(secret)\n" }, out: { out.append($0) }, err: { err.append($0) }) == 0)
+            let file = a.keyFile("api_key")
+            #expect(try read(file) == secret + "\n" && mode(file) == 0o600 && mode(a.dir) == 0o700)
+            #expect(a.hasDeepSeekKey)
+            #expect(runKey(["status"], agent: a, readSecret: { nil }, out: { out.append($0) }, err: { err.append($0) }) == 0)
+            #expect(out.suffix(2) == ["deepseek: set", "server: not set"])
+            #expect(!(out + err).joined().contains(secret))
+            #expect(try fm.contentsOfDirectory(atPath: a.dir.path) == ["api_key"])  // no temp file left
+        }
+    }
+
+    @Test func keySetRefusesNothingOrJunkAndUnknownNames() throws {
+        try scratch { tmp throws in
+            let a = agent(tmp)
+            var err: [String] = []
+            for bad in [nil, "", "   \n", "two words", "tab\there", "caf\u{E9}", String(repeating: "k", count: 1025)] as [String?] {
+                #expect(runKey(["set", "deepseek"], agent: a, readSecret: { bad }, out: { _ in }, err: { err.append($0) }) == 1)
             }
-            #expect(try Setup.setEnv(env, pairs) == changed)
-            #expect(try String(contentsOf: env, encoding: .utf8) == result)
-        }
-    }
-
-    @Test func readEnvEdgeCases() throws {
-        try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            for (text, expected) in [
-                ("A=1\nA=2\n", ["A": "2"]),  // the later line wins
-                ("  K = v  \n=novalue\n#c=1\n", ["K": "v"]),
-                ("Q=''\"x\"'\nR=\"\"\n", ["Q": "x", "R": ""]),  // all quotes at the ends, not one level
-                ("A=b=c\n", ["A": "b=c"]),
-                ("A=1\r\nB=2\r\n", ["A": "1", "B": "2"]),
-                (" #A=1\nB=2", ["B": "2"]),
-                ("'A'=1\n", ["'A'": "1"]),
-            ] as [(String, [String: String])] {
-                try write(text, to: env)
-                #expect(try Setup.readEnv(env) == expected, "\(text.debugDescription)")
+            #expect(!fm.fileExists(atPath: a.keyFile("api_key").path))
+            for args in [[], ["set"], ["set", "anthropic"], ["set", "supermemory"], ["set", "deepseek", "sk-in-argv"], ["show"]] {
+                #expect(runKey(args, agent: a, readSecret: { Issue.record("read"); return nil }, out: { _ in }, err: { err.append($0) }) == 2)
             }
+            #expect(!err.joined().contains("sk-in-argv"))
+            #expect(!fm.fileExists(atPath: a.dir.path))  // refused before anything is written
         }
     }
 
-    @Test func aDotenvThatIsNotUTF8IsAnErrorNotAnEmptyFile() throws {
-        // Python raises UnicodeDecodeError; treating it as empty would let setup overwrite the user's keys.
+    // --- `robo setup` ---
+
+    @Test func setupWritesTheConfigAndTheServerKey() throws {
         try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            try Data([0x4B, 0x3D, 0xFF, 0xFE, 0x0A]).write(to: env)
-            #expect(throws: (any Error).self) { try Setup.readEnv(env) }
-            #expect(throws: (any Error).self) { try Setup.setEnv(env, [("A", "1")]) }
+            let a = agent(tmp)
+            let lines = try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in uv })
+            let c = try config(a)
+            #expect(Set(c.keys) == ["port", "model", "uv_path"])
+            #expect(c["port"] as? Int == 8765 && c["model"] as? String == "deepseek-flash" && c["uv_path"] as? String == uv)
+            #expect(try mode(a.configFile) == 0o600 && mode(a.dir) == 0o700)
+            let key = try #require(a.readKey("server_key"))
+            #expect(try key.count >= 43 && mode(a.keyFile("server_key")) == 0o600)
+            #expect(!lines.joined().contains(key))
+            #expect(lines.first == "- wrote robo's agent settings (\(a.configFile.path))")
+            #expect(lines.contains("- made the key the app uses with robo's agent"))
+            #expect(lines.last == "- next: run `robo key set deepseek` (robo's agent needs your DeepSeek API key)")
+            _ = try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in uv })
+            #expect(a.readKey("server_key") == key)  // kept
         }
     }
 
-    // --- the profile and its connection ---
-
-    @Test func connectionUsesProfileKeyAndHostPort() throws {
+    @Test func setupKeepsWhatIsThereAndNamesThisUv() throws {
         try scratch { tmp throws in
-            try write("API_SERVER_PORT=9000\nAPI_SERVER_KEY=host-secret\n", to: tmp.appendingPathComponent(".env"))
-            try write("API_SERVER_KEY=robo-secret\n", to: tmp.appendingPathComponent("profiles/robo/.env"))
-            let c = try profile(tmp).connection()
-            #expect(c.url == "http://127.0.0.1:9000/p/robo" && c.key == "robo-secret")
-            let override = try profile(tmp, env: ["ROBO_HERMES_URL": "http://127.0.0.1:9/"]).connection()
-            #expect(override.url == "http://127.0.0.1:9/")
+            let a = agent(tmp)
+            try write("{\"approvals\": \"manual\", \"model\": \"claude-opus-5-5\", \"port\": 9001, \"mine\": [1],"
+                      + " \"uv_path\": \"/old/uv\", \"vault\": \"/v\"}", to: a.configFile)
+            let lines = try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in uv })
+            let c = try config(a)
+            #expect(c["approvals"] as? String == "manual" && c["model"] as? String == "claude-opus-5-5" && c["port"] as? Int == 9001)
+            #expect(c["mine"] as? [Int] == [1] && c["vault"] as? String == "/v")  // keys it does not know stay
+            #expect(c["uv_path"] as? String == uv)  // always this uv
+            #expect(lines.first == "- updated robo's agent settings")
         }
     }
 
-    @Test func connectionWithoutSetupThrows() throws {
+    @Test func aConfigThatIsNotJSONIsLeftAlone() throws {
         try scratch { tmp throws in
-            do {
-                _ = try profile(tmp).connection()
-                Issue.record("expected SetupError")
-            } catch let e as SetupError {
-                #expect(e.description.contains("robo setup"))
-            }
-        }
-    }
-
-    @Test func theProfilePathsFollowHermesHomeThenTheHome() {
-        let home = URL(fileURLWithPath: "/Users/jane")
-        let byDefault = HermesProfile(home: home, env: [:])
-        #expect(byDefault.hermesHome.path == "/Users/jane/.hermes")
-        #expect(byDefault.dir.path == "/Users/jane/.hermes/profiles/robo")
-        #expect(byDefault.braveDir.path == "/Users/jane/.hermes/profiles/robo/brave")
-        #expect(HermesProfile(home: home, env: ["HERMES_HOME": "/srv/h"]).dir.path == "/srv/h/profiles/robo")
-        #expect(HermesProfile(home: home, env: ["HERMES_HOME": ""]).hermesHome.path == "/Users/jane/.hermes")  // empty = unset
-        #expect(HermesProfile(env: ["HOME": "/Users/other"]).home.path == "/Users/other")  // Path.home() honours $HOME
-    }
-
-    @Test func clientConnectionKeepsChatWorkingWithoutBrave() throws {
-        // cli._client(): a Brave that will not start is a warning, anything else is an error.
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            var asked: [URL] = [], warned: [String] = []
-            let c = try p.clientConnection(ensureBrowser: { asked.append($0); throw BrowserError("no brave") },
-                                           warn: { warned.append($0) })
-            #expect(c.key == "r" && c.url == "http://127.0.0.1:8642/p/robo")
-            #expect(asked.map(\.path) == [robo.appendingPathComponent("brave").path])
-            #expect(warned == ["robo: no brave"])
-            #expect(throws: SetupError.self) { try p.clientConnection(ensureBrowser: { _ in throw SetupError("x") }, warn: { _ in }) }
-            #expect(throws: SetupError.self) { try profile(tmp.appendingPathComponent("none")).clientConnection(ensureBrowser: { _ in true }) }
-        }
-    }
-
-    // --- setup() ---
-
-    @Test func setupIsIdempotentAndRestartsOnlyOnChange() throws {
-        try scratch { tmp throws in
-            let p = profile(tmp)
-            try write("SLACK_BOT_TOKEN=x\n", to: tmp.appendingPathComponent(".env"))
-            let templates = try templatesWith(["SOUL.md": "soul", "skills/school/mail/SKILL.md": "skill"], in: tmp)
-            let hermes = FakeHermes(tmp)
-
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [("a.b", "1")], run: hermes.run, wait: { _ in true })
-            let host = try Setup.readEnv(tmp.appendingPathComponent(".env"))
-            let robo = try Setup.readEnv(tmp.appendingPathComponent("profiles/robo/.env"))
-            #expect(host["SLACK_BOT_TOKEN"] == "x" && host["API_SERVER_ENABLED"] == "true")
-            #expect(host["API_SERVER_KEY"]!.count >= 32 && robo["API_SERVER_KEY"]!.count >= 32)
-            #expect(host["API_SERVER_KEY"] != robo["API_SERVER_KEY"])
-            #expect(robo["API_SERVER_ENABLED"] == nil)  // served by the host gateway, never its own listener
-            #expect(try read(tmp.appendingPathComponent("profiles/robo/SOUL.md")) == "soul")
-            #expect(try read(tmp.appendingPathComponent("profiles/robo/skills/school/mail/SKILL.md")) == "skill")
-            #expect(Array(hermes.calls[0].prefix(5)) == ["hermes", "profile", "create", "robo", "--no-alias"])
-            #expect(hermes.calls.contains(["hermes", "-p", "robo", "config", "set", "a.b", "1"]))
-            #expect(hermes.calls.contains(["hermes", "gateway", "restart"]))
-
-            hermes.calls.removeAll()
-            let again = try Setup.hermes(p, templates: templates, robo: "robo", config: [("a.b", "1")], run: hermes.run, wait: { _ in true })
-            #expect(again.isEmpty)
-            #expect(!hermes.calls.contains { Array($0[1...2]) == ["profile", "create"] })
-            #expect(!hermes.calls.contains(["hermes", "gateway", "restart"]))
-            #expect(try Setup.readEnv(tmp.appendingPathComponent(".env"))["API_SERVER_KEY"] == host["API_SERVER_KEY"])
-        }
-    }
-
-    @Test func aConfigChangeAloneRestarts() throws {
-        try scratch { tmp throws in
-            try write("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=k\n", to: tmp.appendingPathComponent(".env"))
-            let robo = tmp.appendingPathComponent("profiles/robo")
-            try write("API_SERVER_KEY=r\n", to: robo.appendingPathComponent(".env"))
-            try write("old\n", to: robo.appendingPathComponent("config.yaml"))
-            var calls: [[String]] = []
-            let done = try Setup.hermes(profile(tmp), templates: tmp.appendingPathComponent("none"), robo: "robo",
-                                        config: [("a", "1")], run: {
-                calls.append($0)
-                if $0.count > 4, Array($0[3...4]) == ["config", "set"] { try write("new\n", to: robo.appendingPathComponent("config.yaml")) }
-            }, wait: { _ in true })
-            #expect(done.contains("updated robo's Hermes config"))
-            #expect(calls.contains(["hermes", "gateway", "restart"]))
-        }
-    }
-
-    @Test func theGatewayThatDoesNotComeBackIsAnError() throws {
-        try scratch { tmp throws in
-            do {  // a fresh home, so something changes and the gateway must restart
-                _ = try Setup.hermes(profile(tmp), templates: tmp.appendingPathComponent("none"), robo: "robo",
-                                     config: [("a", "1")], run: { _ in }, wait: { _ in false })
-                Issue.record("expected SetupError")
-            } catch let e as SetupError {
-                #expect(e.description.contains("hermes gateway status"))
-            }
-        }
-    }
-
-    @Test func moodleURLIsStoredAndFilledIntoSkills() throws {
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            let templates = try templatesWith(["skills/m/SKILL.md": "Moodle is {{MOODLE_BASE_URL}}."], in: tmp)
-
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [], run: { _ in }, wait: { _ in true })
-            #expect(try read(robo.appendingPathComponent("skills/m/SKILL.md")).contains("not set"))
-
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [], run: { _ in }, wait: { _ in true },
-                                 moodle: "https://moodle.uni.example/")
-            #expect(try Setup.readEnv(robo.appendingPathComponent(".env"))["MOODLE_BASE_URL"] == "https://moodle.uni.example")
-            #expect(try read(robo.appendingPathComponent("skills/m/SKILL.md")) == "Moodle is https://moodle.uni.example.")
-        }
-    }
-
-    // Skills run `{{ROBO}} activity ...` inside terminal(command="..."): the app, as one shell word.
-    @Test(arguments: [
-        ("/Users/test/Robo.app/Contents/MacOS/robo", "/Users/test/Robo.app/Contents/MacOS/robo activity --days 1"),
-        ("/Users/me/My Apps/Robo.app/Contents/MacOS/robo", "'/Users/me/My Apps/Robo.app/Contents/MacOS/robo' activity --days 1"),
-        ("/Users/o'brien/Robo.app/Contents/MacOS/robo", "'/Users/o'\\''brien/Robo.app/Contents/MacOS/robo' activity --days 1"),
-    ])
-    func theAppCommandIsFilledIntoSkills(executable: String, filled: String) throws {
-        try scratch { tmp throws in
-            let project = tmp.appendingPathComponent("checkout")
-            try write("soul", to: project.appendingPathComponent("hermes/SOUL.md"))
-            try write("{{ROBO}} activity --days 1", to: project.appendingPathComponent("hermes/skills/p/SKILL.md"))
-            let p = profile(tmp)
-            _ = try Setup.report(moodle: nil, profile: p, executable: URL(fileURLWithPath: executable), project: project,
-                                 run: { _ in }, wait: { _ in true }, running: { true })
-            #expect(try read(p.dir.appendingPathComponent("skills/p/SKILL.md")) == filled)
-        }
-    }
-
-    @Test(arguments: ["/a/Robo.app/Contents/MacOS/robo", "/a b/robo", "/it's/robo", "/q\"uote/robo", "/$HOME/`x`/robo", "/\u{E9}/robo", "/semi;colon/robo"])
-    func theShellWordSurvivesTheShell(path: String) throws {
-        let out = try Host.run(["sh", "-c", "printf %s " + Setup.shellWord(path)], timeout: 5)
-        #expect(out.stdout == path)
-    }
-
-    @Test func theShellWordIsThePathItselfWhenItIsPlain() {
-        #expect(Setup.shellWord("/Applications/Robo.app/Contents/MacOS/robo") == "/Applications/Robo.app/Contents/MacOS/robo")
-        #expect(Setup.shellWord("/a_b-c.d/robo") == "/a_b-c.d/robo")
-        #expect(Setup.shellWord("/a b") == "'/a b'" && Setup.shellWord("") == "''" && Setup.shellWord("/it's") == "'/it'\\''s'")
-    }
-
-    @Test func theRealStudyPlanSkillRunsTheAppForActivityAndPlan() throws {
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            let word = Setup.shellWord(exe.path)
-            _ = try Setup.hermes(p, templates: Setup.checkout.appendingPathComponent("hermes"), robo: word,
-                                 config: [], run: { _ in }, wait: { _ in true })
-            let skill = try read(robo.appendingPathComponent("skills/school/study-plan/SKILL.md"))
-            #expect(skill.contains("`terminal(command=\"\(word) activity --days 1\", timeout=60)`"))
-            #expect(skill.contains("`terminal(command=\"\(word) plan --tasks /tmp/robo-plan/1432-tasks.json --busy /tmp/robo-plan/1432-busy.json\", timeout=60)`"))
-            #expect(!skill.contains("uv run") && !skill.contains("{{"))
-            // The template is the filled skill with only the command swapped back.
-            let template = try read(Setup.checkout.appendingPathComponent("hermes/skills/school/study-plan/SKILL.md"))
-            let filled = template.replacingOccurrences(of: "{{ROBO}}", with: word)
-            #expect(skill == filled)
-        }
-    }
-
-    @Test func theVaultPathIsFilledIntoSkills() throws {
-        // Skills and the persona name the vault through {{VAULT}}; Vault.dir is the only copy.
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            let templates = try templatesWith(["skills/v/SKILL.md": "write to {{VAULT}}/Drafts/<title>.md"], in: tmp)
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [], run: { _ in }, wait: { _ in true })
-            #expect(try read(robo.appendingPathComponent("skills/v/SKILL.md"))
-                    == "write to \(Vault.dir(home: p.home).path)/Drafts/<title>.md")
-        }
-    }
-
-    @Test func everyPlaceholderInTheRealTemplatesGetsFilled() throws {
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            _ = try Setup.hermes(p, templates: Setup.checkout.appendingPathComponent("hermes"), robo: "robo",
-                                 config: [], run: { _ in }, wait: { _ in true })
-            let placeholder = try NSRegularExpression(pattern: #"\{\{[A-Z_]+\}\}"#)
-            var left: [String] = []
-            for rel in Setup.files(under: robo) where rel.last!.hasSuffix(".md") {
-                let text = try read(rel.reduce(robo) { $0.appendingPathComponent($1) })
-                if placeholder.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil { left.append(rel.joined(separator: "/")) }
-            }
-            #expect(left.isEmpty, "unfilled placeholders in \(left)")
-        }
-    }
-
-    @Test func templatesAreCopiedWithTheFillOrderAndSkipPyCaches() throws {
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            let templates = try templatesWith([
-                "SOUL.md": "{{DESKTOP_APPS}}|{{NOPE}}", "skills/s/SKILL.md": "{{VAULT}}{{VAULT}}",
-                "plugins/g/__pycache__/x.pyc": "no", "plugins/g/__init__.py": "py", "other/not-installed.md": "no",
-            ], in: tmp)
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [], run: { _ in }, wait: { _ in true })
-            #expect(try read(robo.appendingPathComponent("SOUL.md")) == "\(Setup.desktopApps)|{{NOPE}}")  // unknown ones stay
-            let vault = Vault.dir(home: p.home).path
-            #expect(try read(robo.appendingPathComponent("skills/s/SKILL.md")) == vault + vault)
-            #expect(fm.fileExists(atPath: robo.appendingPathComponent("plugins/g/__init__.py").path))
-            #expect(!fm.fileExists(atPath: robo.appendingPathComponent("plugins/g/__pycache__").path))
-            #expect(!fm.fileExists(atPath: robo.appendingPathComponent("other").path))
-        }
-    }
-
-    @Test(arguments: ["moodle.uni.example", "http://moodle.uni.example", "https://"])
-    func theMoodleURLMustBeHTTPS(bad: String) throws {
-        try scratch { tmp throws in
+            let a = agent(tmp)
+            try write("{ my edit, broken", to: a.configFile)
             #expect(throws: SetupError.self) {
-                try Setup.hermes(profile(tmp), templates: tmp, robo: "robo", config: [], run: { _ in }, wait: { _ in true }, moodle: bad)
+                try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in uv })
             }
-            #expect(!fm.fileExists(atPath: tmp.appendingPathComponent(".env").path))  // refused before anything is written
+            #expect(try read(a.configFile) == "{ my edit, broken")
+            #expect(!fm.fileExists(atPath: a.home.appendingPathComponent("Library/LaunchAgents").path))
         }
     }
 
-    @Test func personaStampChangesWithSoulOrSkills() throws {
+    // On macOS 26.7 the parser refuses 1e999 but reads -1e999 as -infinity, and writing that back raises an exception no Swift code
+    // can catch: only -1e999 reaches writeConfig's guard, and without the guard this test crashes.
+    @Test(arguments: ["1e999", "-1e999"])
+    func aConfigThatCannotBeWrittenBackIsLeftAlone(number: String) throws {
         try scratch { tmp throws in
-            let robo = tmp.appendingPathComponent("profiles/robo")
-            try write("v1", to: robo.appendingPathComponent("SOUL.md"))
-            try write("a", to: robo.appendingPathComponent("skills/s/SKILL.md"))
-            let p = profile(tmp)
-            let first = p.personaStamp()
-            #expect(first == p.personaStamp() && first.count == 8)
-            try write("v2", to: robo.appendingPathComponent("SOUL.md"))
-            let second = p.personaStamp()
-            try write("b", to: robo.appendingPathComponent("skills/s/SKILL.md"))
-            #expect(Set([first, second, p.personaStamp()]).count == 3)
+            let a = agent(tmp)
+            try write("{\"mine\": \(number)}", to: a.configFile)
+            #expect(throws: SetupError.self) {
+                try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in uv })
+            }
+            #expect(try read(a.configFile) == "{\"mine\": \(number)}")
+            #expect(!fm.fileExists(atPath: a.home.appendingPathComponent("Library/LaunchAgents").path))
         }
     }
 
-    @Test func personaStampFollowsPythonsHashAndPathOrder() throws {
-        // 384c250b is what Python's persona_stamp() gives for this tree: a/ sorts before a-b/ by path
-        // component (not by string), uppercase before lowercase, and dotfiles and *.md names are handled;
-        // a folder called dir.md, a .txt and the plugins folder are not hashed.
+    @Test func setupRefusesABareBinaryNoUvOrAMovedCheckoutBeforeWritingAnything() throws {
         try scratch { tmp throws in
-            let robo = tmp.appendingPathComponent("profiles/robo")
-            for (path, text) in [
-                ("SOUL.md", "soul\n"), ("skills/school/a/SKILL.md", "a\n"), ("skills/school/a-b/SKILL.md", "ab\n"),
-                ("skills/school/a/notes/ref.md", "ref\n"), ("skills/Z.md", "z\n"), ("skills/s.txt", "no\n"),
-                ("skills/school/a.md", "dot\n"), ("plugins/p.md", "not a skill\n"), ("skills/.hidden.md", "h\n"),
-                ("skills/aa/.md", "empty stem\n"),
-            ] { try write(text, to: robo.appendingPathComponent(path)) }
-            try fm.createDirectory(at: robo.appendingPathComponent("skills/school/a/dir.md"), withIntermediateDirectories: true)
-            #expect(profile(tmp).personaStamp() == "384c250b")
+            let a = agent(tmp)
+            #expect(throws: SetupError.self) {
+                try Setup.report(agent: a, executable: bareBinary, project: try project(tmp), uv: { _ in uv })
+            }
+            #expect(throws: SetupError.self) {
+                try Setup.report(agent: a, executable: exe, project: try project(tmp), uv: { _ in nil })
+            }
+            #expect(throws: SetupError.self) {
+                try Setup.report(agent: a, executable: exe, project: tmp.appendingPathComponent("moved"), uv: { _ in uv })
+            }
+            #expect(!fm.fileExists(atPath: a.dir.path))
+            #expect(!fm.fileExists(atPath: a.home.appendingPathComponent("Library").path))
         }
     }
 
-    // --- the Moodle address ---
+    // --- the file writer: private from the first byte ---
 
-    @Test(arguments: [
-        ("https://lms.mbzuai.ac.ae/my/", "https://lms.mbzuai.ac.ae"),
-        ("https://lms.uni.example/my/index.php", "https://lms.uni.example"),
-        ("https://uni.example/moodle/my/", "https://uni.example/moodle"),
-        ("https://uni.example/moodle/", "https://uni.example/moodle"),
-        ("https://lms.uni.example/login/index.php", "https://lms.uni.example"),
-    ])
-    func theMoodleURLTakesTheBaseOfAPastedPage(pasted: String, base: String) throws {
-        #expect(try Setup.moodleURL(pasted) == base)
-    }
-
-    // Python's _moodle_url on the same inputs (nil: it raised SetupError).
-    @Test(arguments: [
-        ("HTTPS://User@Host.Example:8443/my/?q=1#f", "https://User@Host.Example:8443"),
-        ("https://[::1]:80/my", "https://[::1]:80"),
-        ("  https://m.example/course/view.php?id=3  ", "https://m.example"),
-        ("https://m.example///", "https://m.example"),
-        ("https://m.example/mod/forum/view.php", "https://m.example"),
-        ("https://m.example/mymoodle/my/", "https://m.example/mymoodle"),
-        ("https://m.example/a/my/b/login", "https://m.example/a"),
-        ("https://m.example/x/modx", "https://m.example/x/modx"),
-        ("https://m.example/?x=/my", "https://m.example"),
-        ("https://m.example#/my", "https://m.example"),
-        ("https://exa\tmple/x", "https://example/x"),
-        ("https://m.example/Course/", "https://m.example/Course"),
-        ("https://:80/x", nil),
-        ("https://user@/x", nil),
-        ("https:/x", nil),
-        ("ftp://m.example", nil),
-        ("", nil),
-        ("https://m.example:8443/m/login", "https://m.example:8443/m"),
-        ("https://m.example/my/course/", "https://m.example"),
-    ] as [(String, String?)])
-    func theMoodleURLMatchesPython(input: String, expected: String?) throws {
-        if let expected {
-            #expect(try Setup.moodleURL(input) == expected)
-        } else {
-            #expect(throws: SetupError.self) { try Setup.moodleURL(input) }
+    @Test func atomicWriteMakesAPrivateFileInAPrivateFolder() throws {
+        try scratch { tmp throws in
+            let file = tmp.appendingPathComponent("new/folders/secret")
+            let folder = file.deletingLastPathComponent()
+            try Host.atomicWrite(Data("one".utf8), to: file)
+            #expect(try read(file) == "one" && mode(file) == 0o600 && mode(folder) == 0o700)
+            try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try Host.atomicWrite(Data("two".utf8), to: file)
+            #expect(try read(file) == "two" && mode(file) == 0o600)
+            #expect(try mode(folder) == 0o755)  // a folder that was there is left as it is
+            #expect(try fm.contentsOfDirectory(atPath: folder.path) == ["secret"])  // no temp file left
         }
     }
 
-    // --- the config, the launch agent, the desktop-apps rule ---
-
-    @Test func theConfigCommandsEqualPythons() {
-        // setup.CONFIG as `hermes -p robo config set <key> <value>`, in Python's order.
-        let python: [[String]] = [
-            ["model.provider", "anthropic"],
-            ["model.default", "claude-sonnet-5.5"],
-            ["platform_toolsets.api_server", "[\"browser\", \"web\", \"vision\", \"skills\", \"memory\", \"session_search\", \"todo\", \"terminal\", \"file\", \"computer_use\", \"code_execution\"]"],
-            ["approvals.mode", "off"],
-            ["approvals.deny", "[\"*hermes*\"]"],
-            ["approvals.timeout", "120"],
-            ["computer_use.native_wayland", "false"],
-            ["memory.memory_enabled", "true"],
-            ["memory.user_profile_enabled", "true"],
-            ["auxiliary.background_review.enabled", "true"],
-            ["curator.enabled", "false"],
-            ["browser.backend", "off"],
-            ["browser.use_real_profile", "false"],
-            ["browser.cdp_url", "http://127.0.0.1:9333"],
-            ["plugins.enabled", "[\"robo-guard\"]"],
-        ]
-        #expect(Setup.hermesConfig.map { [$0.0, $0.1] } == python)
+    @Test func theTempFileIsNeverReadableByOthers() throws {
+        // Watch every file in the folder while atomicWrite writes (the temp file has a random name).
+        try scratch { tmp throws in
+            let file = tmp.appendingPathComponent("secret")
+            final class Watch: @unchecked Sendable { var stop = false; var exposed: [String] = []; var sightings = 0 }
+            let watch = Watch()
+            let done = DispatchSemaphore(value: 0)
+            Thread.detachNewThread {
+                var st = stat()
+                while !watch.stop {
+                    for name in (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? [] where stat(tmp.appendingPathComponent(name).path, &st) == 0 {
+                        if name != "secret" { watch.sightings += 1 }
+                        if st.st_mode & 0o077 != 0 { watch.exposed.append("\(name) \(String(st.st_mode & 0o777, radix: 8))") }
+                    }
+                }
+                done.signal()
+            }
+            let secret = String(repeating: "k", count: 200_000)  // a long write widens the window
+            for i in 0..<150 { try Host.atomicWrite(Data("\(i)\(secret)".utf8), to: file) }
+            watch.stop = true
+            done.wait()
+            #expect(watch.exposed.isEmpty, "seen with mode \(Set(watch.exposed)) (\(watch.exposed.count) times, \(watch.sightings) temp sightings)")
+        }
     }
+
+    @Test func aFailedAtomicWriteLeavesNoTempFile() throws {
+        try scratch { tmp throws in
+            let target = tmp.appendingPathComponent("dir")
+            try fm.createDirectory(at: target.appendingPathComponent("inside"), withIntermediateDirectories: true)
+            #expect(throws: (any Error).self) { try Host.atomicWrite(Data("x".utf8), to: target) }  // a non-empty folder cannot be replaced
+            #expect(try fm.contentsOfDirectory(atPath: tmp.path) == ["dir"])
+        }
+    }
+
+    // --- `robo setup` as the CLI runs it ---
+
+    /// Everything `robo setup` touches, in a temp home with the DeepSeek key already saved.
+    private func cli(_ tmp: URL) throws -> () throws -> [String] {
+        let a = agent(tmp)
+        try write("sk-x\n", to: a.keyFile("api_key"))
+        let checkout = try project(tmp)
+        return { try Setup.report(agent: a, executable: exe, project: checkout, uv: { _ in uv }) }
+    }
+
+    @Test func setupPrintsWhatItDid() throws {
+        try scratch { tmp throws in
+            #expect(try cli(tmp)() == [
+                "- wrote robo's agent settings (\(agent(tmp).configFile.path))",
+                "- made the key the app uses with robo's agent",
+                "- robo now starts when you log in (`\(exe.path)` starts it now)",
+            ])
+        }
+    }
+
+    @Test func setupWithNothingToDoSaysSo() throws {
+        try scratch { tmp throws in
+            let run = try cli(tmp)
+            _ = try run()
+            #expect(try run() == ["- already set up, nothing changed"])
+        }
+    }
+
+    @Test func runSetupRefusesWhatItDoesNotKnow() {
+        #expect(runSetup(["--bogus"]) == 2)
+        #expect(runSetup(["--moodle", "https://lms.uni.example"]) == 2)  // no argument is known any more
+    }
+    // --- the launch agent ---
 
     @Test func theLaunchAgentStartsTheAppAtLoginAndNeedsNoExtension() throws {
         try scratch { tmp throws in
@@ -494,12 +395,10 @@ private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/de
             #expect(try Setup.launchAgent(home: home, executable: exe).isEmpty)  // idempotent
             let moved = try Setup.launchAgent(home: home, executable: URL(fileURLWithPath: "/Applications/Robo.app/Contents/MacOS/robo"))
             #expect(moved.count == 1)  // a new executable rewrites the agent
-            let lint = try Host.run(["plutil", "-lint", file.path], timeout: 10)
-            #expect(lint.status == 0, "\(lint.stdout)\(lint.stderr)")
         }
     }
 
-    @Test func theLaunchAgentIsPythonsPlistByteForByte() throws {
+    @Test func theLaunchAgentPlistMatchesByteForByte() throws {
         // plistlib.dumps of the same dict (home /Users/test), as Python's _launch_agent() would write it.
         let python = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Label</key>\n\t<string>ai.robo</string>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/Users/test/Robo.app/Contents/MacOS/robo</string>\n\t</array>\n\t<key>RunAtLoad</key>\n\t<true/>\n\t<key>StandardErrorPath</key>\n\t<string>/Users/test/Library/Logs/robo.log</string>\n\t<key>StandardOutPath</key>\n\t<string>/Users/test/Library/Logs/robo.log</string>\n</dict>\n</plist>\n"
         try scratch { tmp throws in
@@ -530,95 +429,6 @@ private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/de
         }
     }
 
-    @Test func setupRefusesABareBinaryBeforeWritingAnything() throws {
-        try scratch { tmp throws in
-            let p = profile(tmp)
-            let hermes = FakeHermes(tmp)
-            #expect(throws: SetupError.self) {
-                try Setup.report(moodle: nil, profile: p, executable: bareBinary, project: Setup.checkout,
-                                 run: hermes.run, wait: { _ in true }, running: { false })
-            }
-            #expect(hermes.calls.isEmpty && !fm.fileExists(atPath: tmp.appendingPathComponent(".env").path))
-            #expect(!fm.fileExists(atPath: Vault.dir(home: p.home).path))
-        }
-    }
-
-    // --- the dotenv writer: private from the first byte, and through a symlink ---
-
-    @Test func setEnvUpdatesWhatASymlinkPointsAtAndKeepsTheLink() throws {
-        // A dotfiles-managed ~/.hermes/.env: replacing the link with a regular file would leave the target stale.
-        try scratch { tmp throws in
-            let real = tmp.appendingPathComponent("dotfiles/hermes.env")
-            try write("# mine\nA=1\n", to: real)
-            let link = tmp.appendingPathComponent("home/.env")
-            try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.createSymbolicLink(at: link, withDestinationURL: real)
-
-            #expect(try Setup.setEnv(link, [("A", "2"), ("B", "3")]) == true)
-
-            #expect(try fm.destinationOfSymbolicLink(atPath: link.path) == real.path)  // still a link
-            #expect(try read(real) == "# mine\nA=2\nB=3\n")
-            #expect(try mode(real) == 0o600)
-            #expect(try Setup.setEnv(link, [("A", "2")]) == false)
-            #expect(try fm.contentsOfDirectory(atPath: link.deletingLastPathComponent().path) == [".env"])  // no temp file left
-            #expect(try fm.contentsOfDirectory(atPath: real.deletingLastPathComponent().path) == ["hermes.env"])
-        }
-    }
-
-    @Test func theTempFileIsNeverReadableByOthers() throws {
-        // The key was written 0644 and chmod-ed afterwards; watch the temp file while setEnv runs.
-        try scratch { tmp throws in
-            let env = tmp.appendingPathComponent(".env")
-            let temp = env.path + ".tmp"
-            final class Watch: @unchecked Sendable { var stop = false; var exposed: [String] = []; var sightings = 0 }
-            let watch = Watch()
-            let done = DispatchSemaphore(value: 0)
-            Thread.detachNewThread {
-                var st = stat()
-                while !watch.stop {
-                    if stat(temp, &st) == 0 {
-                        watch.sightings += 1
-                        if st.st_mode & 0o077 != 0 { watch.exposed.append(String(st.st_mode & 0o777, radix: 8)) }
-                    }
-                }
-                done.signal()
-            }
-            let secret = String(repeating: "k", count: 200_000)  // a long write widens the window
-            for i in 0..<150 { try Setup.setEnv(env, [("API_SERVER_KEY", "\(i)\(secret)")]) }
-            watch.stop = true
-            done.wait()
-            #expect(watch.exposed.isEmpty, "temp file seen with mode \(Set(watch.exposed)) (\(watch.exposed.count) of \(watch.sightings) sightings)")
-        }
-    }
-
-    @Test func aFailedReplaceLeavesNoTempFile() throws {
-        try scratch { tmp throws in
-            let target = tmp.appendingPathComponent("dir")
-            try fm.createDirectory(at: target.appendingPathComponent("inside"), withIntermediateDirectories: true)
-            #expect(throws: (any Error).self) { try Host.replaceFile(target, with: "x") }  // a non-empty folder cannot be replaced
-            #expect(!fm.fileExists(atPath: target.path + ".tmp"))
-        }
-    }
-
-    // --- signin ---
-
-    @Test func signinOnlyOpensAnHTTPSMoodleAddress() throws {
-        // MOODLE_BASE_URL goes into Brave's command line: a value starting with -- would be a Chromium flag.
-        try scratch { tmp throws in
-            let p = profile(tmp)
-            let env = p.dir.appendingPathComponent(".env")
-            #expect(try Setup.signinMoodle(p) == nil)  // no file: no LMS tab
-            try write("API_SERVER_KEY=r\nMOODLE_BASE_URL=\n", to: env)
-            #expect(try Setup.signinMoodle(p) == nil)
-            try write("MOODLE_BASE_URL=https://lms.uni.example/my/\n", to: env)
-            #expect(try Setup.signinMoodle(p) == "https://lms.uni.example")  // normalised like setup does
-            for bad in ["--remote-debugging-port=1", "--user-data-dir=/tmp/x", "http://lms.uni.example", "lms.uni.example", "file:///etc/passwd"] {
-                try write("MOODLE_BASE_URL=\(bad)\n", to: env)
-                #expect(throws: SetupError.self, "\(bad)") { try Setup.signinMoodle(p) }
-            }
-        }
-    }
-
     @Test func aLaunchAgentThatCannotBeWrittenIsASetupError() throws {
         try scratch { tmp throws in
             try write("x", to: tmp.appendingPathComponent("Library"))  // a file where the folder should be
@@ -626,135 +436,46 @@ private let bareBinary = URL(fileURLWithPath: "/Users/test/robo/native/.build/de
         }
     }
 
-    @Test func theDesktopAppsRuleIsFilledForTheMac() throws {
-        try scratch { tmp throws in
-            let (p, robo) = try readyProfile(tmp)
-            let templates = try templatesWith(["SOUL.md": "- {{DESKTOP_APPS}}\n"], in: tmp)
-            _ = try Setup.hermes(p, templates: templates, robo: "robo", config: [], run: { _ in }, wait: { _ in true })
-            let soul = try read(robo.appendingPathComponent("SOUL.md"))
-            #expect(soul.contains("open -a") && !soul.contains("{{"))
-            #expect(!soul.contains("GDK_BACKEND"))  // the Linux rule is not installed
+    // --- the day a chat session is named after ---
+
+    @Test func aCalendarDayExistsOnlyWhenTheDateDoes() {
+        #expect(CalendarDay(year: 2024, month: 2, day: 29)?.iso == "2024-02-29" && CalendarDay(year: 2000, month: 2, day: 29) != nil)
+        #expect(CalendarDay(year: 7, month: 3, day: 5)?.iso == "0007-03-05")
+        for (y, m, d) in [(1900, 2, 29), (2026, 2, 29), (2026, 4, 31), (2026, 13, 1), (2026, 1, 0), (0, 1, 1), (10000, 1, 1)] {
+            #expect(CalendarDay(year: y, month: m, day: d) == nil, "\(y)-\(m)-\(d)")
         }
     }
 
-    // --- the health wait ---
-
-    @Test func waitHealthyAsksTheGatewaysHealthEndpoint() throws {
-        try scratch { tmp throws in
-            try write("API_SERVER_KEY=r\n", to: tmp.appendingPathComponent("profiles/robo/.env"))
-            let up = LoopbackServer(status: 200), down = LoopbackServer(status: 503)
-            func p(_ server: LoopbackServer) -> HermesProfile {  // the gateway is a throwaway local server, never the real one
-                profile(tmp, env: ["ROBO_HERMES_URL": "http://127.0.0.1:\(server.port)/p/robo"])
-            }
-            #expect(try Setup.waitHealthy(p(up), timeout: 5, sleep: { _ in }) == true)
-            #expect(up.requests.first?.hasPrefix("GET /health ") == true)
-            #expect(try Setup.waitHealthy(p(down), timeout: 0.3, sleep: { _ in }) == false)
+    @Test func aCalendarDayIsTheLocalDayOfItsDate() {
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = .autoupdatingCurrent
+        for (h, m) in [(0, 0), (23, 59)] {
+            let date = local.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: h, minute: m))!
+            #expect(CalendarDay(date).iso == "2026-10-11")
         }
     }
+}
 
-    // --- running hermes ---
+/// A process that runs until it is told to stop.
+private final class FakeProcess: AgentProcess, @unchecked Sendable {
+    var isRunning = true
+    var terminated = 0
+    func terminate() { terminated += 1; isRunning = false }
+}
 
-    @Test func aFailingCommandIsASetupErrorWithItsStderr() throws {
-        do {
-            try Setup.runHermes(["sh", "-c", "echo oops >&2; exit 3"])
-            Issue.record("expected SetupError")
-        } catch let e as SetupError {
-            #expect(e.description == "`sh -c echo oops >&2; exit 3` failed: oops")
-        }
-        do {
-            try Setup.runHermes(["sh", "-c", "echo only-stdout; exit 1"])
-            Issue.record("expected SetupError")
-        } catch let e as SetupError {
-            #expect(e.description.hasSuffix("failed: only-stdout"))  // stdout when stderr is empty
-        }
-        try Setup.runHermes(["true"])
-    }
+private final class Counter: @unchecked Sendable {
+    var n = 0
+    var argv: [String] = []
+    var env: [String: String] = [:]
+}
 
-    @Test func hostRunCapturesBothStreamsWithoutDeadlockAndTimesOut() throws {
-        let out = try Host.run(["sh", "-c", "echo hi; echo err >&2; exit 3"], timeout: 10)
-        #expect(out.status == 3 && out.stdout == "hi\n" && out.stderr == "err\n")
-        let big = try Host.run(["sh", "-c", "yes | head -c 300000; yes | head -c 300000 >&2"], timeout: 20)
-        #expect(big.stdout.utf8.count == 300_000 && big.stderr.utf8.count == 300_000)
-        #expect(throws: (any Error).self) { try Host.run(["sleep", "10"], timeout: 0.2) }
-        #expect(throws: (any Error).self) { try Host.run(["robo-no-such-command-xyz"], timeout: 1) }
-    }
-
-    // --- `robo setup` as the CLI runs it (tests/test_cli.py) ---
-
-    /// Everything `robo setup` touches, in a temp home; `obsidian.json` is there for the vault to join.
-    private func cli(_ tmp: URL, running: Bool = false, registerable: Bool = true) throws -> () throws -> [String] {
-        let p = profile(tmp)
-        if registerable { try write("{\"vaults\":{}}", to: Vault.obsidianConfig(home: p.home)) }
-        let hermes = FakeHermes(tmp)
-        return { try Setup.report(moodle: nil, profile: p, executable: exe, project: Setup.checkout,
-                                  run: hermes.run, wait: { _ in true }, running: { running }) }
-    }
-
-    @Test func setupAlsoMakesTheVaultAndPrintsWhatItDid() throws {
-        try scratch { tmp throws in
-            let lines = try cli(tmp)()
-            let vault = Vault.dir(home: tmp.appendingPathComponent("home")).path
-            #expect(lines == [
-                "- enabled the host API server on 127.0.0.1 (default profile .env)",
-                "- created the robo Hermes profile",
-                "- gave robo its own API key",
-                "- installed the persona, skills and guard",
-                "- updated robo's Hermes config",
-                "- restarted the Hermes gateway",
-                "- robo now starts when you log in (`\(exe.path)` starts it now)",
-                "- created your Obsidian vault at \(vault)",
-                "- added your Robo vault to Obsidian",
-            ])
-        }
-    }
-
-    @Test func setupPrintsTheVaultMessageEvenWhenNothingElseChanged() throws {
-        try scratch { tmp throws in
-            let run = try cli(tmp, running: true)  // Obsidian is open: the vault cannot be listed
-            _ = try run()
-            let again = try run()
-            #expect(again.count == 1 && again[0].hasPrefix("- Obsidian is open, so I left its settings alone"))
-            #expect(!again.contains { $0.contains("nothing changed") })
-        }
-    }
-
-    @Test func setupWithNothingToDoSaysSo() throws {
-        try scratch { tmp throws in
-            let run = try cli(tmp)
-            _ = try run()
-            #expect(try run() == ["- already set up, nothing changed"])
-        }
-    }
-
-    @Test func aFailedHermesStepStopsBeforeTheLaunchAgentAndTheVault() throws {
-        try scratch { tmp throws in
-            let p = profile(tmp)
-            #expect(throws: SetupError.self) {
-                try Setup.report(moodle: nil, profile: p, executable: exe, project: Setup.checkout,
-                                 run: { _ in throw SetupError("hermes is not installed") }, wait: { _ in true })
-            }
-            #expect(!fm.fileExists(atPath: p.home.appendingPathComponent("Library/LaunchAgents").path))
-            #expect(!fm.fileExists(atPath: Vault.dir(home: p.home).path))
-        }
-    }
-
-    @Test func aCheckoutWithoutTemplatesIsRefusedBeforeAnythingIsWritten() throws {
-        try scratch { tmp throws in
-            #expect(throws: SetupError.self) {
-                try Setup.report(moodle: nil, profile: profile(tmp), executable: exe, project: tmp.appendingPathComponent("moved"),
-                                 run: { _ in }, wait: { _ in true })
-            }
-            #expect(!fm.fileExists(atPath: tmp.appendingPathComponent(".env").path))
-        }
-    }
-
-    @Test func runSetupRefusesWhatItDoesNotKnow() {
-        #expect(runSetup(["--bogus"]) == 2)
-        #expect(runSetup(["--moodle"]) == 2)  // no address after it
-    }
-
-    @Test func signinNoticeMatchesPython() {
-        #expect(Setup.signinNotice(lms: false) == "Sign in to Outlook, Teams in the Brave window that opened. When Microsoft asks \"Stay signed in?\", choose Yes, or the sign-in is lost when robo's browser restarts.")
-        #expect(Setup.signinNotice(lms: true).hasPrefix("Sign in to Outlook, Teams and your LMS in the Brave window"))
-    }
+/// A service over fakes: no process, no network, no real time.
+private func service(healthy: @escaping () -> Bool, launches: Counter, child: FakeProcess = FakeProcess(), wait: Double = 30) -> AgentService {
+    AgentService(command: ["/x/uv", "run", "robo-agent", "serve"], environment: ["PATH": "/p"], log: URL(fileURLWithPath: "/dev/null"),
+                 healthy: healthy, launch: { argv, env, _ in
+                     launches.n += 1
+                     (launches.argv, launches.env) = (argv, env)
+                     child.isRunning = true
+                     return child
+                 }, wait: wait, sleep: { _ in })
 }
