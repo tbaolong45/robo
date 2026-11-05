@@ -317,9 +317,11 @@ struct ExpressionsTests {
 
     /// Five-second frames cycling through the activities and emotions: the spring must stay exact.
     @Test func largeDtTraceMatchesItsGolden() {
-        let frames = (0..<50).map { i in
-            GoldenFrame(target: FaceParams.target(Activity.allCases[i % 9], emotions[i % 9]), dt: 5.0,
-                        talking: i % 2 == 0, now: Double(i + 1) * 5.0)  // exact in binary: equals Python's running t += 5.0
+        // Types spelled out: CI's compiler gave up inferring them ("unable to type-check ... in reasonable time").
+        let frames: [GoldenFrame] = (0..<50).map { (i: Int) -> GoldenFrame in
+            let now: Double = Double(i + 1) * 5.0  // exact in binary: equals Python's running t += 5.0
+            return GoldenFrame(target: FaceParams.target(Activity.allCases[i % 9], emotions[i % 9]), dt: 5.0,
+                               talking: i % 2 == 0, now: now)
         }
         expectTrace("bigdt", Animator(seed: 5), frames, [
             (1, [1, 1, 0.55, 0.206635495896, 0.1769801135108, 0, 0, 0, 0, 0, 0.15, 0.559280096966, 1, 188, 0.85, 0.8, 1, 1], ""),
