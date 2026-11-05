@@ -654,8 +654,8 @@ dialog.
 **The idea.** CI runs the tests on fresh machines for every PR. A *flaky* test passes or fails
 depending on timing or machine speed, not on the code.
 
-**In Robo.** `.github/workflows/tests.yml` runs the Swift tests on a `macos-26` runner and pytest
-and ruff on Ubuntu. PR #7 was merged over one red macOS run: a typing test that needs to catch a reply
+**In Robo.** `.github/workflows/tests.yml` runs the Swift tests, pytest
+and ruff on a `macos-26` runner. PR #7 was merged over one red macOS run: a typing test that needs to catch a reply
 mid-typing failed twice on GitHub's runner, but passed 3/3 locally, and the PR didn't touch that code. Making such a test
 not depend on machine speed (a fake clock instead of real waiting) is the real fix.
 

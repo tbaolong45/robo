@@ -114,7 +114,7 @@ uv run pytest -q && uv run ruff check agent tests
 ```
 
 - **A test copy away from the live service:** `open -n --env ROBO_AGENT_URL=http://127.0.0.1:9 --env ROBO_NO_VOICE=1 ~/Applications/Robo.app`. With `ROBO_AGENT_URL` set the app does not start its service.
-- **CI** (`.github/workflows/tests.yml`) runs `native/test.sh` on `macos-26` and `pytest` + `ruff` on Ubuntu, for pushes to and pull requests into `master`.
+- **CI** (`.github/workflows/tests.yml`) runs `native/test.sh`, `pytest` and `ruff` on `macos-26`, for pushes to and pull requests into `master`.
 
 ## Workflow
 

@@ -16,7 +16,7 @@ jobs:
       # Report every compile error at once: this Xcode can reject expressions the newer local compiler accepts.
       - run: native/test.sh -Xswiftc -continue-building-after-errors
   python:
-    runs-on: ubuntu-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v10.3.0

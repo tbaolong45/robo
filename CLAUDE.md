@@ -18,7 +18,7 @@ The owner designs the harness and the self-improvement loop themself: don't add 
 ## Verify
 - Swift: `native/test.sh` (not `swift test`), and `native/test.sh -c release -Xswiftc -enable-testing` for
   concurrency code. Service: `uv run pytest -q && uv run ruff check agent tests`. CI runs the Swift suite on
-  `macos-26` and pytest + `ruff check agent tests` on Ubuntu, on pushes to and PRs into `master`.
+  `macos-26`, and pytest + `ruff check agent tests` there too, on pushes to and PRs into `master`.
 - UI: capture only Robo's window (`screencapture -l<id>`, id from Quartz `kCGWindowName == "Robo"`); a full-screen
   capture shows whatever else the user has open. The face: `ROBO_FACE_SHEET=<dir> native/test.sh --filter FaceSheet`
   writes `face_sheet.png` (every expression and effect, over white and dark grey). For glass over a backdrop: an

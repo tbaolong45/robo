@@ -74,7 +74,7 @@ will design that layer, and the earlier full agent is kept on the `revamp` branc
 | **HTTP / SSE** | Robo starts a "run" with `POST /v1/runs`, then listens to a *Server-Sent Events* stream: a connection that stays open while the service pushes events (text pieces, "the run ended"). |
 | **Parakeet / ONNX Runtime** | Parakeet is NVIDIA's speech-to-text model. ONNX Runtime is the library that runs it on the CPU. Both live on the Mac. |
 | **Pure code** | Code that only computes: no screen, no files, no clock of its own (time is passed in as an argument). It is easy to test, and Robo keeps as much as it can this way. |
-| **CI** | Continuous Integration: GitHub runs the Swift tests on macOS and the service's Python tests on Ubuntu for every pull request into `master` (`.github/workflows/`). |
+| **CI** | Continuous Integration: GitHub runs the Swift tests and the service's Python tests on macOS for every pull request into `master` (`.github/workflows/`). |
 | **`dev` / `master` / PR** | Work goes on the `dev` branch. A *pull request* (PR) proposes merging it into `master`, the branch the laptops run. It's merged when CI is green. |
 
 ## 4. A map of the repository
